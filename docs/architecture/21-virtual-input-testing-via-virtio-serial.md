@@ -19,6 +19,7 @@ on top of those contracts.
 | Device manager match rule for virtio-serial      | Implemented     | `scripts/system/devmgr/rules/default.<arch>.rules`      |
 | PS/2 keyboard driver (IRQ-driven + polling)      | Implemented     | `src/drivers/keyboard/keyboard.ts`               |
 | PS/2 mouse driver (IRQ-driven + polling)         | Implemented     | `src/drivers/mouse/mouse.ts`                     |
+| virtio-input keyboard + mouse driver (aarch64)   | Implemented     | `src/drivers/virtio_input/virtio_input.c`        |
 | Compositor keyboard + mouse subscription         | Implemented     | `src/services/gfx_compositor/gfx_compositor.zig` |
 | Python QEMU test framework                       | Implemented     | `scripts/qemu_test_framework.py`                 |
 | Virtio-serial MULTIPORT, receive path, protocol  | **Not started** | —                                                |

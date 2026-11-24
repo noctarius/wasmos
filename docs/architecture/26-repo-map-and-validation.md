@@ -31,6 +31,7 @@ wasmos/
 │   │   ├── virtio_net/     VirtIO network driver (native ELF)
 │   │   ├── virtio_rng/     VirtIO entropy driver (native ELF; hrng class)
 │   │   ├── virtio_serial/  VirtIO serial port driver
+│   │   ├── virtio_input/   VirtIO keyboard + mouse driver (aarch64; PS/2 protocols)
 │   │   └── include/        Shared driver ABI headers
 │   │       ├── wasmos_driver_abi.h   IPC opcode enums for all driver/service types
 │   │       └── wasmos_native_driver.h Native ELF driver API

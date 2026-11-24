@@ -844,6 +844,18 @@ linked feature documents for rationale and rollout plans.
   table over in `boot_info` (version 7), and the kernel calls it for the
   `rtc_efi_get`/`rtc_efi_set` host calls under the `rtc.efi` capability. CI
   builds the PL031 choice only.
+- Keyboard and mouse on aarch64 are virtio-input (`src/drivers/virtio_input/`):
+  QEMU virt carries `virtio-keyboard-pci` and `virtio-mouse-pci` at slots 0x1c
+  and 0x1d (`qemu_input` in `ARCHES`), and device-manager spawns one instance
+  per function (modern id 0x1052), supervised. An instance registers `kbd` when
+  its device reports keys and no axes, translating evdev codes to PS/2 Set 1
+  scancodes, or `mouse` when it reports relative axes, splitting each report
+  into 8-bit steps; the vt and compositor see the PS/2 protocols unchanged. A
+  tablet (absolute axes only) is refused with
+  `WASMOS_ERR_DRIVER_DEVICE_UNSUPPORTED`. Bring-up is asynchronous throughout:
+  pci-bus through a service watch, MSI-X query and bind as loop intents (INTx
+  fallback), registration and READY as intents. `tests/test_virtio_input.py`
+  types through QMP into tty1's CLI.
 - Native driver ABI 16: native drivers reach memory-mapped register windows
   (`io_region_read`/`io_region_write`, through `io_region.c`), allocate
   driver-owned DMA regions (`dma_region_alloc`; all three region allocators

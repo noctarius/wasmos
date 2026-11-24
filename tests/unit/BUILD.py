@@ -58,6 +58,8 @@ TESTS = [
     (RUN, 'test_device_manager_rules', []),
     (CC, 'test_device_manager_unit', [*C11, "-I" + R('src/services/device_manager'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('tests/unit'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_device_manager_unit.c'), R('src/services/device_manager/device_manager_unit.c')]),
     (RUN, 'test_device_manager_unit', []),
+    (CC, 'test_virtio_input_events', [*C11, "-I" + R('tests/unit'), "-I" + R('src/drivers/virtio_input'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_virtio_input_events.c'), R('src/drivers/virtio_input/virtio_input_events.c')]),
+    (RUN, 'test_virtio_input_events', []),
     (CC, 'test_block_descriptor', [*C11, "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_block_descriptor.c')]),
     (RUN, 'test_block_descriptor', []),
     (CC, 'test_svc_name_from_mount', [*C11, "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_svc_name_from_mount.c')]),

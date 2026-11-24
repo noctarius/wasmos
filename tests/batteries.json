@@ -133,6 +133,7 @@
         "test_gfx_keyboard.py",
         "test_gfx_surface_recycle.py",
         "test_irq_input.py",
+        "test_virtio_input.py",
         "test_irq_route_capability.py",
         "test_libui_click.py",
         "test_menu_bar_title.py",

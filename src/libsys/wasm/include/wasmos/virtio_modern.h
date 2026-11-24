@@ -211,6 +211,20 @@ static inline uint16_t virtio_modern_device_read16(const virtio_modern_t* dev, u
     return (uint16_t)v;
 }
 
+/* Writes one byte of the device-specific configuration. Only a device whose
+ * configuration has driver-writable fields needs it (virtio-input's select and
+ * subsel, virtio 1.2 §5.8.4). Returns 0, or -1 when the device has no
+ * device-specific structure or `off` lies outside it. */
+static inline int32_t virtio_modern_device_write8(const virtio_modern_t* dev, uint32_t off,
+                                                  uint8_t v) {
+    if ((dev->layout.found & (1u << VIRTIO_PCI_CAP_DEVICE_CFG)) == 0u ||
+        off >= dev->layout.device.length) {
+        return -1;
+    }
+    (void)wasmos_io_region_out8(dev->region, (int32_t)(dev->layout.device.offset + off), v);
+    return 0;
+}
+
 /* Copies `len` bytes of the device-specific configuration starting at `off` into
  * out, as one consistent snapshot: the device bumps config_generation whenever
  * it changes the structure, so a read that straddles a change is retried

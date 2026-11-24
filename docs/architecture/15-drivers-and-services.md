@@ -251,6 +251,24 @@ Services subscriber registration and delivers key events.
 | `MOUSE_IPC_SUBSCRIBE_RESP` | `0x890` | Subscription confirmed                             |
 | `MOUSE_IPC_MOVE_NOTIFY`    | `0x811` | Move/button event (arg0=dx, arg1=dy, arg2=buttons) |
 
+#### `virtio_input` — virtio-input Keyboard and Mouse Driver (aarch64)
+
+- **Kind:** WASM driver
+- **PCI match:** vendor `0x1AF4`, device `0x1052` (modern virtio-input); one
+  instance per function, supervised (`ENV{RESTART}="on-failure"`)
+- **Capabilities:** `mmio.map`, `dma.buffer`, `irq.route`; region 0 is BAR 4
+- **Entry bindings:** `proc.endpoint`
+
+Stands in for the PS/2 pair on a machine without an i8042. Each instance reads
+the device's `EV_BITS` configuration and takes one role: a device with relative
+axes is a mouse and registers `mouse`; one with keys and no axes is a keyboard
+and registers `kbd`. Each role speaks the PS/2 driver's protocol above, so
+clients cannot tell the two apart: key events become `KBD_IPC_KEY_NOTIFY` with
+the PS/2 Set 1 scancode of the evdev key code (extended keys flagged), and the
+motion and buttons between two `SYN_REPORT`s become `MOUSE_IPC_MOVE_NOTIFY`s
+of at most 127 per axis. A device with only absolute axes (virtio-tablet) is not
+driven. Only the eventq is configured; the statusq (LEDs) is left off.
+
 #### `serial` — UART Serial Driver
 
 - **Kind:** WASM driver

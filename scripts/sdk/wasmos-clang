@@ -134,7 +134,7 @@ fi
 
 # Flags that apply whether or not this invocation links.
 common="--target=$WASMOS_SDK_TARGET_LLVM --sysroot=$sysroot -D__wasmos__=1
-    -Oz -nostdlib -fno-builtin -include $sysroot/include/wasmos_cast.h $langflags"
+    -Oz -matomics -nostdlib -fno-builtin -include $sysroot/include/wasmos_cast.h $langflags"
 
 # Compile-only: no crt, no libraries, no packaging. This is the shape a build
 # system drives, compiling each source before linking the objects.

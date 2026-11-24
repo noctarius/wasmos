@@ -47,14 +47,20 @@
  * into it, and its contents are only meaningful after get_used() reports the
  * completion length.
  *
- * Ordering. vring_publish() fences between the descriptor/ring-entry stores and
- * the avail_idx bump, so a device that observes the new index also observes
- * what it points at. vring_kick() fences before the doorbell, so avail_idx is
- * visible before the device is told to look. On the completion side the fence
- * lives in vring_has_used(), which is why the used-ring element must only be
- * read through vring_get_used(). Nothing here is a cache-maintenance
+ * Ordering. The ring indices are the only synchronization with the device, and
+ * they are accessed atomically: vring_publish() stores avail_idx with a release
+ * store after the descriptor and ring-entry stores, so a device that observes
+ * the new index also observes what it points at; vring_has_used() loads
+ * used_idx with an acquire load, so the used-ring element read after it is the
+ * one the index published, which is why that element must only be read through
+ * vring_get_used(). A guest is built with WebAssembly atomics (-matomics), where
+ * every atomic access is sequentially consistent; a fence alone orders nothing
+ * there (the wasm memory model orders fences only against atomics, and the
+ * Binaryen pass the toolchain runs after linking deletes them), so the index
+ * accesses must be atomic, not fenced. vring_kick() additionally fences before
+ * the doorbell for native builds. Nothing here is a cache-maintenance
  * operation: it is store/load ordering only, which is what a cache-coherent
- * x86 DMA device needs.
+ * DMA device needs.
  *
  * Concurrency. Single producer, single consumer: one context must own the
  * queue. avail_idx, free_head/num_free and last_used_idx are all plain
@@ -114,7 +120,9 @@ typedef struct {
 } vring_t;
 
 /* Full memory barrier. On x86 DMA is cache-coherent, so ordering (not cache
- * maintenance) is what matters between the driver and a concurrent device. */
+ * maintenance) is what matters between the driver and a concurrent device. In a
+ * wasm guest a fence orders only atomics (see "Ordering" above); ordering
+ * against the device comes from the atomic index accesses. */
 static inline void vring_mb(void) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
@@ -198,8 +206,9 @@ static inline void vring_set_notify(vring_t* vq, void (*notify)(void* user), voi
  * may ignore, so it does not make an interrupt impossible. vring_layout()
  * clears it; call after every layout. */
 static inline void vring_disable_interrupts(vring_t* vq) {
-    *vq->avail_flags = (uint16_t)(*vq->avail_flags | VRING_AVAIL_F_NO_INTERRUPT);
-    vring_mb();
+    __atomic_store_n(vq->avail_flags,
+                     (uint16_t)(*vq->avail_flags | VRING_AVAIL_F_NO_INTERRUPT),
+                     __ATOMIC_SEQ_CST);
 }
 
 /* Allocate one descriptor for a buffer at device address buf_phys. flags is a
@@ -317,13 +326,14 @@ static inline void vring_free_chain(vring_t* vq, uint16_t head) {
 
 /* Publish a prepared descriptor to the available ring so the device can consume
  * it. Does not ring the doorbell — batch several publishes, then vring_kick().
- * Driver side only: avail_idx has a single producer, so the plain read-modify-
- * write below is safe as long as one context owns the queue. */
+ * Driver side only: avail_idx has a single producer, so reading it plainly and
+ * storing the increment is safe as long as one context owns the queue. The
+ * release store is what makes the descriptor and ring entry visible no later
+ * than the index that publishes them. */
 static inline void vring_publish(vring_t* vq, uint16_t desc_head) {
     uint16_t avail = *vq->avail_idx;
     vq->avail_ring[avail % vq->num] = desc_head;
-    vring_mb(); /* descriptor + ring entry visible before idx bump */
-    *vq->avail_idx = (uint16_t)(avail + 1);
+    __atomic_store_n(vq->avail_idx, (uint16_t)(avail + 1), __ATOMIC_RELEASE);
 }
 
 /* Ring the device's doorbell for everything published since the last kick. */
@@ -336,12 +346,12 @@ static inline void vring_kick(vring_t* vq) {
 /* Nonzero if the device has completed buffers that are not yet consumed.
  * It compares the device's used_idx against last_used_idx, so it answers "is
  * the used ring ahead of us" - not whether any particular descriptor is done.
- * It is also the acquire fence for the used ring: a used-ring element may only
- * be read after this has returned nonzero, which is why vring_get_used() calls
- * it rather than re-reading used_idx itself. */
+ * Its acquire load of used_idx is what orders the used ring: a used-ring element
+ * may only be read after this has returned nonzero, which is why
+ * vring_get_used() calls it rather than re-reading used_idx itself. */
 static inline int32_t vring_has_used(vring_t* vq) {
-    vring_mb(); /* observe the device's latest used_idx */
-    return (int32_t)(*vq->used_idx != vq->last_used_idx);
+    uint16_t used = __atomic_load_n(vq->used_idx, __ATOMIC_ACQUIRE);
+    return (int32_t)(used != vq->last_used_idx);
 }
 
 /* Consume the next completed buffer. Returns its head descriptor index and, via
@@ -350,8 +360,8 @@ static inline int32_t vring_has_used(vring_t* vq) {
  * vring_free_desc()s the head. Consumer-side validation: a used-ring id outside
  * [0, num) is skipped (returns -1, last_used_idx still advances) rather than
  * trusted. The element must be read after the used_idx that publishes it; the
- * fence inside vring_has_used() is what keeps the compiler from hoisting either
- * load above it, and x86 does not reorder the two loads. */
+ * acquire load inside vring_has_used() keeps both the compiler and the CPU from
+ * moving either element load above it. */
 static inline int32_t vring_get_used(vring_t* vq, uint32_t* out_len) {
     if (!vring_has_used(vq))
         return -1;

@@ -154,9 +154,15 @@ initmem_flag=
 maxmem_flag=
 [ -n "$maxmem" ] && maxmem_flag="--max-memory=$maxmem"
 
+# -mcpu generic+atomics matches wasmos-clang's -matomics, for the Zig code and
+# for the C cores compiled alongside it (vring publishes to devices with atomic
+# index accesses, which are plain accesses without the feature). Both runtimes
+# execute only the atomic load/store/fence forms; an atomic read-modify-write
+# fails the module's compile when it is spawned.
 # shellcheck disable=SC2086
 "$WASMOS_SDK_ZIG" build-exe \
     -target wasm32-freestanding \
+    -mcpu generic+atomics \
     -O ReleaseSmall \
     -fno-entry \
     -fstrip \

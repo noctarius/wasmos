@@ -913,6 +913,15 @@ linked feature documents for rationale and rollout plans.
 
 ## Runtime, Isolation, and IPC
 
+- Guests have cross-CPU memory ordering. wasm3 and WARP execute the threads
+  proposal's `atomic.fence` and 32-bit-result atomic loads and stores. Both are
+  local, sanctioned patches to `libs/wasm3` and `libs/warp`; WARP supports them
+  on its x86_64 backend only, and its aarch64 and TriCore backends reject them.
+  The accesses are sequentially consistent, and an unaligned one traps. C, Zig
+  and Rust-shim guest C is built with atomics, and `wasmos/vring.h` publishes
+  `avail_idx` and reads `used_idx` atomically. Atomic read-modify-write is not
+  supported: a module that contains one fails to compile at spawn.
+  `tests/test_wasm_atomics.py` covers both runtimes.
 - Linear memory never relocates on either runtime: a module that cannot get a
   linear-memory slot is refused with its reason rather than run from a block
   that moves on growth. WARP's reserve hint is per pid. Slot use is queryable

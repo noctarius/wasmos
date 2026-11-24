@@ -158,7 +158,7 @@ for f in $extra; do
         "$WASMOS_SDK_CLANG" \
             --target="$WASMOS_SDK_TARGET_LLVM" \
             --sysroot="$sdkroot/sysroot" \
-            -Oz -nostdlib -ffreestanding -fno-builtin \
+            -Oz -matomics -nostdlib -ffreestanding -fno-builtin \
             -D__wasmos__=1 \
             -include "$sdkroot/sysroot/include/wasmos_cast.h" \
             -c "$f" -o "$obj"

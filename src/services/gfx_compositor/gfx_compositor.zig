@@ -375,7 +375,14 @@ const DISPLAY_FLUSH_ONE_RECT_BYTES: u32 = @offsetOf(c.wasmos_display_flush_desc_
 var g_display_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_display_buffer_id: u32 = 0;
 var g_display_desc: ?*c.wasmos_display_flush_desc_t = null;
+/// Request id of the flush in flight, 0 when none. Flushes are plain sends,
+/// answered through the DISPLAY_IPC_RESP/ERROR handlers rather than an intent:
+/// an intent matches by request id alone, and an answer counts only when it is
+/// the presenter's answer to this request.
 var g_display_request: u32 = 0;
+var g_display_next_request: u32 = DISPLAY_REQUEST_BASE;
+/// A request-id range of its own, apart from the loop's intents.
+const DISPLAY_REQUEST_BASE: u32 = 0x7D00_0000;
 var g_display_damage: c.gfx_rect_t = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 // Request in flight to the fb (probe chain) and to the mouse (subscribe), 0 for
 // none; cancelled when that peer goes away so its intent slot is not stranded.
@@ -660,16 +667,32 @@ fn display_flush_send() void {
     desc.version = c.DISPLAY_FLUSH_DESC_VERSION;
     desc.count = 1;
     desc.rects[0] = .{ .x = @intCast(d.x), .y = @intCast(d.y), .width = @intCast(d.w), .height = @intCast(d.h) };
-    g_display_request = send_intent(g_display_endpoint, c.DISPLAY_IPC_FLUSH_REQ, g_display_buffer_id, 0, DISPLAY_FLUSH_ONE_RECT_BYTES, 0, &on_display_flushed);
-    if (g_display_request != 0) g_display_damage = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+    var m: c.nd_ipc_message_t = undefined;
+    m.type = c.DISPLAY_IPC_FLUSH_REQ;
+    m.source = g_gfx_endpoint;
+    m.destination = g_display_endpoint;
+    m.request_id = g_display_next_request;
+    m.arg0 = g_display_buffer_id;
+    m.arg1 = 0;
+    m.arg2 = DISPLAY_FLUSH_ONE_RECT_BYTES;
+    m.arg3 = 0;
+    // A send the presenter's queue refuses keeps the damage for the next one.
+    if (api().ipc_send.?(ctxId(), g_display_endpoint, &m) != 0) return;
+    g_display_request = g_display_next_request;
+    g_display_next_request = if (g_display_next_request == 0x7DFF_FFFF) DISPLAY_REQUEST_BASE else g_display_next_request + 1;
+    g_display_damage = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 }
 
-fn on_display_flushed(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
+/// DISPLAY_IPC_RESP / DISPLAY_IPC_ERROR: the presenter is done with the
+/// descriptor. Only its answer to the flush in flight frees it; anything else
+/// -- another sender, an answer to an earlier presenter's request -- is
+/// dropped. A refused flush is not retried: the presenter's own periodic
+/// present covers it, and the next compose reports its region anyway.
+fn on_display_answer(user: ?*anyopaque, raw: ?*const anyopaque) callconv(.c) void {
     _ = user;
-    _ = raw;
+    const msg = ipc_msg(raw);
+    if (g_display_request == 0 or msg.source != g_display_endpoint or msg.request_id != g_display_request) return;
     g_display_request = 0;
-    // A refused flush is not retried: the presenter's own periodic present
-    // covers it, and the next compose reports its region anyway.
     display_flush_send();
 }
 
@@ -693,7 +716,7 @@ fn release_display_buffer() void {
 fn on_display_bound(user: ?*anyopaque, watch: [*c]sys.NativeSvcWatch, endpoint: u32) callconv(.c) void {
     _ = user;
     _ = watch;
-    cancel_intent(&g_display_request);
+    g_display_request = 0;
     release_display_buffer();
     g_display_endpoint = IPC_ENDPOINT_NONE;
     var id: u32 = 0;
@@ -753,7 +776,7 @@ fn handle_peer_hangup(msg: *const c.nd_ipc_message_t) void {
         sys.svcWatchForget(&g_watch_vt);
     }
     if (ep == g_display_endpoint) {
-        cancel_intent(&g_display_request);
+        g_display_request = 0;
         release_display_buffer();
         g_display_endpoint = IPC_ENDPOINT_NONE;
         sys.svcWatchForget(&g_watch_display);
@@ -3345,6 +3368,8 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.VT_IPC_KEY_FORWARD, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.VT_IPC_VIS_NOTIFY, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.MOUSE_IPC_MOVE_NOTIFY, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.DISPLAY_IPC_RESP, &on_display_answer, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.DISPLAY_IPC_ERROR, &on_display_answer, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_CREATE_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DESTROY_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RESIZE_WINDOW, cb, null) != 0) return -1;

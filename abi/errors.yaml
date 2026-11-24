@@ -502,3 +502,4 @@ domains:
       - { name: NOT_READY, description: "the display has no scanout yet: the device is still being brought up" }
       - { name: DEVICE,    description: "the device refused a transfer or flush command (a virtio-gpu error response)" }
       - { name: BUSY,      description: "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds" }
+      - { name: NOT_PRESENTER, description: "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged" }

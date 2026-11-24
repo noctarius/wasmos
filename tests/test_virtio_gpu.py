@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 import time
@@ -121,6 +122,64 @@ class VirtioGpuBootTest(unittest.TestCase):
             f"--- tail ---\n{self.session.tail()}",
         )
         self.assertIn(b"[framebuffer-ramfb] the framebuffer is not this", buf)
+
+
+class VirtioGpuOwnershipTest(unittest.TestCase):
+    """The GPU's PCI function belongs to virtio_gpu, the driver that programs it.
+
+    Two rules match the virtio GPU -- virtio_gpu and the text console's
+    framebuf -- and a PCI-rule spawn that carries capabilities makes its driver
+    the function's owner, whose end quiesces the device. framebuf declares no
+    register windows and the function has no I/O window, so it is spawned
+    without capabilities and claims nothing; were it ever to claim the function,
+    virtio_gpu's end would leave the device mastering into freed pages. Ending
+    virtio_gpu must therefore quiesce the function, and its restart must bring
+    the scanout back.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cfg = default_config()
+        cfg.display_devices = _DISPLAY[guest_arch()]
+        cls.session = QemuSession(cfg, timeout_s=180, echo=True)
+        cls.session.start()
+        cls.session.require_prompt()
+        if not cls.session.settle():
+            tail = cls.session.tail()
+            cls.session.close()
+            raise RuntimeError(
+                f"system never went idle after boot\n--- tail ---\n{tail}\n"
+            )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls.session:
+            cls.session.send("halt")
+            cls.session.close()
+
+    def test_ending_virtio_gpu_quiesces_its_function(self) -> None:
+        buf = bytes(self.session.buf)
+        m = re.search(
+            rb"handed to the supervisor: (virtio_gpu@pci:([0-9a-f:.]+)) ", buf
+        )
+        self.assertIsNotNone(m, "virtio_gpu was not handed to the supervisor")
+        unit, bdf = m.group(1).decode(), m.group(2).decode()
+        mark = self.session.send_command(f"svc kill {unit}", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(
+                mark, f"[pci] quiesced {bdf}:".encode(), timeout_s=20
+            ),
+            f"ending {unit} did not quiesce {bdf}: another driver owns the "
+            f"function\n--- tail ---\n{self.session.tail()}",
+        )
+        # The supervisor restarts it; the successor owns the function again
+        # and gets its MSI-X vector.
+        self.assertTrue(
+            self.session.expect_from(
+                mark, b"[virtio-gpu] scanout 1280x800", timeout_s=30
+            ),
+            f"virtio_gpu did not come back\n--- tail ---\n{self.session.tail()}",
+        )
 
 
 if __name__ == "__main__":

@@ -2267,6 +2267,15 @@ Other graphics/VT/UI:
   incompatible non-negative domains a caller cannot tell apart
   (`src/libui/include/wasmos/libui.h`).
 
+- [ ] [BUG][P1] WARP's `xfer_buffer_read` and `xfer_buffer_write` host calls
+  check `offset + len` in 32 bits (`src/kernel/warp/link.cpp`), so a guest
+  passing offset -1 (0xFFFFFFFF) wraps past the bound and the kernel copies
+  from, or writes to, kernel memory ~4 GiB beyond the buffer. wasm3 refuses a
+  negative offset. Fix with a 64-bit range check shared with wasm3's semantics
+  (as `block_buffer_check_range` does for block buffers) and a red-first
+  regression test from a WARP guest; tracked as its own PR. `virtio_gpu`
+  refuses negative offsets itself meanwhile.
+
 ## arm64 Port
 
 The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under

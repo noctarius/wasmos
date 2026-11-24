@@ -368,6 +368,70 @@ static void vgpu_drain_ctrlq(void) {
 
 static void vgpu_serve_pending(void);
 
+/* Answers a client's flush could not be delivered (its queue was full) and are
+ * retried after every loop poll: a writer keeps one flush in flight and sends no
+ * other until it is answered, so a lost answer would stop it reporting damage
+ * for good. A client's hangup drops its entries. When the store is full the
+ * oldest entry is dropped -- that client then reports only once its own
+ * periodic damage resumes after a rebind. */
+#define VGPU_UNSENT_MAX 16u
+typedef struct {
+    int32_t client;
+    int32_t request_id;
+    int32_t status;
+} vgpu_unsent_t;
+static vgpu_unsent_t g_unsent[VGPU_UNSENT_MAX];
+static uint32_t g_unsent_count;
+
+static int vgpu_send_answer(int32_t client, int32_t request_id, int32_t status) {
+    return status == 0
+               ? wasmos_ipc_send(client, g_ep, DISPLAY_IPC_RESP, request_id, 0, 0, 0, 0)
+               : wasmos_ipc_send(client, g_ep, DISPLAY_IPC_ERROR, request_id, status, 0, 0, 0);
+}
+
+/* Answers a flush: DISPLAY_IPC_RESP for status 0, else DISPLAY_IPC_ERROR. */
+static void vgpu_answer(int32_t client, int32_t request_id, int32_t status) {
+    if (client < 0 || vgpu_send_answer(client, request_id, status) == 0) {
+        return;
+    }
+    if (g_unsent_count == VGPU_UNSENT_MAX) {
+        vgpu_log("[virtio-gpu] answer store full; dropping the oldest answer\n");
+        for (uint32_t i = 1; i < VGPU_UNSENT_MAX; ++i) {
+            g_unsent[i - 1u] = g_unsent[i];
+        }
+        g_unsent_count--;
+    }
+    g_unsent[g_unsent_count++] = (vgpu_unsent_t){client, request_id, status};
+}
+
+/* Retries every stored answer, keeping those still refused, in order. */
+static void vgpu_retry_answers(void) {
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < g_unsent_count; ++i) {
+        if (vgpu_send_answer(g_unsent[i].client, g_unsent[i].request_id, g_unsent[i].status) != 0) {
+            g_unsent[kept++] = g_unsent[i];
+        }
+    }
+    g_unsent_count = kept;
+}
+
+/* A client ended: its stored answers and its queued requests are dropped. */
+static void vgpu_forget_client(int32_t client) {
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < g_unsent_count; ++i) {
+        if (g_unsent[i].client != client) {
+            g_unsent[kept++] = g_unsent[i];
+        }
+    }
+    g_unsent_count = kept;
+    for (uint32_t i = 0; i < g_pending_count; ++i) {
+        vgpu_pending_t* req = &g_pending[(g_pending_head + i) % VGPU_PENDING_MAX];
+        if (req->client == client) {
+            req->client = -1;
+        }
+    }
+}
+
 static void vgpu_present_done(void* user, int32_t status) {
     vgpu_present_t* p = (vgpu_present_t*)user;
     if (status != 0 && p->status == 0) {
@@ -376,14 +440,7 @@ static void vgpu_present_done(void* user, int32_t status) {
     if (--p->remaining != 0u) {
         return;
     }
-    if (p->client >= 0) {
-        if (p->status == 0) {
-            (void)wasmos_ipc_send(p->client, g_ep, DISPLAY_IPC_RESP, p->request_id, 0, 0, 0, 0);
-        } else {
-            (void)wasmos_ipc_send(
-                p->client, g_ep, DISPLAY_IPC_ERROR, p->request_id, p->status, 0, 0, 0);
-        }
-    }
+    vgpu_answer(p->client, p->request_id, p->status);
     p->in_use = 0u;
     vgpu_serve_pending();
 }
@@ -394,9 +451,7 @@ static void vgpu_present_done(void* user, int32_t status) {
  * region presents nothing and is answered at once. */
 static int vgpu_present(vgpu_region_t region, int32_t client, int32_t request_id) {
     if (region.width == 0u || region.height == 0u) {
-        if (client >= 0) {
-            (void)wasmos_ipc_send(client, g_ep, DISPLAY_IPC_RESP, request_id, 0, 0, 0, 0);
-        }
+        vgpu_answer(client, request_id, 0);
         return 0;
     }
     vgpu_present_t* p = 0;
@@ -447,20 +502,27 @@ static vgpu_region_t vgpu_full_region(void) {
 static int vgpu_take_request(const vgpu_pending_t* req) {
     wasmos_display_flush_desc_t desc;
     int32_t size = req->size;
-    if (size < 0 || (uint32_t)size > (uint32_t)sizeof(desc)) {
-        size = size < 0 ? 0 : (int32_t)sizeof(desc);
+    if (req->client < 0) {
+        return 0; /* the client ended while the request waited */
+    }
+    if (size > (int32_t)sizeof(desc)) {
+        size = (int32_t)sizeof(desc);
     }
     memset(&desc, 0, sizeof(desc));
     int32_t status = 0;
-    if (size < (int32_t)DISPLAY_FLUSH_DESC_SIZE(0) ||
+    /* A negative offset or size is refused here, not left to the host call:
+     * with a non-negative offset and a size bounded by the descriptor, the
+     * range the kernel checks cannot wrap.
+     * TODO: WARP's xfer_buffer_read adds offset + len in 32 bits, so the
+     * kernel itself must refuse a wrapping range (docs/TASKS.md). */
+    if (req->offset < 0 || size < (int32_t)DISPLAY_FLUSH_DESC_SIZE(0) ||
         wasmos_xfer_buffer_read(req->buffer_id, &desc, size, req->offset) != 0) {
         status = WASMOS_ERR_DISPLAY_BAD_DESC;
     } else {
         status = vgpu_damage_check(&desc, (uint32_t)size);
     }
     if (status != 0) {
-        (void)wasmos_ipc_send(
-            req->client, g_ep, DISPLAY_IPC_ERROR, req->request_id, status, 0, 0, 0);
+        vgpu_answer(req->client, req->request_id, status);
         return 0;
     }
     vgpu_region_t region =
@@ -489,25 +551,11 @@ static void vgpu_on_flush(void* user, const wasmos_ipc_message_t* msg) {
         return;
     }
     if (!g_live) {
-        (void)wasmos_ipc_send(msg->source,
-                              g_ep,
-                              DISPLAY_IPC_ERROR,
-                              msg->request_id,
-                              WASMOS_ERR_DISPLAY_NOT_READY,
-                              0,
-                              0,
-                              0);
+        vgpu_answer(msg->source, msg->request_id, WASMOS_ERR_DISPLAY_NOT_READY);
         return;
     }
     if (g_pending_count == VGPU_PENDING_MAX) {
-        (void)wasmos_ipc_send(msg->source,
-                              g_ep,
-                              DISPLAY_IPC_ERROR,
-                              msg->request_id,
-                              WASMOS_ERR_DISPLAY_BUSY,
-                              0,
-                              0,
-                              0);
+        vgpu_answer(msg->source, msg->request_id, WASMOS_ERR_DISPLAY_BUSY);
         return;
     }
     uint32_t seen = 0;
@@ -557,7 +605,11 @@ static void vgpu_on_intx(void* user, const wasmos_ipc_message_t* msg) {
  * even on the same endpoint id, so a restarted server is told again. */
 static void vgpu_on_unclaimed(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
-    if (msg->type == WASMOS_IPC_HANGUP && msg->arg0 >= 0 && msg->arg0 == g_fb_ep) {
+    if (msg->type != WASMOS_IPC_HANGUP || msg->arg0 < 0) {
+        return;
+    }
+    vgpu_forget_client(msg->arg0);
+    if (msg->arg0 == g_fb_ep) {
         g_fb_ep = -1;
         wasmos_sys_svc_watch_forget(&g_fb_watch);
     }
@@ -950,6 +1002,14 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     for (;;) {
         (void)wasmos_sys_event_loop_poll(&g_loop, 16);
         wasmos_sys_svc_watch_set_expire(&g_watches);
+        /* Polled: completions are picked up here, after every poll, and not
+         * only on the idle tick -- steady traffic would otherwise keep the
+         * tick from ever running and hold every slot. */
+        if (g_bringup_done && !g_dev.msix_enabled && !g_dev.irq_routed) {
+            (void)virtio_modern_isr(&g_dev.vm);
+            vgpu_drain_ctrlq();
+        }
+        vgpu_retry_answers();
     }
     return 0;
 }

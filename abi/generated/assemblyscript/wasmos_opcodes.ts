@@ -583,10 +583,14 @@ export const FBTEXT_IPC_BLIT_GRID_REQ: i32 = 0x60B;
 export const FBTEXT_IPC_GEOMETRY_CHANGED: i32 = 0x60C;
 // display presenter -> driver: the sender presents the scanout and must
 // be told what is drawn (DISPLAY_IPC_FLUSH_REQ, subsystem `display`).
-// The driver owns its own flush descriptor buffer and lends it READ to
-// the sender; a later PRESENTER_REQ (a restarted presenter) replaces the
-// previous one. No arguments; RESP when the loan is made, ERROR
-// (arg0 = packed WASMOS_ERR_*) when it is not.
+// The driver accepts it only from the endpoint the service registry has
+// bound to "display", which it asks before answering; the answer is
+// therefore deferred. It then owns its own flush descriptor buffer and
+// lends it READ to the sender; a later accepted PRESENTER_REQ (a
+// restarted presenter) replaces the previous one. No arguments; RESP
+// when the loan is made, ERROR (arg0 = packed WASMOS_ERR_*) when it is
+// not -- WASMOS_ERR_DISPLAY_NOT_PRESENTER for a sender that is not
+// "display".
 export const FBTEXT_IPC_PRESENTER_REQ: i32 = 0x60D;
 export const FBTEXT_IPC_RESP: i32 = 0x680;
 export const FBTEXT_IPC_ERROR: i32 = 0x6FF;

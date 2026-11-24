@@ -342,6 +342,7 @@ const (
 	WASMOS_ERR_DISPLAY_NOT_READY int32 = -0x001B0002 // the display has no scanout yet: the device is still being brought up
 	WASMOS_ERR_DISPLAY_DEVICE int32 = -0x001B0003 // the device refused a transfer or flush command (a virtio-gpu error response)
 	WASMOS_ERR_DISPLAY_BUSY int32 = -0x001B0004 // the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds
+	WASMOS_ERR_DISPLAY_NOT_PRESENTER int32 = -0x001B0005 // FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to "display"; the presenter is unchanged
 )
 
 func WasmosErrMake(dom uint16, code uint16) int32 {
@@ -1021,6 +1022,8 @@ func WasmosStrerror(c int32) string {
 		return "the device refused a transfer or flush command (a virtio-gpu error response)"
 	case WASMOS_ERR_DISPLAY_BUSY:
 		return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds"
+	case WASMOS_ERR_DISPLAY_NOT_PRESENTER:
+		return "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged"
 	default:
 		return "unknown error"
 	}

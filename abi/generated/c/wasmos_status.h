@@ -355,6 +355,7 @@ enum {
     WASMOS_ERR_DISPLAY_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 2), /* the display has no scanout yet: the device is still being brought up */
     WASMOS_ERR_DISPLAY_DEVICE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 3), /* the device refused a transfer or flush command (a virtio-gpu error response) */
     WASMOS_ERR_DISPLAY_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 4), /* the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds */
+    WASMOS_ERR_DISPLAY_NOT_PRESENTER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 5), /* FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -716,6 +717,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_DISPLAY_NOT_READY: return "display.NOT_READY";
     case WASMOS_ERR_DISPLAY_DEVICE: return "display.DEVICE";
     case WASMOS_ERR_DISPLAY_BUSY: return "display.BUSY";
+    case WASMOS_ERR_DISPLAY_NOT_PRESENTER: return "display.NOT_PRESENTER";
     default: return "unknown";
     }
 }
@@ -1009,6 +1011,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_DISPLAY_NOT_READY: return "the display has no scanout yet: the device is still being brought up";
     case WASMOS_ERR_DISPLAY_DEVICE: return "the device refused a transfer or flush command (a virtio-gpu error response)";
     case WASMOS_ERR_DISPLAY_BUSY: return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds";
+    case WASMOS_ERR_DISPLAY_NOT_PRESENTER: return "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged";
     default: return "unknown error";
     }
 }

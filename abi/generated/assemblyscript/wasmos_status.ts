@@ -334,6 +334,7 @@ export const WASMOS_ERR_DISPLAY_BAD_DESC: i32 = -0x001B0001; // the flush descri
 export const WASMOS_ERR_DISPLAY_NOT_READY: i32 = -0x001B0002; // the display has no scanout yet: the device is still being brought up
 export const WASMOS_ERR_DISPLAY_DEVICE: i32 = -0x001B0003; // the device refused a transfer or flush command (a virtio-gpu error response)
 export const WASMOS_ERR_DISPLAY_BUSY: i32 = -0x001B0004; // the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds
+export const WASMOS_ERR_DISPLAY_NOT_PRESENTER: i32 = -0x001B0005; // FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to "display"; the presenter is unchanged
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -679,6 +680,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_DISPLAY_NOT_READY: return "the display has no scanout yet: the device is still being brought up";
     case WASMOS_ERR_DISPLAY_DEVICE: return "the device refused a transfer or flush command (a virtio-gpu error response)";
     case WASMOS_ERR_DISPLAY_BUSY: return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds";
+    case WASMOS_ERR_DISPLAY_NOT_PRESENTER: return "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged";
     default: return "unknown error";
   }
 }

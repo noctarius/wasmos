@@ -131,7 +131,14 @@ presenter's job, and the presenter announces itself rather than being assumed:
 - The compositor watches `display` and reports every composed region. The
   FBTEXT server has no service watch; the presenter tells it instead
   (`FBTEXT_IPC_PRESENTER_REQ`, sent on every bind of `fb`), and it reports each
-  cell, scroll, clear, grid blit and mode set from then on.
+  cell, scroll, clear, grid blit and mode set from then on. IPC authenticates
+  an endpoint, not its authority, so the server accepts a presenter only after
+  the service registry confirms that the sender is the endpoint bound to
+  `display` (`SVC_IPC_LOOKUP_REQ`, answered asynchronously in its loop).
+- A writer takes an answer only from the presenter it sent to and only for the
+  request in flight, so neither another sender nor a late answer to an earlier
+  flush frees a descriptor the presenter may still read. The presenter keeps an
+  answer the writer's queue refused and retries it after every loop poll.
 - Whatever no writer reports -- the kernel's console before user space, the
   early-log replay before the presenter attached -- is caught by a full present
   on every loop tick (250 ms) that finds the control queue idle.

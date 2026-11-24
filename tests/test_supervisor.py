@@ -57,17 +57,26 @@ def _svc(test, session, args: str) -> str:
     return out[: out.rfind("wamos> ")]
 
 
+# One `svc list` row: UNIT, STATE, PID and RESTARTS (both always numbers), then
+# LAST. The console is shared, so another process's output can land between
+# rows; a line is a row only when it has this shape, not because it has five
+# words.
+_LIST_ROW = re.compile(r"^\S+ +[a-z]+ +[0-9]+ +[0-9]+ +\S")
+
+
+def _table_rows(out: str) -> tuple:
+    """The header and the row lines of a `svc list` table in `out`."""
+    table = out[out.index("UNIT") :].splitlines()
+    return table[0], [line for line in table[1:] if _LIST_ROW.match(line)]
+
+
 def _list_rows(test, session) -> dict:
     """`svc list` as {unit: [state, pid, restarts, last...]}."""
     out = _svc(test, session, "list")
     if "UNIT" not in out:
         test.fail(f"svc list printed no table.\n--- output ---\n{out}\n")
-    rows = {}
-    for line in out[out.index("UNIT") :].splitlines()[1:]:
-        cols = line.split()
-        if len(cols) >= 5:
-            rows[cols[0]] = cols[1:]
-    return rows
+    _, lines = _table_rows(out)
+    return {cols[0]: cols[1:] for cols in (line.split() for line in lines)}
 
 
 def _submit(test, session, spec: str) -> None:
@@ -193,10 +202,8 @@ class SupervisorTests(unittest.TestCase):
         # (virtio_rng@pci:00:04.0, 22) pushed its row's STATE, PID, RESTARTS
         # and LAST out from under their headings.
         out = _svc(self, self.session, "list")
-        table = out[out.index("UNIT") :].splitlines()
-        header = table[0]
+        header, rows = _table_rows(out)
         starts = [header.index(h) for h in ("STATE", "PID", "RESTARTS", "LAST")]
-        rows = [line for line in table[1:] if len(line.split()) >= 5]
         self.assertTrue(
             any(len(line.split()[0]) > 19 for line in rows),
             f"no unit name long enough to test the layout:\n{out}",

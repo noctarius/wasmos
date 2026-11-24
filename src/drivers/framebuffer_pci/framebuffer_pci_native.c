@@ -24,25 +24,35 @@
 #define BGA_ENABLED 0x0001u
 #define BGA_LFB_ENABLED 0x0040u
 
-static void bga_write_reg(wasmos_driver_api_t* api, uint16_t reg, uint16_t value) {
-    api->io_out16(BGA_INDEX_PORT, reg);
-    api->io_out16(BGA_DATA_PORT, value);
+/* 0, or the packed code io_out16 refused either port write with. */
+static int32_t bga_write_reg(wasmos_driver_api_t* api, uint16_t reg, uint16_t value) {
+    int32_t rc = api->io_out16(BGA_INDEX_PORT, reg);
+    return rc != 0 ? rc : api->io_out16(BGA_DATA_PORT, value);
 }
 
 /* BGA scans out with stride == width, which is the only stride the server
- * asks for. */
+ * asks for. A refused register write fails the mode set with io_out16's code;
+ * the adapter may then be left disabled mid-change. */
 static int32_t bga_set_mode(wasmos_driver_api_t* api, uint32_t width, uint32_t height,
                             uint32_t stride) {
     (void)stride;
     if (!api->io_out16 || width > 0xFFFFu || height > 0xFFFFu) {
         return WASMOS_ERR_GFX_MODE_SET_FAILED;
     }
-    bga_write_reg(api, BGA_REG_ENABLE, 0u);
-    bga_write_reg(api, BGA_REG_XRES, (uint16_t)width);
-    bga_write_reg(api, BGA_REG_YRES, (uint16_t)height);
-    bga_write_reg(api, BGA_REG_BPP, 32u);
-    bga_write_reg(api, BGA_REG_ENABLE, (uint16_t)(BGA_ENABLED | BGA_LFB_ENABLED));
-    return 0;
+    int32_t rc = bga_write_reg(api, BGA_REG_ENABLE, 0u);
+    if (rc == 0) {
+        rc = bga_write_reg(api, BGA_REG_XRES, (uint16_t)width);
+    }
+    if (rc == 0) {
+        rc = bga_write_reg(api, BGA_REG_YRES, (uint16_t)height);
+    }
+    if (rc == 0) {
+        rc = bga_write_reg(api, BGA_REG_BPP, 32u);
+    }
+    if (rc == 0) {
+        rc = bga_write_reg(api, BGA_REG_ENABLE, (uint16_t)(BGA_ENABLED | BGA_LFB_ENABLED));
+    }
+    return rc;
 }
 
 static const fbtext_backend_t g_backend = {"[framebuffer-pci]", 0, bga_set_mode};

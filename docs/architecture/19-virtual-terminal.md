@@ -247,6 +247,7 @@ kernel-log (kmsg) replay at startup, before `vt` exists.
 | `FBTEXT_IPC_SET_RESOLUTION_REQ` | 0x609 | arg0=width, arg1=height                              |
 | `FBTEXT_IPC_BLIT_ATTACH_REQ`    | 0x60A | arg0=buffer_id, arg1=borrow_id, arg2=cols, arg3=rows |
 | `FBTEXT_IPC_BLIT_GRID_REQ`      | 0x60B | arg0=cols, arg1=rows (repaint the attached grid)     |
+| `FBTEXT_IPC_GEOMETRY_CHANGED`   | 0x60C | Notify: arg0=cols, arg1=rows after a mode set        |
 | `FBTEXT_IPC_RESP`               | 0x680 | Acknowledgment from framebuffer                      |
 | `FBTEXT_IPC_ERROR`              | 0x6FF | Error from framebuffer                               |
 
@@ -260,6 +261,15 @@ one IPC per cell (thousands per switch), which overflowed the driver's IPC queue
 and, under SMP, starved the driver so a tty switch spun `vt_fb_send_switch`'s
 retry for ~80 s. `CELL_WRITE` remains for incremental single-cell updates. A per-
 cell path is kept as a fallback when the blit buffer cannot be allocated.
+
+**Geometry.** `vt` asks for the text geometry (`GEOMETRY_REQ`) when a
+framebuffer driver binds, and the driver pushes `GEOMETRY_CHANGED` to the
+endpoint that attached the blit grid whenever a `SET_RESOLUTION` changes it.
+Either way `vt` re-lays every slot's grid out in place (`vt_regrid`: the
+top-left part that fits is kept, cursors are clamped) and repaints the visible
+text slot. The driver renders `BLIT_GRID` at its own column count, so a grid laid
+out for any other geometry would reach the screen sheared. The blit buffer is
+sized for `VT_BLIT_MAX_CELLS` and is not re-attached on a change.
 
 Cell color packing: `arg3 = (fg & 0x0F) << 8 | (bg & 0x0F)`.
 

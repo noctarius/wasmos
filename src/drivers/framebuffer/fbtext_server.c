@@ -40,6 +40,9 @@ static uint32_t g_fb_bytes_limit = 0;
  * FBTEXT_IPC_BLIT_GRID_REQ repaints the whole grid from it in one shot. The
  * per-cell CELL_WRITE alternative is an IPC storm that wedges tty switches. */
 static const fbtext_blit_cell_t* g_blit_grid = 0;
+/* The endpoint that attached the blit grid; it lays its grid out for the
+ * driver's geometry and is told (FBTEXT_IPC_GEOMETRY_CHANGED) when that changes. */
+static uint32_t g_blit_client = (uint32_t)~0u;
 
 typedef struct {
     uint16_t width;
@@ -354,6 +357,7 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
                     api->xfer_buffer_map_borrowed(ND_BUFFER_KIND_XFER, msg.arg0, msg.arg1);
                 if (p) {
                     g_blit_grid = (const fbtext_blit_cell_t*)p;
+                    g_blit_client = msg.source;
                 }
             }
             break;
@@ -422,6 +426,18 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
             }
             resp.arg0 = msg.arg0;
             resp.arg1 = msg.arg1;
+            /* TODO(fbtext-geometry-notify): the notify is sent once; when the
+             * vt's queue is full it is lost and the vt keeps its old grid until
+             * the next framebuffer bind. */
+            if (g_blit_client != (uint32_t)~0u) {
+                nd_ipc_message_t note = resp;
+                note.type = FBTEXT_IPC_GEOMETRY_CHANGED;
+                note.destination = g_blit_client;
+                note.request_id = 0;
+                note.arg0 = g_state.cols;
+                note.arg1 = g_state.rows;
+                api->ipc_send(ctx, g_blit_client, &note);
+            }
             break;
         }
         default:

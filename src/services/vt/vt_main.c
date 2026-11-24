@@ -1905,25 +1905,24 @@ static void vt_fb_repaint(void) {
     }
 }
 
+/* Re-lay the grids out for the framebuffer's text geometry, keeping the current
+ * one for a dimension reported out of range. The blit grid is allocated at
+ * VT_BLIT_MAX_CELLS, so it serves any geometry without being re-attached. */
+static void vt_apply_geometry(int32_t cols, int32_t rows) {
+    vt_regrid((cols >= 40 && cols <= (int32_t)VT_MAX_COLS) ? (uint16_t)cols : g_vt_cols,
+              (rows >= 16 && rows <= (int32_t)VT_MAX_ROWS) ? (uint16_t)rows : g_vt_rows);
+}
+
 /* The framebuffer's geometry reply: re-lay the grids out for it (keeping the
- * current geometry when the query failed or reports one out of range), attach
- * the blit grid, repaint. */
+ * current geometry when the query failed), attach the blit grid, repaint. */
 static int32_t g_geometry_req = 0; /* the query's intent id while it is in flight */
 
 static void vt_on_geometry(void* user, const wasmos_ipc_message_t* msg) {
-    uint16_t cols = g_vt_cols;
-    uint16_t rows = g_vt_rows;
     (void)user;
     g_geometry_req = 0;
     if (msg->type == FBTEXT_IPC_RESP) {
-        if (msg->arg0 >= 40 && msg->arg0 <= (int32_t)VT_MAX_COLS) {
-            cols = (uint16_t)msg->arg0;
-        }
-        if (msg->arg1 >= 16 && msg->arg1 <= (int32_t)VT_MAX_ROWS) {
-            rows = (uint16_t)msg->arg1;
-        }
+        vt_apply_geometry(msg->arg0, msg->arg1);
     }
-    vt_regrid(cols, rows);
     vt_blit_init();
     vt_fb_repaint();
 }
@@ -2270,6 +2269,15 @@ static void vt_on_message(void* user, const wasmos_ipc_message_t* message) {
         break;
 
     case KBD_IPC_SUBSCRIBE_RESP:
+        break;
+
+    case FBTEXT_IPC_GEOMETRY_CHANGED:
+        /* The bound framebuffer changed its mode: the driver blits at the new
+         * column count from now on, so the grids follow before the repaint. */
+        if (g_fb_ep >= 0 && msg.source == g_fb_ep) {
+            vt_apply_geometry(msg.arg0, msg.arg1);
+            vt_fb_repaint();
+        }
         break;
 
     case WASMOS_IPC_HANGUP:

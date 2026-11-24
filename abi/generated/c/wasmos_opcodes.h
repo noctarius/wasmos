@@ -636,6 +636,13 @@ enum {
     FBTEXT_IPC_BLIT_ATTACH_REQ = 0x60A,
     /* arg0=cols arg1=rows (from the attached buffer) */
     FBTEXT_IPC_BLIT_GRID_REQ = 0x60B,
+    /* driver -> the endpoint that attached the blit grid (the vt): a
+     * SET_RESOLUTION changed the text geometry.  arg0=cols arg1=rows, as a
+     * GEOMETRY_REQ would now answer.  Fire-and-forget (request_id 0); the
+     * driver renders BLIT_GRID at the new column count from then on, so the
+     * receiver re-lays its grids out before its next blit.
+     */
+    FBTEXT_IPC_GEOMETRY_CHANGED = 0x60C,
     FBTEXT_IPC_RESP = 0x680,
     FBTEXT_IPC_ERROR = 0x6FF,
 };
@@ -1591,6 +1598,7 @@ static inline const char* wasmos_opcode_name(uint32_t subsystem_id, uint32_t typ
         case 0x609: return "FBTEXT_IPC_SET_RESOLUTION_REQ";
         case 0x60A: return "FBTEXT_IPC_BLIT_ATTACH_REQ";
         case 0x60B: return "FBTEXT_IPC_BLIT_GRID_REQ";
+        case 0x60C: return "FBTEXT_IPC_GEOMETRY_CHANGED";
         case 0x680: return "FBTEXT_IPC_RESP";
         case 0x6FF: return "FBTEXT_IPC_ERROR";
         default: return "UNKNOWN";

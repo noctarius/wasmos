@@ -576,6 +576,12 @@ const FBTEXT_IPC_SET_RESOLUTION_REQ int32 = 0x609
 const FBTEXT_IPC_BLIT_ATTACH_REQ int32 = 0x60A
 // arg0=cols arg1=rows (from the attached buffer)
 const FBTEXT_IPC_BLIT_GRID_REQ int32 = 0x60B
+// driver -> the endpoint that attached the blit grid (the vt): a
+// SET_RESOLUTION changed the text geometry.  arg0=cols arg1=rows, as a
+// GEOMETRY_REQ would now answer.  Fire-and-forget (request_id 0); the
+// driver renders BLIT_GRID at the new column count from then on, so the
+// receiver re-lays its grids out before its next blit.
+const FBTEXT_IPC_GEOMETRY_CHANGED int32 = 0x60C
 const FBTEXT_IPC_RESP int32 = 0x680
 const FBTEXT_IPC_ERROR int32 = 0x6FF
 

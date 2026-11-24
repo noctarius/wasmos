@@ -12,3 +12,15 @@ heap_pages = 0
 
 [deps]
 provides = ["fb"]
+
+[[capabilities]]
+name = "io.port"
+flags = 0
+
+# Register windows, in the order the driver addresses them; the profile they
+# form limits io.port to exactly these ports.
+# 0: the Bochs VBE (DISPI) index/data pair, written to change the mode.
+[[regions]]
+kind = "io"
+first = 0x01CE
+last = 0x01CF

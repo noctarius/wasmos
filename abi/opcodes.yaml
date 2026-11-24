@@ -760,6 +760,15 @@ subsystems:
         kind: req
         doc: |
           arg0=cols arg1=rows (from the attached buffer)
+      - symbol: FBTEXT_IPC_GEOMETRY_CHANGED
+        value: 0x60c
+        kind: notify
+        doc: |
+          driver -> the endpoint that attached the blit grid (the vt): a
+          SET_RESOLUTION changed the text geometry.  arg0=cols arg1=rows, as a
+          GEOMETRY_REQ would now answer.  Fire-and-forget (request_id 0); the
+          driver renders BLIT_GRID at the new column count from then on, so the
+          receiver re-lays its grids out before its next blit.
       - { symbol: FBTEXT_IPC_RESP, value: 0x680, kind: resp }
       - { symbol: FBTEXT_IPC_ERROR, value: 0x6ff, kind: error }
 

@@ -1,5 +1,5 @@
 /* test_as_rtc_time.ts - the date arithmetic every RTC backend shares
- * (src/drivers/rtc/rtc_time.ts): the PL031 counts seconds since the epoch,
+ * (src/drivers/rtc/core/rtc_time.ts): the PL031 counts seconds since the epoch,
  * the rtc protocol carries a date, and the two must convert exactly both ways.
  * Reference values are from Python's calendar.timegm.
  */

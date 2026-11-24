@@ -1,5 +1,5 @@
 /* pl031.ts - the Arm PL031 real-time clock backend (aarch64), reached through a
- * memory window. The driver around it is src/drivers/rtc/rtc_core.ts; this
+ * memory window. The driver around it is src/drivers/rtc/core/rtc_core.ts; this
  * file is the chip.
  *
  * The PL031 is a free-running 32-bit counter of seconds (Arm PrimeCell RTC

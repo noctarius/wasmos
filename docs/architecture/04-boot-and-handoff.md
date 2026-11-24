@@ -320,6 +320,10 @@ entry table.
 
 ### Kernel Memory Layout
 
+This section and the next describe x86_64; aarch64's entry and layout follow
+them (*aarch64 Entry*) and in
+[38-aarch64-platform.md](38-aarch64-platform.md).
+
 The kernel ELF has two load groups with different physical and virtual addresses.
 
 **Group 1 — bootstrap (loaded at low physical addresses):**
@@ -401,11 +405,38 @@ The 64 MiB higher-half window covers the kernel `.text`, `.rodata`, `.data`,
 `.bss`, and initial stack regardless of how large the kernel binary grows up to
 that limit.
 
+### aarch64 Entry
+
+`BOOTAA64.EFI` calls `kernel_entry(boot_info)` with AAPCS64, the target's only
+calling convention, so `boot_info_t *` arrives in `x0`
+(`src/boot/boot.c`). Before the jump the loader cleans every loaded segment to
+the point of coherency and invalidates the instruction cache, and with
+`WASMOS_EFI_RUNTIME` it calls `SetVirtualAddressMap` so UEFI runtime services
+are callable at their direct-map addresses (`boot_info` version 7).
+
+`_start` (`src/kernel/arch/aarch64/entry.S`, run at its physical address):
+
+1. Masks every exception class.
+2. Entered at EL2, turns the EL2 MMU off, makes EL1 AArch64 with the timer
+   and FP/SIMD untrapped, and drops to EL1h (EL3 entry is not supported);
+   entered at EL1, turns the firmware's MMU and caches off.
+3. Enables FP/SIMD at EL1 (`CPACR_EL1.FPEN`), since kernel code uses it.
+4. Builds one level-1 table mapping physical [0, 4 GiB) as 1 GiB blocks -- the
+   first Device-nGnRE (QEMU virt's devices), the rest Normal write-back -- and
+   hangs it below two level-0 tables: TTBR0 slot 0 (the identity map) and
+   TTBR1 slot 511 (the direct map at `0xFFFFFF8000000000`).
+5. Turns the MMU and caches on and jumps to `_start_high` at its linked
+   higher-half address.
+
+`_start_high` installs the exception vectors, switches to the kernel stack,
+zeroes `.bss` and calls `kmain(boot_info)`. The identity map stays installed as
+the boot-time physical alias, as on x86_64.
+
 ---
 
 ### Boot Flow
 
-1. UEFI loads `BOOTX64.EFI`.
+1. UEFI loads `BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64).
 2. Bootloader loads `kernel.elf` and `initfs.img` from the ESP root.
 3. Bootloader validates the ELF header, loads all `PT_LOAD` segments, validates
    the initfs, locates ACPI RSDP, captures the framebuffer snapshot.
@@ -414,13 +445,15 @@ that limit.
 6. `_start_high` clears `.bss` and calls `kmain(boot_info_t *)`.
 7. `kmain` initializes core subsystems and spawns the kernel `init` task.
 8. `init` starts `device-manager` from the bootstrap module set.
-9. `device-manager` starts `pci-bus`, consumes inventory, starts `ata` and
-   `fs-fat` via rules.
+9. `device-manager` starts `pci-bus`, consumes inventory, and starts the boot
+   disk's driver (`ata` on x86_64, `virtio_blk` on aarch64) via rules;
+   fs-manager mounts `/boot` from it.
 10. `init` waits for FAT readiness, then loads `sysinit` from disk.
 11. `sysinit` reads the boot config and starts configured late user processes.
 
-A COM1 serial stub (`0x3F8`) is active from early in `kmain` through all of the
-above, providing diagnostic output before any driver is online.
+A console UART stub -- COM1 (`0x3F8`) on x86_64, the PL011 at `0x09000000` on
+aarch64 (`arch_console_uart_*`) -- is active from early in `kmain` through all
+of the above, providing diagnostic output before any driver is online.
 
 ---
 
@@ -428,8 +461,8 @@ above, providing diagnostic output before any driver is online.
 
 | Component     | Owns                                                             |
 |---------------|------------------------------------------------------------------|
-| `BOOTX64.EFI` | UEFI interaction, file I/O, memory map, blob construction        |
-| `_start`      | bootstrap page tables, CR3 load                                  |
+| `BOOTX64.EFI` / `BOOTAA64.EFI` | UEFI interaction, file I/O, memory map, blob construction |
+| `_start`      | bootstrap page tables, CR3 load (aarch64: EL drop, TTBR0/TTBR1, MMU on) |
 | `_start_high` | BSS clear, stack setup, `kmain` call                             |
 | `kmain`       | core subsystem init, permanent page tables, `init` task spawn    |
 | `init`        | system bootstrap sequencing (`device-manager` → FAT → `sysinit`) |

@@ -1,4 +1,4 @@
-/* Host unit test for path resolution (src/drivers/fs_wfs/wfs_path.c), against
+/* Host unit test for path resolution (src/drivers/fs/wfs/wfs_path.c), against
  * volumes mkfs_wfs populated.
  *
  * The walk is what an open or a stat begins with, so its edge cases are the ones

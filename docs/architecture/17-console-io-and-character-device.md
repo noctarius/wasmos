@@ -7,7 +7,7 @@ output: the `wasmos_console_write` hostcall, its routing through the vt, the
 chardev IPC protocol, and the read path.
 
 **Sources**: `src/kernel/wasm3/link.c`,
-`src/drivers/chardev/chardev_server.c`,
+`src/drivers/char/chardev/chardev_server.c`,
 `src/kernel/include/wasmos_ipc.h`
 
 ---
@@ -71,7 +71,7 @@ environments.
 
 ### Chardev IPC Protocol
 
-**Source**: `src/drivers/chardev/chardev_server.c`
+**Source**: `src/drivers/char/chardev/chardev_server.c`
 
 The chardev service is a lightweight single-byte test utility that provides
 an IPC-based read/write interface. It is not the primary I/O path for
@@ -145,7 +145,8 @@ wasmos_console_write (hostcall) ──► console_write_tty(ctty)
 
 ### Structural Invariants
 
-1. **Serial carries the serial-bound slot.** Once the vt owns COM1, a write
+1. **Serial carries the serial-bound slot.** Once the vt owns the console UART
+   (COM1 on x86_64, the PL011 on aarch64), a write
    reaches the UART if and only if it belongs to the serial-bound slot (kernel
    log belongs to vt-1). Before the vt is up, and for text the console ring
    cannot take, the kernel transmits directly, so output is never lost. Panic
@@ -156,7 +157,8 @@ wasmos_console_write (hostcall) ──► console_write_tty(ctty)
    the kernel writes directly (`19-virtual-terminal.md`, kernel-log port).
 
 2. **Chardev is a test stub, not a production I/O path.** Real services use
-   the PS/2 keyboard driver (IRQ-driven, up to 4 subscribers) and the
+   the keyboard driver -- PS/2 on x86_64, virtio-input on aarch64, both
+   IRQ- or MSI-driven with up to 4 subscribers -- and the
    compositor's VT for interactive I/O, not the chardev single-byte buffer.
 
 3. **Console output is one-way.** `wasmos_console_write` pushes output into

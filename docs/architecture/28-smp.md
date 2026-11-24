@@ -5,7 +5,9 @@
 > **Documentation status: Implemented reference with deferred CPU hotplug,
 > NUMA, and TLB-shootdown work.**
 
-Implemented (Phases 0–9). `WASMOS_SMP=0` is the default; enabling it requires
+Implemented on x86_64 (Phases 0–9); aarch64 runs on one core until PSCI
+`CPU_ON` bring-up lands ([38-aarch64-platform.md](38-aarch64-platform.md),
+*Deferred Work*). `WASMOS_SMP=0` is the default; enabling it requires
 `WASMOS_IRQ_IOAPIC=1`. All SMP bring-up code is live: MADT discovery,
 LAPIC ICR helpers, AP trampoline, `smp_cpus_up`, AP C entry, per-CPU spinlock
 state, and ready-queue locking. No behavioral change at `WASMOS_SMP=0`.

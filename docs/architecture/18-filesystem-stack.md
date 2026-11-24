@@ -10,9 +10,9 @@ table, the `fs_fat`, `fs_init` and `fs_tmpfs` backends, and the transfer-buffer
 borrow semantics used for data transfers.
 
 **Sources**: `src/services/fs_manager/`,
-`src/drivers/fs_fat/`,
-`src/drivers/fs_init/`,
-`src/drivers/fs_tmpfs/`,
+`src/drivers/fs/fat/`,
+`src/drivers/fs/init/`,
+`src/drivers/fs/tmpfs/`,
 `src/kernel/include/wasmos_ipc.h`
 
 ---
@@ -434,7 +434,7 @@ the caller-owned object by ownership (`pm_foreign_xfer_ptr`).
 
 ### `fs_fat` Backend
 
-**Source**: `src/drivers/fs_fat/`
+**Source**: `src/drivers/fs/fat/`
 
 Implements FAT12/16 on a block device. FAT32 is detected at mount but its
 cluster read/write is unimplemented (`fat_fatent_read`/`fat_fatent_write`
@@ -475,7 +475,7 @@ so the restarted driver's own module is read through it meanwhile.
 
 ### `fs_tmpfs` Backend
 
-**Source**: `src/drivers/fs_tmpfs/` (Zig)
+**Source**: `src/drivers/fs/tmpfs/` (Zig)
 
 A read-write filesystem held entirely in the backend's own linear memory: a fixed
 node table (192 entries) over a block pool that GROWS. Contents are not
@@ -557,7 +557,7 @@ rather than the root covering it.
 
 ### `fs_init` Backend
 
-**Source**: `src/drivers/fs_init/`
+**Source**: `src/drivers/fs/init/`
 
 A read-only in-memory filesystem used for early boot content before the FAT
 volume is available. The initramfs image is embedded in the kernel ELF or

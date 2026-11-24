@@ -147,7 +147,7 @@ thread_t *cpu_sched_pick_next(cpu_sched_t *cs) {
 ```
 
 **Round-robin / anti-starvation:** there is no per-CPU quantum timer.
-Preemption is driven by the global PIT via `process_tick()`, which expires the
+Preemption is driven by the global timer tick (PIT or LAPIC timer on x86_64, the EL1 virtual timer on aarch64) via `process_tick()`, which expires the
 running thread's quantum and sets `g_need_resched`.  When several threads share
 the highest ready priority, `cpu_sched_pick_next` rotates among them via the
 per-priority FIFO plus a streak counter: after `SCHED_ANTISTARVATION_STREAK`

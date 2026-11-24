@@ -6,8 +6,8 @@
 > published as block devices, but nothing mounts a filesystem on one yet.
 
 **Sources this proposal changes**: `src/services/device_manager/device_manager.c`,
-`src/services/device_manager/device_manager_rules.c`, `src/drivers/ata/ata.c`,
-`src/drivers/virtio_blk/virtio_blk.zig`, `src/drivers/fs_fat/`,
+`src/services/device_manager/device_manager_rules.c`, `src/drivers/block/ata/ata.c`,
+`src/drivers/block/virtio_blk/virtio_blk.zig`, `src/drivers/fs/fat/`,
 `src/utils/blkinfo/blkinfo.c`, `abi/opcodes.yaml`, `abi/constants.yaml`,
 `abi/errors.yaml`, `scripts/initfs.<arch>.toml`, the devmgr rule files.
 
@@ -31,7 +31,7 @@ SUBSYSTEM=="block", DRIVER=="ata", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="sy
 
 which disk, which filesystem driver, where it mounts — and, by omission, which
 *region* of the disk. The region is decided somewhere else entirely:
-`fat_try_parse_mbr` in `src/drivers/fs_fat/fat_geom.c` reads LBA 0, and if it is
+`fat_try_parse_mbr` in `src/drivers/fs/fat/fat_geom.c` reads LBA 0, and if it is
 not a BPB, locates *the first FAT partition* and mounts that. A second
 filesystem would need its own copy of that logic, and "the first FAT partition"
 is not necessarily the partition the rule meant.
@@ -47,7 +47,7 @@ offset 0x1FE:  55 aa
 ```
 
 `/boot` is that shape, and stays that shape: UEFI does not force GPT here — OVMF
-boots the removable-media path `\EFI\BOOT\BOOTX64.EFI` off an MBR FAT partition
+boots the removable-media path `\EFI\BOOT\BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64) off an MBR FAT partition
 — and vvfat has no GPT mode, so a directory-backed drive cannot carry a GPT.
 
 `/user` is not directory-backed. It is a raw image built by
@@ -631,7 +631,7 @@ header-only C in `src/libc/include/wasmos/ipc.h`:
 - `reborrow` / `unborrow` wrappers over the generated externs, which exist in
   `abi/generated/zig/wasmos_imports.zig` but have no ergonomic form.
 
-Build wiring follows `src/drivers/virtio_blk/BUILD.py`: `guest(..., lang="zig")`
+Build wiring follows `src/drivers/block/virtio_blk/BUILD.py`: `guest(..., lang="zig")`
 (`scripts/buildgen/wasmos_rules.py`) with the coroutine runtime, `service_async_entry_wasm.c` and the generated ABI
 staged flat. The manifest needs `svc.class` (to claim `block` instances) and no
 hardware capabilities at all — the manager touches no device, only IPC.
@@ -714,7 +714,7 @@ per-context rather than per-endpoint.
 
 #### Phase 2 — The partition manager (done)
 
-- `src/drivers/partition_manager/` — Zig service, `linker.metadata`,
+- `src/drivers/block/partition/` — Zig service, `linker.metadata`,
   `BUILD.py`; staged on the ESP and spawned by absolute path from the boot
   rules (see above for why not initfs).
 - Pure Zig table parser: GPT with CRC32 and backup fallback, MBR, UTF-16LE →

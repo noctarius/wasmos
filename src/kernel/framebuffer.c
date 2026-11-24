@@ -6,7 +6,7 @@
 #include "serial.h"
 #include "paging.h"
 #include "memory.h"
-#include "../drivers/framebuffer/font_8x16.h"
+#include "../drivers/gpu/framebuffer/font_8x16.h"
 
 #include <stdint.h>
 #include <string.h>

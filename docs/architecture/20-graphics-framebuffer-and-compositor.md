@@ -73,7 +73,7 @@ Validation helper (`gfx_ipc.h`):
 
 These opcodes are used by the VT service and the compositor to control the
 framebuffer text/graphics plane. Every framebuffer driver variant runs the same
-server (`src/drivers/framebuffer/fbtext_server.c`) and differs only in how it
+server (`src/drivers/gpu/framebuffer/fbtext_server.c`) and differs only in how it
 reprograms its adapter, if it can: `framebuffer` (UEFI GOP, x86_64 and any
 firmware framebuffer) cannot, `framebuffer_pci` (x86_64 Bochs/QEMU VBE, bound to
 the PCI VGA function) writes the BGA ports, and `framebuffer_ramfb` (aarch64,

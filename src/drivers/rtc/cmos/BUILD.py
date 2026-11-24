@@ -5,10 +5,11 @@ from wasmos_rules import guest, install
 
 
 def build(b):
+    core = b.root / "src/drivers/rtc/core"
     wap = guest(
         b,
         "rtc",
-        [b.src("cmos.ts"), b.src("rtc_core.ts"), b.src("rtc_time.ts")],
+        [b.src("cmos.ts"), core / "rtc_core.ts", core / "rtc_time.ts"],
         lang="as",
     )
     install(b, "system/drivers/rtc.wap", wap)

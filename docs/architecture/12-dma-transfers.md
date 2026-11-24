@@ -408,8 +408,9 @@ extern int32_t wasmos_dma_sync_borrow(
 Valid `sync_op` values: `WASMOS_DMA_SYNC_TO_DEVICE`, `FROM_DEVICE`,
 `BIDIR`. Returns `WASMOS_ERR_NONE` or an error code.
 
-The kernel calls `xfer_buffer_dma_sync`. On x86, cache
-maintenance is a no-op; the call still enforces that a mapping is
+The kernel calls `xfer_buffer_dma_sync`. Cache
+maintenance is a no-op (x86_64, and aarch64 on QEMU `virt`, whose PCIe DMA is
+cache-coherent); the call still enforces that a mapping is
 active and that the requested range falls within `dma_length`.
 
 #### `wasmos_dma_unmap_borrow`
@@ -576,12 +577,12 @@ Design notes:
 
 > **Currently deferred/aspirational.** The borrow-based DMA fast-path below is
 > disabled pending the owner-push migration: `ata_dma_prepare()` returns
-> `WASMOS_ERR_DMA_DENY` unconditionally (`src/drivers/ata/ata.c`), so every
+> `WASMOS_ERR_DMA_DENY` unconditionally (`src/drivers/block/ata/ata.c`), so every
 > ATA read and write is presently PIO (matching invariant 5, "PIO fallback is
 > unconditional"). The lifecycle described here is the intended shape once the
 > block IPC protocol carries the buffer grant.
 
-The ATA driver (`src/drivers/ata/ata.c`) is written around the full DMA
+The ATA driver (`src/drivers/block/ata/ata.c`) is written around the full DMA
 lifecycle on every read and write request.
 
 #### Helper Functions
@@ -659,11 +660,12 @@ from `ata_dma_prepare`.
    `dma_map_borrow`. Subsequent sync calls verify only that the range
    falls within the already-mapped `dma_length`.
 
-4. **Sync is a no-op on x86.** `xfer_buffer_dma_sync` enforces
+4. **Sync is a no-op.** `xfer_buffer_dma_sync` enforces
    state/range semantics but does not issue cache maintenance instructions.
-   This is correct for x86 coherent DMA. Non-coherent architectures
-   would need explicit flushes here.
-   TODO: add explicit flush hooks when porting to non-coherent targets.
+   This is correct for coherent DMA: x86_64, and aarch64 on QEMU `virt`, whose
+   PCIe devices snoop the CPU caches. A non-coherent aarch64 platform would
+   need explicit clean/invalidate here.
+   TODO: add explicit flush hooks when targeting a non-coherent platform.
 
 5. **PIO fallback is unconditional.** ATA read/write proceeds via PIO
    whether or not DMA setup succeeded. The DMA lifecycle only adds

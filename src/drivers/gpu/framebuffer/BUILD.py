@@ -1,4 +1,4 @@
-"""framebuffer_ramfb: native ring-3 driver (static ELF for the target architecture)."""
+"""framebuffer: native ring-3 driver (static ELF for the target architecture)."""
 
 from wasmos_rules import install, native
 
@@ -15,7 +15,7 @@ CFLAGS = [
 
 
 def build(b):
-    fb = b.root / "src/drivers/framebuffer"
+    fb = b.root / "src/drivers/gpu/framebuffer"
     flags = CFLAGS + [
         f"-I{b.root / 'src/drivers/include'}",
         f"-I{fb}",
@@ -23,20 +23,16 @@ def build(b):
         str(b.root / "src/libc/include/wasmos_cast.h"),
     ]
     objs = b.toolchain("native").compile(
-        [
-            b.src("framebuffer_ramfb_native.c"),
-            b.root / "src/drivers/framebuffer/fbtext_server.c",
-            b.root / "src/drivers/framebuffer/render.c",
-        ],
+        [b.src("framebuffer_native.c"), b.src("fbtext_server.c"), b.src("render.c")],
         flags=flags,
-        subdir="obj/framebuffer_ramfb",
+        subdir="obj/framebuffer",
     )
     wap = native(
         b,
-        "framebuffer_ramfb",
+        "framebuffer",
         objs,
         entry="initialize",
         image_base="0x10000000",
-        elf="framebuffer_ramfb_native.elf",
+        elf="framebuffer_native.elf",
     )
-    install(b, "system/drivers/fbramfb.wap", wap)
+    install(b, "system/drivers/framebuf.wap", wap)

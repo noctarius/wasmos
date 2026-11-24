@@ -54,13 +54,18 @@ in-kernel scheduler rather than an optional mode.
 ### Boot and Hardware Setup
 - [Boot and Handoff](architecture/04-boot-and-handoff.md)
 - [x86_64 CPU Architecture](architecture/05-x86-cpu-architecture.md)
+- [aarch64 Platform (QEMU `virt`)](architecture/38-aarch64-platform.md) - the
+  second target: EL2-to-EL1 boot, the shared slot geometry under TTBR0/TTBR1,
+  GICv3 and ITS-delivered MSIs, ECAM, ACPI devices plus the board table, the
+  per-arch driver set, and what is still x86_64-only (SMP, WARP)
 - Architecture boundary: CPU- and platform-specific code lives in
   `src/kernel/arch/<arch>/` and `src/kernel/include/arch/<arch>/`, reached only
   through the selection headers `src/kernel/include/arch/*.h`, which key on the
   kernel's `WASMOS_ARCH_<ARCH>` define; neutral code never includes an arch
   directory. Per-architecture build and QEMU values live in `ARCHES`
-  (`scripts/buildgen/toolchains.py`). Targets: x86_64; aarch64 (QEMU `virt`)
-  under bring-up; its open work is the "arm64 Port" section of `TASKS.md`.
+  (`scripts/buildgen/toolchains.py`). Targets: x86_64, and aarch64 on QEMU
+  `virt` (single core, wasm3), which runs every QEMU battery; its open work is
+  the "arm64 Port" section of `TASKS.md`.
 - [Memory Management](architecture/06-memory-management.md)
 - [Scheduling and Preemption](architecture/07-scheduling-and-preemption.md)
 - [Threading and Lifecycle](architecture/08-threading-and-lifecycle.md)

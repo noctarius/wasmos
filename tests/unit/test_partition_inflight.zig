@@ -1,5 +1,5 @@
 //! Unit tests for the partition manager's in-flight transfer table
-//! (src/drivers/partition_manager/inflight.zig).
+//! (src/drivers/block/partition/inflight.zig).
 //!
 //! The partition manager forwards a client's transfer to the disk beneath the
 //! partition by staging a rewritten request descriptor in a buffer it owns and

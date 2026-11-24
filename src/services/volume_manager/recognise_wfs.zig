@@ -5,7 +5,7 @@
 //! this first in the chain: a format that can prove itself should get the chance
 //! before one that can only fail to be disproved.
 //!
-//! Layout from `src/drivers/fs_wfs/wfs_format.h` §4, which is the authority; the
+//! Layout from `src/drivers/fs/wfs/wfs_format.h` §4, which is the authority; the
 //! offsets below are the ones that file pins with `_Static_assert`, so a
 //! superblock change that moves them breaks its own build before it reaches
 //! here.

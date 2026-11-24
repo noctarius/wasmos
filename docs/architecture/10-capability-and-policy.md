@@ -79,7 +79,7 @@ and `capability.h` asserts that the enum matches. Any unrecognized name returns
 gates registering a service under a virtual class (class-based discovery,
 [Process and IPC](09-process-and-ipc.md)); the plain name registration path is
 ungated. `CAP_CONSOLE_OWNER` gates `klog_register_ring`: the console ring
-receives every tty's output and the kernel log, and its registrant owns COM1
+receives every tty's output and the kernel log, and its registrant owns the console UART (COM1 on x86_64, the PL011 on aarch64)
 ([Virtual Terminal](19-virtual-terminal.md)); only the vt declares it.
 
 `CAP_SPAWN_GRANT` and `CAP_SVC_CONTROL` gate requests rather than hardware;

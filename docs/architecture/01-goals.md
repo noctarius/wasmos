@@ -6,7 +6,7 @@
 
 ### Purpose
 
-WASMOS is a minimal x86_64 UEFI OS built as an experimentation platform, not a
+WASMOS is a minimal UEFI OS for x86_64 and aarch64 built as an experimentation platform, not a
 production system. Its purpose is to explore what a WASM-first microkernel OS
 looks like in practice: a small, auditable kernel core with user-space services
 and drivers that are isolated WASM programs communicating over explicit IPC
@@ -32,8 +32,9 @@ The kernel does exactly five things and no more:
 3. **IPC transport** — fixed-layout message passing with bounded queues, endpoint
    ownership, and borrow-buffer bulk transfer. The kernel routes messages; it
    does not interpret them.
-4. **Interrupts and exceptions** — PIC or LAPIC/IOAPIC timer and interrupt
-   dispatch. User-mode faults terminate only the faulting process. Kernel-mode
+4. **Interrupts and exceptions** — timer and interrupt dispatch through the
+   architecture's controller (PIC or LAPIC/IOAPIC on x86_64, GICv3 and the
+   generic timer on aarch64). User-mode faults terminate only the faulting process. Kernel-mode
    faults remain fatal.
 5. **Capability enforcement** — per-context grants for I/O ports, IRQ routing,
    MMIO, DMA, and system control. The kernel checks grants at every privileged

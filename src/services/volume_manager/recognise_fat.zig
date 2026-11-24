@@ -6,7 +6,7 @@
 //! field it trusts is bounded here rather than merely read.
 //!
 //! The bar is deliberately the same one `fat_parse_boot`
-//! (`src/drivers/fs_fat/fat_geom.c`) sets before it will mount, plus the checks
+//! (`src/drivers/fs/fat/fat_geom.c`) sets before it will mount, plus the checks
 //! that separate a BPB from the two things that share its first sector's
 //! signature: an MBR and a GPT protective MBR. Those carry 0x55AA too, so the
 //! signature alone identifies nothing — reading `bytes_per_sector` out of an

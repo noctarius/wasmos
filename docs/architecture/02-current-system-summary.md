@@ -3,8 +3,11 @@
 > **Documentation status: Implemented reference.** Source locations identify
 > the runtime baseline. Deferred work appears only in the final section.
 
-WASMOS is a minimal x86_64 UEFI-booting microkernel OS hosting wasm3 by default
-and the optional WARP runtime. The system boots into a working user-space stack with an interactive
+WASMOS is a minimal UEFI-booting microkernel OS for x86_64 and aarch64 (QEMU
+`virt`), hosting the wasm3 and WARP runtimes (WARP on x86_64 only). The
+aarch64 port is described in [38-aarch64-platform.md](38-aarch64-platform.md);
+the kernel subsections below describe x86_64 and name aarch64's counterpart
+where it differs. The system boots into a working user-space stack with an interactive
 multi-tty shell, software compositor, PCI-driven driver loading, a FAT
 filesystem, and a ring3 isolation baseline.
 
@@ -12,14 +15,15 @@ filesystem, and a ring3 isolation baseline.
 
 ### Boot Flow
 
-- `BOOTX64.EFI` loads `kernel.elf` and `initfs.img` from the ESP, collects the
+- `BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64) loads `kernel.elf` and `initfs.img` from the ESP, collects the
   UEFI memory map, materializes bootstrap module entries, and exits boot
   services.
 - The kernel performs a two-stage bootstrap: low `_start` builds a minimal
   page-table handoff and jumps to higher-half `_start_high`, which clears `.bss`
   and calls `kmain`.
 - `kmain` initializes paging, physical memory, exceptions, the scheduler clock
-  (PIT or LAPIC timer depending on `WASMOS_IRQ_MODE`), the interrupt controller,
+  (PIT or LAPIC timer depending on `WASMOS_IRQ_MODE` on x86_64; the EL1 virtual
+  timer on aarch64), the interrupt controller,
   IPC, and the process manager, then starts the first user-space process.
 - `init` starts `fs-manager`, `fs-init`, and `device-manager`; device-manager
   starts bus services and applies bootstrap/runtime driver rules.
@@ -44,6 +48,9 @@ User mappings enforce W^X; out-of-slot and permission violations are denied.
 User-pointer copy layer (`mm_copy_from_user`/`mm_copy_to_user`) performs
 user-range permission checks and temporary CR3-switch-around-copy with a kernel
 bounce buffer, so kernel accesses always happen under kernel CR3.
+On aarch64 the same slot geometry sits under TTBR0 (per-process) and TTBR1 (the
+shared kernel half, never switched), with the direct map at
+`0xFFFFFF8000000000` (`src/kernel/arch/aarch64/paging.c`).
 
 **Physical Memory**
 Frame allocator seeded from the UEFI memory map. Several paths still use
@@ -65,6 +72,10 @@ replacing the PIT; the I/O APIC is discovered via MADT and programs 16 ISA RTEs
 vectors. Unrecoverable user-mode faults terminate only the faulting process
 (exit code -11); kernel-mode faults remain fatal with a framebuffer panic screen
 showing exception registers, process identity, and crash metadata.
+On aarch64 a GICv3 delivers device interrupts as SPIs through the same IRQ
+route table, the ITS delivers MSIs as LPIs, the EL1 virtual timer drives the
+tick, and `vectors.S` takes exceptions; the fault report names `esr`, `far`
+and `elr`.
 
 **IPC Transport**
 Fixed-layout 8-field messages (`type`, `source`, `destination`, `request_id`,
@@ -80,10 +91,11 @@ SMP uses per-CPU state and ready queues with work stealing. A ring3-safe timer
 trampoline rewrites CPL3 frames (redirecting return RIP to the scheduler
 trampoline and rewriting CS to kernel selector) so preemption re-enters ring0
 cleanly before context switch. Separate kernel stacks per process with TSS `rsp0`
-updated on each dispatch.
+updated on each dispatch (on aarch64 the per-CPU entry stack set by
+`cpu_set_kernel_stack`; contexts resume through `ERET`). SMP is x86_64-only.
 
 **Syscall Boundary**
-`int 0x80` DPL3 gate with a minimal dispatcher: `nop`, `getpid`, `exit`,
+`int 0x80` DPL3 gate (`SVC` from EL0 on aarch64, number in `x8`) with a minimal dispatcher: `nop`, `getpid`, `exit`,
 `yield`, `wait`, `ipc_notify`, `ipc_call`, and thread syscalls. Argument width
 checks reject lossy truncation on all current 32-bit field arguments.
 
@@ -200,8 +212,9 @@ supervised driver restart, capability manifests) is tracked in
 
 - **Framebuffer driver** (native C): maps framebuffer pages from UEFI GOP into
   the driver process context. Exposes text-control IPC, capability/mode-query
-  IPC, and constrained runtime mode switching (PCI/Bochs-VBE variant; UEFI
-  variant reports mode-switch as unsupported). Drains the kernel console ring;
+  IPC, and constrained runtime mode switching (Bochs-VBE and ramfb variants;
+  the UEFI variant reports mode-switch as unsupported). On a virtio GPU the
+  UEFI variant serves the loader's scanout and `virtio_gpu` presents it. Drains the kernel console ring;
   services control IPC ahead of ring drain to avoid switch starvation.
 - **VT service** (WASM): four tty slots with active-tty selection via
   `VT_IPC_SWITCH_TTY`. Owns keyboard input routing end-to-end; supports raw and
@@ -224,12 +237,15 @@ supervised driver restart, capability manifests) is tracked in
   serves open/metrics/glyph-raster IPC with text-run measurement and
   client-buffer rasterization. Used by compositor for title-run caching and by
   `libui` for component text.
-- **Keyboard driver** (WASM): PS/2 scan-code decoding; subscriber model
+- **Keyboard driver** (WASM): PS/2 scan-code decoding (x86_64; on aarch64
+  `virtio_input` speaks the same protocol); subscriber model
   (`KBD_IPC_SUBSCRIBE_REQ`/`KBD_IPC_KEY_NOTIFY`). Extended ANSI escape
   sequences for arrows and nav/edit keys.
-- **Mouse driver** (WASM): PS/2 packet decoding; subscriber model
+- **Mouse driver** (WASM): PS/2 packet decoding (x86_64; `virtio_input` on
+  aarch64); subscriber model
   (`MOUSE_IPC_SUBSCRIBE_REQ`/`MOUSE_IPC_MOVE_NOTIFY`).
-- **RTC driver** (WASM): read/set time IPC; spawned by ACPI match rule.
+- **RTC driver** (WASM): read/set time IPC; spawned by ACPI match rule. CMOS on
+  x86_64; PL031 or UEFI runtime services on aarch64, all over one shared core.
 
 ---
 
@@ -250,10 +266,10 @@ supervised driver restart, capability manifests) is tracked in
   console (device IDs 0x1003/0x1043, vendor 0x1AF4) over the virtio 1.x
   transport and writes the kmsg ring to port 0, replayed from boot.
 - **`virtio-net`** driver (native C): PCI-matched virtio network driver
-  (`src/drivers/virtio_net/`) with queue setup, IRQ-driven RX/TX, and an ARP
+  (`src/drivers/net/virtio_net/`) with queue setup, IRQ-driven RX/TX, and an ARP
   smoke path.
 - **`virtio-rng`** driver (native C): PCI-matched virtio entropy driver
-  (`src/drivers/virtio_rng/`); registers the `hrng` class.
+  (`src/drivers/char/virtio_rng/`); registers the `hrng` class.
 
 ---
 
@@ -261,7 +277,7 @@ supervised driver restart, capability manifests) is tracked in
 
 Ring3 execution is implemented and validated end-to-end:
 - CPL3 entry via `iretq` with user CS/SS selectors; kernel resume via `iretq`
-  for ring0 contexts.
+  for ring0 contexts (on aarch64, EL0 entry and kernel resume via `ERET`).
 - Syscall `ipc_call` reply correlation survives out-of-order message arrival
   (bounded per-process pending queue) and authenticates reply source endpoint
   and owner context before accept.

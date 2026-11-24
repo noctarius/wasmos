@@ -1,5 +1,5 @@
 //! Unit tests for the GPT/MBR partition-table parser
-//! (src/drivers/partition_manager/partition_table.zig).
+//! (src/drivers/block/partition/partition_table.zig).
 //!
 //! The parser does no I/O, so every case here builds a sector image in memory
 //! and feeds it in. That is the whole reason the parser takes byte slices rather

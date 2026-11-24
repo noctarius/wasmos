@@ -1,4 +1,4 @@
-/* Host unit test for the WFS read path (src/drivers/fs_wfs/wfs_read.c), driven
+/* Host unit test for the WFS read path (src/drivers/fs/wfs/wfs_read.c), driven
  * against volumes mkfs_wfs populated.
  *
  * This is the whole read path end to end: a name resolves to an object, the

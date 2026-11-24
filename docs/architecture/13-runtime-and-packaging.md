@@ -17,7 +17,7 @@ build directory's `.config` (seeded from a defconfig, e.g.
 | Backend             | Kconfig symbol                    | Character                                           |
 |---------------------|-----------------------------------|-----------------------------------------------------|
 | **wasm3** (default) | `WASMOS_WASM_RUNTIME_WASM3=y`     | Tree-walking interpreter; pure C; minimal footprint |
-| **WARP**            | `WASMOS_WASM_RUNTIME_WARP=y`      | Single-pass x86_64 JIT compiler; near-native speed  |
+| **WARP**            | `WASMOS_WASM_RUNTIME_WARP=y`      | Single-pass x86_64 JIT compiler; near-native speed (x86_64 only: aarch64 builds use wasm3) |
 
 Both backends implement the same `wasm_driver_t` API and pass `run-qemu-test`.
 

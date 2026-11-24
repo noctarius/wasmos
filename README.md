@@ -15,13 +15,15 @@
 
 <p align="center"><strong>Small boot path. Small kernel. Large mascot and agent energy.</strong></p>
 
-WASMOS is a minimal x86_64 UEFI OS playground with a small microkernel core
-and a WASM-first user-space stack, plus optional native drivers for hardware
-paths that benefit from native execution.
+WASMOS is a minimal UEFI OS playground for x86_64 and aarch64 with a small
+microkernel core and a WASM-first user-space stack, plus optional native
+drivers for hardware paths that benefit from native execution. Both
+architectures run under QEMU; on Apple Silicon the aarch64 build runs natively
+through Hypervisor.framework.
 
 Two WASM runtime backends are available (select at build time):
 - **WARP** (default) — single-pass JIT compiler (BMW AG, Apache-2.0),
-  near-native execution speed on x86_64. Its guests execute in ring 3 and are
+  near-native execution speed; x86_64 only for now. Its guests execute in ring 3 and are
   preempted like any other thread.
 - **wasm3** — tree-walking interpreter, pure C, minimal footprint. Runs in the
   kernel, so a guest loop that makes no host call is not preempted; useful as a
@@ -35,22 +37,17 @@ For contributors and coding agents: read `AGENTS.md` before making changes.
 It defines repository workflow and documentation/update conventions.
 
 ## Current Highlights
-- 64-bit (`x86_64`) UEFI microkernel OS scaffold with deterministic boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`).
+- 64-bit UEFI microkernel OS for `x86_64` and `aarch64` (QEMU `virt`: GICv3/ITS, PCIe, virtio devices) with deterministic boot handoff (`BOOTX64.EFI` / `BOOTAA64.EFI` -> `kernel.elf` + `initfs.img`).
 - WASM-first userspace (`wasm3`) that runs apps, services, and drivers from multiple languages (C, Zig, Go, Rust, AssemblyScript), plus optional native drivers where hardware access needs it.
 - Custom WASMOS-APP package format (`.wap`) for both WebAssembly and native app/service/driver payloads, including an 8-byte subsystem tag for runtime dispatch plus broker-registered executable handler plumbing for future non-`.wap` executable formats.
 - Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities with binary policy enforcement (kill on violation), and full ring-3 isolation enabled by default.
 - Kernel panic diagnostics with per-CPU backtraces that now resolve return addresses to in-kernel symbol names.
 - Preemptive multitasking in the kernel scheduler with runtime validation coverage.
-- Symmetric Multi-Processing (SMP) with AP trampoline bring-up, per-CPU state (`cpu_local_t`), Kconfig-selectable interrupt controller (PIC/LAPIC/IOAPIC), and per-CPU ready queues with work stealing; gated by `WASMOS_SMP` Kconfig (requires IOAPIC mode, default off).
+- Symmetric Multi-Processing (SMP, x86_64) with AP trampoline bring-up, per-CPU state (`cpu_local_t`), Kconfig-selectable interrupt controller (PIC/LAPIC/IOAPIC), and per-CPU ready queues with work stealing; gated by `WASMOS_SMP` Kconfig (requires IOAPIC mode, default off).
 - Service-driven system bring-up (`init` -> `supervisor` -> `fs-manager`, `fs-tmpfs`/`fs-init`, `device-manager`; `init` -> `sysinit` once `/boot` is mounted) with discovery/registration and policy-driven driver spawning; start order is not a correctness property, since services await their peers by name.
 - A user-space `supervisor` that restarts crashed services and drivers by per-unit policy (backoff, restart limits, liveness probes, criticality), reports a boot-complete milestone, and is driven from the shell with `svc`.
 - Linux `udev`-like userspace device inventory and policy rules (`device-manager` + `pci-bus`/`acpi-bus`, with bootstrap/runtime rule roots) for deterministic driver bring-up.
-- Early generic `virtio-serial` driver service (`virtio.serial`) for host/guest automation plumbing and future transport consumers.
-- `virtio-rng` hardware entropy driver with non-blocking `libsys` byte-array,
-  integer, and unit-interval float helpers for WASM and native clients.
-- `virtio-blk` block-device driver, written in Zig, serving the block IPC
-  interface over a virtqueue whose data descriptor addresses the caller's own
-  buffer directly.
+- virtio drivers for block storage, networking, entropy, the kernel-log console, the GPU and keyboard/mouse input, with MSI-X interrupts (through the GICv3 ITS on aarch64).
 - Networking stack: `virtio-net` transport driver plus a native lwIP `net-stack`
   service providing IPv4 UDP/TCP stream sockets, DHCP/static addressing, DNS
   resolution, and a verifying TLS 1.2 client (mbedTLS, full chain + hostname
@@ -59,7 +56,7 @@ It defines repository workflow and documentation/update conventions.
 - Buffer-borrow-based DMA support integrated across capability policy, runtime transport, and driver paths.
 - End-to-end threading for ring-3 **native** workloads (create/join/detach/yield/exit syscalls), with a user-space reentrant mutex shared by the native and WASM runtimes. WASM guests get concurrency through coroutines and futures instead of threads.
 - User-space coroutine/future/promise runtime across both runtimes (native stackful, WASM stackless) with caller-owned storage, cooperative scheduling, `then`/`race`/`all` combinators, and joins; it underpins the asynchronous networking stack.
-- Full windowing and graphics stack: framebuffer driver, software compositor, shared-buffer rendering, input routing, window chrome (title bar, close/maximize/restore, drag-to-move, live resize), software cursor, popup menus, and a system menu bar with date/time display and per-app window lists; backed by a native Zig TTF `font-service` for text rendering.
+- Full windowing and graphics stack: framebuffer and virtio-gpu display drivers, software compositor, shared-buffer rendering, input routing, window chrome (title bar, close/maximize/restore, drag-to-move, live resize), software cursor, popup menus, and a system menu bar with date/time display and per-app window lists; backed by a native Zig TTF `font-service` for text rendering.
 - `libui` component toolkit — vtable-dispatched widget tree (panels, labels, buttons, checkboxes, text inputs, scroll views, list views, dropdowns, and menus) shared across WASM and native ring-3 apps.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
 - Broker-oriented runtime direction: `.wap` remains the built-in executable container while future subsystems can claim extra executable formats through bounded matcher trees (for example extension, magic-prefix, or shebang-style probes).
@@ -74,7 +71,7 @@ It defines repository workflow and documentation/update conventions.
 ### Requirements
 - LLVM `clang` + `lld` (`ld.lld`, `lld-link`) and `llvm-objcopy`
 - `ninja` 1.10+ and Python 3 with `kconfiglib` (`python3 -m pip install kconfiglib`)
-- `qemu-system-x86_64` and OVMF/EDK2 firmware for the run and test targets
+- `qemu-system-x86_64` / `qemu-system-aarch64` and their EDK2 firmware (OVMF, AAVMF) for the run and test targets
 - optional, per guest language: `zig`, `asc` (`npm install`), `rustc` with the
   `wasm32-unknown-unknown` target, `tinygo` + `wasm-opt`
 
@@ -97,12 +94,13 @@ runtime takes the Kconfig default (WARP).
 
 #### Choosing a WASM runtime
 
-| defconfig                       | runtime | CPUs   |
-|---------------------------------|---------|--------|
-| `x86_64_wasm3_single_defconfig` | wasm3   | single |
-| `x86_64_wasm3_smp_defconfig`    | wasm3   | SMP    |
-| `x86_64_warp_single_defconfig`  | WARP    | single |
-| `x86_64_warp_smp_defconfig`     | WARP    | SMP    |
+| defconfig                        | arch    | runtime | CPUs   |
+|----------------------------------|---------|---------|--------|
+| `x86_64_wasm3_single_defconfig`  | x86_64  | wasm3   | single |
+| `x86_64_wasm3_smp_defconfig`     | x86_64  | wasm3   | SMP    |
+| `x86_64_warp_single_defconfig`   | x86_64  | WARP    | single |
+| `x86_64_warp_smp_defconfig`      | x86_64  | WARP    | SMP    |
+| `aarch64_wasm3_single_defconfig` | aarch64 | wasm3   | single |
 
 Give each configuration its own directory, so switching never means
 reconfiguring:
@@ -207,15 +205,14 @@ Target summary:
 - `run-qemu-ring3-test`: strict ring-3 smoke path (includes PM owner-deny test-hook marker checks)
 - `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers including detach-then-join deny + wait/kill wake marker)
 
-Two serial ports: COM1 (the terminal QEMU runs in) is the console of the
-serial-bound tty, owned by the `vt`; COM2 carries the kernel log alone, written
-by the kernel directly, and the run targets capture it in `<build-dir>/syslog.log`.
-The COM2 log is switched on by `log.serial=com2` in `kernel.cmdline`, an
-optional file on the ESP root that the bootloader hands to the kernel.
+The serial console (COM1 on x86_64, the PL011 on aarch64) is the terminal QEMU
+runs in, owned by the `vt`. The kernel log goes to a virtio console port, which
+the run targets capture in `<build-dir>/syslog.log`; on x86_64 `log.serial=com2`
+in `kernel.cmdline` (an optional file on the ESP root) moves it to COM2.
 
 ## Startup Model
 Boot sequence (high level):
-1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
+1. `BOOTX64.EFI` / `BOOTAA64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
 3. `init` starts the `supervisor`, which starts `fs-manager`, `fs-tmpfs` (the in-memory filesystem for `/`), `fs-init`, and `device-manager` as critical units
 4. `device-manager` starts `pci-bus` and `acpi-bus`, consumes inventory, and applies policy rules to spawn drivers/services, handing the restartable ones to the supervisor
@@ -230,7 +227,7 @@ Key policy/runtime notes:
 ## Repository Layout
 - `src/boot/`: UEFI bootloader
 - `src/kernel/`: kernel core
-- `src/drivers/`: drivers (WASM and native)
+- `src/drivers/`: drivers (WASM and native), grouped by device class (`block`, `fs`, `gpu`, `input`, `net`, `rtc`, `tty`, `char`)
 - `src/services/`: services
 - `src/utils/`: OS-provided utilities/tools
 - `src/libc/`: shared user-space libc + shims
@@ -247,6 +244,7 @@ Key policy/runtime notes:
 - `docs/BUILD_SYSTEM.md`: the Kconfig + Ninja build — build directories, configuration, the `BUILD.py` manifest API, artifacts, run/test targets, and how to add a component
 - `docs/toolchain.md`: the `wasmos-clang` SDK — building a WASMOS application from plain C/C++ with no target triple, sysroot, linker flag or packaging step to state
 - `docs/architecture/`: feature-level architecture docs
+- `docs/architecture/38-aarch64-platform.md`: the aarch64 port on QEMU `virt` — boot, memory layout, GICv3/ITS, ECAM, ACPI devices, and what is still x86_64-only
 - `docs/architecture/11-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
 - `docs/architecture/08-threading-and-lifecycle.md`: threading design and rollout
 - `docs/architecture/12-dma-transfers.md`: DMA transfer capability model, phased rollout plan, and validation gates
@@ -264,7 +262,7 @@ Two backends are available, selected per build directory:
 
 | Backend        | Pin with                             | Character                                          |
 |----------------|--------------------------------------|----------------------------------------------------|
-| WARP (default) | `configs/x86_64_warp_smp_defconfig`  | Single-pass x86_64 JIT, ring-3 guests, preemptible |
+| WARP (default) | `configs/x86_64_warp_smp_defconfig`  | Single-pass JIT (x86_64 only), ring-3 guests, preemptible |
 | wasm3          | `configs/x86_64_wasm3_smp_defconfig` | Tree-walking interpreter, in-kernel, not preempted |
 
 To build and run with WARP:

@@ -13,7 +13,7 @@ if SCRIPTS not in sys.path:
 
 from qemu_test_framework import QemuSession, default_config, guest_arch
 
-# The text renderer's cell (src/drivers/framebuffer/fbtext_internal.h).
+# The text renderer's cell (src/drivers/gpu/framebuffer/fbtext_internal.h).
 CELL_W = 8
 CELL_H = 16
 # A channel above this is ink; a text slot's background is black.

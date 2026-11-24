@@ -1,5 +1,5 @@
 //! Unit tests for reading fs-manager's mount listing
-//! (src/drivers/partition_manager/mounts.zig).
+//! (src/drivers/block/partition/mounts.zig).
 //!
 //! This is the gate that stands between a rescan and a live filesystem. It
 //! replaced the volume manager's CLAIM, which a CI run proved unsound: a

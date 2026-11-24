@@ -14,7 +14,7 @@
 //! service (`async_initialize`, `wasmos_async_service`), and the libsys runner
 //! owns its endpoint, event loop and pump. Serving work belongs in a coroutine
 //! parked on a future, never in a loop written here -- see
-//! `src/drivers/virtio_blk/virtio_blk.zig` for the shape, and
+//! `src/drivers/block/virtio_blk/virtio_blk.zig` for the shape, and
 //! docs/architecture/32-coroutines-futures-promises.md for why.
 //!
 //! Everything below is a thin, typed face over the generated ABI in

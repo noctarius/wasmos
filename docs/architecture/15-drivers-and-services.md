@@ -313,7 +313,7 @@ driven. Only the eventq is configured; the statusq (LEDs) is left off.
   not register
 - **Entry bindings:** `proc.endpoint`
 
-The drivers share `src/drivers/rtc/rtc_core.ts` (registration and the request
+The drivers share `src/drivers/rtc/core/rtc_core.ts` (registration and the request
 loop) and `rtc_time.ts` (the six-field UTC time, its wire packing, validation
 -- the day is checked against its month -- and epoch-seconds conversion); a
 backend supplies `init`, `read` and `set`. The PL031 holds seconds since
@@ -1134,7 +1134,7 @@ powering it off itself if the sequence stops making progress -- halt always
 halts.
 
 **The console is written out before the power goes.** Once a vt owns the
-console, kernel output reaches COM1 only when the vt drains its console ring,
+console, kernel output reaches the console UART only when the vt drains its console ring,
 and the sequence's last lines (a participant's result, `[pm] shutdown: complete`)
 are written just before the power-off. After the last participant the PM keeps
 stepping until `console_ring_drained()` reports the ring empty, bounded by

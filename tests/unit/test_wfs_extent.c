@@ -1,4 +1,4 @@
-/* Host unit test for the WFS extent-map walk (src/drivers/fs_wfs/wfs_extent.c).
+/* Host unit test for the WFS extent-map walk (src/drivers/fs/wfs/wfs_extent.c).
  *
  * The walk is what every read above it goes through, so it is tested against
  * real node blocks rather than a model: the cases write extent-tree nodes into a

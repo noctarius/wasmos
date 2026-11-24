@@ -216,7 +216,7 @@ linked feature documents for rationale and rollout plans.
   into client buffer") because only one of them is actually copy-free. Writes
   have no zero-copy path: `BLOCK_IPC_WRITE_REQ` names the driver's own buffer, so
   there is no client borrow to map (`TODO(zero-copy writes)` in
-  `src/drivers/ata/ata.c`).
+  `src/drivers/block/ata/ata.c`).
 - Validated on `wasmos_defconfig` (WARP+SMP, 9/11 runs), `wasm3_smp_defconfig`,
   and `wasm3_single_defconfig` (3/3). The two failures were a
   `scheduler: no runnable thread` panic during early kernel self-tests, before
@@ -782,61 +782,21 @@ linked feature documents for rationale and rollout plans.
   entry-arity rule in `architecture/13` *Language ABI*.
 - Target architecture is a Kconfig choice (`WASMOS_ARCH_X86_64` /
   `WASMOS_ARCH_AARCH64`); `ARCHES` in `scripts/buildgen/toolchains.py` holds
-  every per-architecture build and QEMU value. The aarch64 tree
-  (`aarch64_wasm3_single_defconfig`) builds `BOOTAA64.EFI`, every guest and
-  native module (aarch64 ELF), initfs and the ESP. Under
-  `qemu-system-aarch64 -M virt,gic-version=3 -accel hvf` (TCG on CI) it boots
-  through the scheduler self-tests, demand paging, threading, IPC and timer
-  preemption, runs wasm3 guests (init, fs-manager, fs-tmpfs, fs-init,
-  device-manager), enumerates PCI through ECAM (`arch/aarch64/pci_cfg_aarch64.c`,
-  base from the ACPI MCFG, each bus mapped on first use), parses the DSDT, runs
-  the native net-stack at EL0, spawns virtio-blk from the initfs for the boot
-  disk, mounts `/boot` from it, runs sysinit and reaches the WAMOS CLI prompt
-  (`supervisor] boot complete`), with virtio-net (DHCP lease), virtio-rng, the
-  font service and the calculator up, and takes console input through the
-  PL011: acpi-bus publishes `ARMH0011` (window 0x09000000, GSIV 33, flagged the
-  console by the SPCR), `pl011.wap` serves it through its MMIO region
-  grant with its interrupt routed as a GIC SPI, and `run-qemu-test` passes
-  (`halt` powers off through PSCI). The display is QEMU's ramfb (`-device
-  ramfb` from `ARCHES`): the firmware reports it as the GOP framebuffer,
-  acpi-bus publishes the fw_cfg device `QEMU0002`, and `framebuffer_ramfb`
-  serves the text plane on it and sets modes by rewriting `etc/ramfb` through
-  fw_cfg DMA; the compositor, menu bar and apps draw on it. MSIs go through
-  the GICv3 ITS (`arch/aarch64/its_aarch64.c`, `msi_aarch64.c`): slot `i` is
-  EventID `i` and LPI 8192+`i`, and the DeviceID is the requester id of the PCI
-  function the calling driver's spawn profile names
-  (`pci_function_of_context`), so `msi_alloc` keeps its ABI; a caller that
-  drives no function gets `msi.NO_FUNCTION`. initfs and the device-manager rules are per architecture
-  (`scripts/initfs.<arch>.toml`, `scripts/initfs/devmgr/rules/default.<arch>.rules`,
-  `scripts/system/devmgr/rules/default.<arch>.rules`): on aarch64 virtio-blk
-  carries `/boot`, so it is a bootstrap rule there, and the PS/2, CMOS, 16550 and
-  bochs rules are x86_64-only. pci-bus enables a function's I/O or memory decode
-  for the BARs it implements at an assigned address, which edk2 on aarch64 leaves
-  off. The kernel side: the
-  bootstrap drops EL2 to EL1 and maps physical [0, 4 GiB) with 48-bit VAs;
-  `arch/aarch64/paging.c` implements `paging.h` with the x86_64 slot geometry
-  (TTBR0 slot 0 identity, slot 1 user; a shared TTBR1 direct map with RAM in
-  4 KiB pages so guard-page unmaps never split a live block; break-before-make;
-  broadcast TLBI; no ASIDs yet); vectors save the FP/SIMD state; aborts decode
-  into the `MM_FAULT_*` memory-service path; GICv3 and the EL1 virtual timer
-  drive the tick; `context_switch.S` resumes every context by ERET.
-  EL0 runs: an SVC from EL0 enters `syscall_dispatch` (number in x8, result in
-  x0), EL0 exceptions land on the per-CPU kernel entry stack
-  (`cpu_set_kernel_stack`, the TSS.rsp0 counterpart), and native-code loaders
-  sync the instruction cache; the C ring-3 probe passes its syscall checks
-  (`[test] ring3 native abi ok`) on a `WASMOS_RING3_SMOKE` tree, whose x86-only
-  inline smoke and fault probes are skipped. Device interrupts are GIC SPIs
-  (the `irq_line` of `irq.h` is the INTID), routed through the arch-neutral
-  sharing layer by a slot table in `arch/aarch64/irq_aarch64.c`; no arm64
-  driver routes one yet, because every virtio device takes MSI-X.
-  It boots to the CLI and runs every QEMU battery, in CI too, on an
-  aarch64-linux runner. The native
-  ring-3 syscall ABI is split into `wasmos/syscall_native.h` plus per-arch trap
-  stubs (aarch64: `svc #0`, number in x8). No aarch64 framebuffer fallback
-  for a firmware without GOP (the x86 0xCF8 scan is x86_64-only).
+  every per-architecture build and QEMU value. aarch64
+  (`aarch64_wasm3_single_defconfig`, QEMU `virt` with GICv3, HVF locally and TCG
+  in CI) boots to the CLI on one core under wasm3 and runs every QEMU battery,
+  in CI on an aarch64-linux runner; `run-qemu-test` and
+  `run-qemu-ring3-threading-test` pass. It drives: EL0/EL1 with `svc` syscalls,
+  TTBR0/TTBR1 paging with the x86_64 slot geometry, GICv3 SPIs, MSI/MSI-X
+  through the ITS, PCIe through ECAM, ACPI devices plus a board table, the
+  PL011 console, virtio-blk as the boot disk, virtio-net, -rng, -console, the
+  clock (below), the display and input (below), and PSCI power-off. The design
+  is [architecture/38-aarch64-platform.md](architecture/38-aarch64-platform.md);
+  SMP, WARP, ASIDs and a framebuffer for firmware without a GOP are open
+  (`TASKS.md`, "arm64 Port").
 - The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
   (aarch64)"); both serve the `rtc` protocol through the shared core
-  (`src/drivers/rtc/rtc_core.ts`), as the x86_64 CMOS driver now does. The
+  (`src/drivers/rtc/core/rtc_core.ts`), as the x86_64 CMOS driver now does. The
   default `pl031` drives QEMU virt's PL031, which acpi-bus publishes from a
   board table (the DSDT omits it; keyed on QEMU's OEM ID plus a GTDT).
   `rtc_efi` uses UEFI GetTime/SetTime: the loader calls SetVirtualAddressMap
@@ -861,7 +821,7 @@ linked feature documents for rationale and rollout plans.
   `etc/ramfb`), and device-manager retires a device whose driver exits 0
   before READY instead of retrying it. The PCI and ACPI rule tables hold 32
   rules each and report rules that do not fit.
-- Keyboard and mouse on aarch64 are virtio-input (`src/drivers/virtio_input/`):
+- Keyboard and mouse on aarch64 are virtio-input (`src/drivers/input/virtio_input/`):
   QEMU virt carries `virtio-keyboard-pci` and `virtio-mouse-pci` at slots 0x1c
   and 0x1d (`qemu_input` in `ARCHES`), and device-manager spawns one instance
   per function (modern id 0x1052), supervised. An instance registers `kbd` when
@@ -880,7 +840,7 @@ linked feature documents for rationale and rollout plans.
   reports a runtime mode change with `framebuffer_set_geometry`, so the
   kernel's framebuffer info -- what the compositor remaps from -- follows it.
   The framebuffer drivers share one FBTEXT server
-  (`src/drivers/framebuffer/fbtext_server.c`). An ACPI rule's driver gets the
+  (`src/drivers/gpu/framebuffer/fbtext_server.c`). An ACPI rule's driver gets the
   DMA its manifest declares (`dm_acpi_caps`).
 - Interrupt grants are lists of interrupt identifiers -- an ISA line on
   x86_64, a GIC SPI INTID on aarch64 -- carried in the spawn descriptor
@@ -1248,7 +1208,7 @@ linked feature documents for rationale and rollout plans.
 - A filesystem driver receives `id=` in its startup arguments and fingerprints it
   to find its disk, so the id has exactly one producer. `blkinfo` names disks by
   canonical id, including for `--write`.
-- The partition manager (`src/drivers/partition_manager/`, Zig) is a `block`
+- The partition manager (`src/drivers/block/partition/`, Zig) is a `block`
   class client of every disk and a `block` class provider of every partition on
   them: a consumer cannot tell a partition from a whole disk. It probes GPT then
   MBR then nothing, publishes a descriptor per partition with the window in
@@ -1487,7 +1447,7 @@ linked feature documents for rationale and rollout plans.
   `mount` was extracted from the CLI so the table always comes from the service
   that owns it. `mount -t <type> <path> [source]` places one; bare `mount`
   reports the table.
-- `fs-tmpfs` (`src/drivers/fs_tmpfs/`, Zig) is a read-write filesystem held in
+- `fs-tmpfs` (`src/drivers/fs/tmpfs/`, Zig) is a read-write filesystem held in
   its own linear memory, reporting `FSMGR_BACKEND_PSEUDO` + `FS_TYPE_TMPFS`. It
   is a general in-memory filesystem, not a root-specific one: the mount comes
   from the `mount=` startup argument and defaults to `/`, the class instance is a
@@ -1689,7 +1649,7 @@ linked feature documents for rationale and rollout plans.
   IMPLEMENTED: superblock and byte-offset mount, block-group descriptors, the object
   table, directories, extents and the extent tree, seeded checksums,
   feature-flag validation, and a read-only mount. Inline data works too, ahead
-  of the order that defers it to phase 4. `src/drivers/fs_wfs` runs every
+  of the order that defers it to phase 4. `src/drivers/fs/wfs` runs every
   operation as a task on the SYSTEM coroutine runtime; `mkfs_wfs` is the host
   formatter and `--populate` places a host tree into an image. A volume is
   mounted in the guest at `/wfs` from ATA unit 2 by a device-manager rule, and
@@ -1866,7 +1826,7 @@ linked feature documents for rationale and rollout plans.
   and nothing between them. A matched
   device whose driver never becomes ready within its retries is given up on and
   logged, so the one-at-a-time spawn queue moves on to the next rule.
-- The UART drivers are one chip-independent core (`src/drivers/serial/
+- The UART drivers are one chip-independent core (`src/drivers/tty/serial/
   serial_core.ts`: "sin" registration, the vt subscription, the RX ring, IRQ
   and polling) linked with one chip backend per image: `uart16550.wap`
   (`io.port`) and `pl011.wap` (`mmio.map`), so neither holds the other's

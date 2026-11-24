@@ -90,8 +90,17 @@ table is an opaque physical address. `src/kernel/arch/x86_64/paging.c`
 implements it with x86_64 4-level page tables and CR3 switching. The kernel
 virtual layout constants (`KERNEL_HIGHER_HALF_BASE`, the MMIO and WARP linmem
 windows) live in `include/arch/x86_64/vm_layout.h`, selected through
-`include/arch/vm_layout.h`. `paging_sync_instruction_cache()` is the hook code
-loaders call after writing instructions; it is a no-op on x86_64.
+`include/arch/vm_layout.h`. `src/kernel/arch/aarch64/paging.c` implements the
+same interface with the same slot geometry: a process's root is a TTBR0 table,
+the kernel half lives in one TTBR1 table shared by every address space and
+never switched, memory types come from `MAIR_EL1` (Device-nGnRE, Normal
+write-back) rather than PAT/PCD bits, updates follow break-before-make with
+broadcast TLB invalidation, and there are no ASIDs yet
+([38-aarch64-platform.md](38-aarch64-platform.md)). `paging_sync_instruction_cache()`
+is the hook code loaders call after writing instructions; it is a no-op on
+x86_64 and cleans the data cache and invalidates the instruction cache on
+aarch64. The subsections below describe x86_64's tables where they name
+PML4/CR3/PAT.
 
 #### Address Space Layout
 

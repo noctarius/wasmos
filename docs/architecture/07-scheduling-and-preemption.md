@@ -2,11 +2,17 @@
 
 > **Documentation status: Implemented reference.**
 
-This document describes the WASMOS scheduler: the PIT clock, the priority-based
+This document describes the WASMOS scheduler: the tick, the priority-based
 ready queues, per-thread state, the context-switch assembly, the preemption path,
-and the guards that keep each phase safe.  The authoritative sources are
+and the guards that keep each phase safe.  The scheduler itself is
+arch-neutral; the tick source, the context switch and the frame rewrite are
+per architecture, and where this document names x86_64 mechanisms (PIT, IRETQ,
+CR3, TSS) the aarch64 counterpart is the EL1 virtual timer, `ERET` with
+ELR/SPSR, TTBR0 and the per-CPU entry stack
+([38-aarch64-platform.md](38-aarch64-platform.md)).  The authoritative sources are
 `src/kernel/process.c`, `src/kernel/sched_thread.c`,
-`src/kernel/arch/x86_64/context_switch.S`, `src/kernel/timer.c`, `src/kernel/arch/x86_64/timer_x86_64.c`,
+`src/kernel/arch/<arch>/context_switch.S`, `src/kernel/timer.c`,
+`src/kernel/arch/x86_64/timer_x86_64.c`, `src/kernel/arch/aarch64/timer_aarch64.c`,
 `src/kernel/spinlock.c`, `src/kernel/include/process.h`, and
 `src/kernel/include/sched.h`.
 
@@ -30,7 +36,12 @@ scheduler are removed — only per-thread state drives dispatch.
 
 ---
 
-### PIT Configuration
+### Tick Configuration
+
+On aarch64 `arch_timer_start(hz)` reads the generic timer's frequency from
+`CNTFRQ_EL0`, so no calibration is needed, and keeps the EL1 virtual timer
+periodic by advancing its compare value by `CNTFRQ / hz` on every tick
+(`timer_aarch64.c`). The rest of this section is x86_64's.
 
 `timer_init(hz)` programs PIT channel 0 in square-wave mode (command byte `0x36`).
 

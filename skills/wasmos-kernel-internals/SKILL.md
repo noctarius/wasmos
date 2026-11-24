@@ -105,4 +105,4 @@ the same manifest, so a new `.c` needs no other edit.
 ## FS subsystem topology (for reference)
 - `fs_manager` (WASM app, `src/services/fs_manager/`) is the VFS broker; backends
   (`fs-fat`, `fs-init`) attach to it. `fs-fat` consumes the ata `"block"` device.
-- ata driver (`src/drivers/ata/ata.c`) registers name `"block"`.
+- ata driver (`src/drivers/block/ata/ata.c`) registers name `"block"`.

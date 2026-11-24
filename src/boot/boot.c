@@ -427,19 +427,22 @@ static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE* system,
 /* Switches the GOP to the preferred mode before its geometry is captured:
  * exactly GOP_PREFERRED_WIDTH x GOP_PREFERRED_HEIGHT when offered, otherwise the
  * largest mode (by area) within it. Only direct 32-bit modes count (RGB or BGR
- * with a reserved byte); a BitMask or Blt-only mode cannot be drawn by the
- * kernel or the framebuffer drivers. The firmware's default differs by machine
- * (OVMF on x86_64 starts at 1280x800, edk2's ramfb on aarch64 at 800x600 although
- * it offers 1024x768), so choosing here gives both the same desktop where they
- * can. Leaves the mode alone when nothing qualifies, it is already current, or
- * SetMode fails; a failed SetMode leaves the previous mode in place (UEFI spec,
- * EFI_GRAPHICS_OUTPUT_PROTOCOL.SetMode). */
+ * with a reserved byte); a BitMask mode cannot be drawn by the kernel or the
+ * framebuffer drivers. On a blit-only GOP the blit-only modes count instead:
+ * there the loader allocates the scanout (gop_allocate_scanout). The firmware's default differs by
+ * machine (OVMF on x86_64 starts at 1280x800, edk2's ramfb on aarch64 at 800x600 although it offers
+ * 1024x768), so choosing here gives both the same desktop where they can. Leaves the mode alone
+ * when nothing qualifies, it is already current, or SetMode fails; a failed SetMode leaves the
+ * previous mode in place (UEFI spec, EFI_GRAPHICS_OUTPUT_PROTOCOL.SetMode). */
 static void gop_select_preferred_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop) {
     EFI_GOP_SET_MODE set_mode = (EFI_GOP_SET_MODE)gop->SetMode;
     EFI_GOP_QUERY_MODE query_mode = (EFI_GOP_QUERY_MODE)gop->QueryMode;
     if (!gop->Mode || !set_mode || !query_mode) {
         return;
     }
+    /* A blit-only GOP (edk2's virtio-gpu) offers only blit-only modes; its
+     * geometry still decides the scanout gop_allocate_scanout provides. */
+    int blt_only = gop->Mode->Info && gop->Mode->Info->PixelFormat == PixelBltOnly;
     UINT32 best = gop->Mode->MaxMode;
     uint64_t best_area = 0;
     for (UINT32 m = 0; m < gop->Mode->MaxMode; ++m) {
@@ -449,7 +452,8 @@ static void gop_select_preferred_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop) {
             continue;
         }
         if (info->PixelFormat != PixelRedGreenBlueReserved8BitPerColor &&
-            info->PixelFormat != PixelBlueGreenRedReserved8BitPerColor) {
+            info->PixelFormat != PixelBlueGreenRedReserved8BitPerColor &&
+            !(blt_only && info->PixelFormat == PixelBltOnly)) {
             continue;
         }
         uint32_t w = info->HorizontalResolution;
@@ -470,6 +474,40 @@ static void gop_select_preferred_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL* gop) {
         return;
     }
     (void)set_mode(gop, best);
+}
+
+/* A blit-only GOP has no linear framebuffer: edk2's virtio-gpu driver reports
+ * FrameBufferBase 0 and draws only through Blt(). The loader then allocates the
+ * scanout itself -- width x height BGRX pixels, zeroed, as EFI_LOADER_DATA,
+ * which the kernel never reclaims (physmem.c) -- and reports it as the
+ * framebuffer. Nothing scans it out yet: a display driver (virtio_gpu) attaches
+ * these pages to its device and flushes what is drawn
+ * (docs/architecture/20-graphics-framebuffer-and-compositor.md). The memory
+ * belongs to the kernel, not to that driver, so it outlives a driver restart
+ * and stays valid for the panic writer.
+ *
+ * TODO: the scanout is sized for the boot mode only, so a runtime mode larger
+ * than it does not fit; mode setting through the display driver needs a larger
+ * reservation or new backing.
+ *
+ * Returns 0 with base, size and stride set, or -1 when the pages cannot be
+ * allocated. */
+static int gop_allocate_scanout(EFI_SYSTEM_TABLE* system, framebuffer_snapshot_t* snapshot) {
+    uint64_t bytes = (uint64_t)snapshot->width * snapshot->height * 4u;
+    UINTN pages = (UINTN)((bytes + 0xFFFu) / 0x1000u);
+    UINT64 base = 0;
+    EFI_STATUS status =
+        system->BootServices->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, pages, &base);
+    if (EFI_ERROR(status) || base == 0) {
+        uefi_log_status(system, "[boot] blit-only GOP: scanout allocation failed: ", status);
+        return -1;
+    }
+    memset8(ptr_cast(UINT8, base), 0, (UINTN)pages * 0x1000u);
+    snapshot->base = (uint64_t)base;
+    snapshot->size = (uint64_t)pages * 0x1000u;
+    snapshot->stride = snapshot->width;
+    uefi_log(system, "[boot] blit-only GOP: scanout allocated by the loader\n");
+    return 0;
 }
 
 static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
@@ -607,8 +645,15 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE* system,
     snapshot->width = mode_info->HorizontalResolution;
     snapshot->height = mode_info->VerticalResolution;
     snapshot->stride = mode_info->PixelsPerScanLine;
-    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT | ((((uint32_t)mode_info->PixelFormat) & 0xFu)
-                                                    << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
+    uint32_t pixel_format = (uint32_t)mode_info->PixelFormat;
+    if (pixel_format == PixelBltOnly || snapshot->base == 0) {
+        if (gop_allocate_scanout(system, snapshot) != 0) {
+            return -1;
+        }
+        pixel_format = PixelBlueGreenRedReserved8BitPerColor;
+    }
+    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT |
+                      ((pixel_format & 0xFu) << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
     return 0;
 }
 

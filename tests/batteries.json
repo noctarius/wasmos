@@ -131,6 +131,7 @@
       "files": [
         "test_console_claim.py",
         "test_ramfb_mode.py",
+        "test_virtio_gpu.py",
         "test_gfx_keyboard.py",
         "test_gfx_surface_recycle.py",
         "test_irq_input.py",

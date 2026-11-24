@@ -224,6 +224,20 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
     write_hex32(api, " stride=", fb_stride);
     write_str(api, "\n");
 
+    /* Before the framebuffer is mapped or cleared: a backend that declines
+     * leaves the pixels to whichever driver the framebuffer does belong to. */
+    if (backend->init) {
+        int32_t init_rc = backend->init(api, &info);
+        if (init_rc == FBTEXT_BACKEND_DECLINED) {
+            write_str(api, backend->tag);
+            write_str(api, " the framebuffer is not this backend's; declining\n");
+            return 0;
+        }
+        if (init_rc != 0) {
+            return init_rc;
+        }
+    }
+
     /* Map the whole framebuffer the firmware reported, which may hold more than
      * the boot mode needs (edk2's ramfb sizes it for its largest mode); every
      * runtime mode must fit in it. Never less than the boot geometry. */
@@ -248,13 +262,6 @@ int fbtext_serve(wasmos_driver_api_t* api, const fbtext_backend_t* backend) {
 
     fbtext_render_init(&g_state, (uint32_t*)fb, fb_stride, fb_width, fb_height);
     fbtext_clear(&g_state);
-
-    if (backend->init) {
-        int32_t init_rc = backend->init(api, &info);
-        if (init_rc != 0) {
-            return init_rc;
-        }
-    }
 
     replay_early_log(api);
 

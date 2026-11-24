@@ -148,8 +148,9 @@ static int32_t find_ramfb(wasmos_driver_api_t* api) {
 }
 
 /* Brings up the fw_cfg DMA path and locates etc/ramfb. A machine whose fw_cfg
- * has no DMA interface or no ramfb fails the driver's bring-up: the firmware
- * framebuffer it would serve is then not a ramfb this driver can program. */
+ * has no DMA interface or no ramfb is declined: fw_cfg is on every QEMU virt
+ * machine, and the framebuffer is then some other adapter's (the loader's
+ * scanout for virtio-gpu, say). */
 static int32_t ramfb_init(wasmos_driver_api_t* api, const nd_framebuffer_info_t* boot) {
     uint32_t signature = 0;
     void* page = 0;
@@ -159,7 +160,7 @@ static int32_t ramfb_init(wasmos_driver_api_t* api, const nd_framebuffer_info_t*
     if (api->io_region_read(0, FW_CFG_DMA_HI, 4, &signature) != 0 ||
         signature != FW_CFG_DMA_SIGNATURE_LO) {
         write_str(api, "[framebuffer-ramfb] fw_cfg has no DMA interface\n");
-        return WASMOS_ERR_DRIVER_DEVICE_INIT;
+        return FBTEXT_BACKEND_DECLINED;
     }
     int32_t rc = api->dma_region_alloc(1, &page, &g_dma_phys);
     if (rc != 0) {
@@ -169,7 +170,7 @@ static int32_t ramfb_init(wasmos_driver_api_t* api, const nd_framebuffer_info_t*
     g_dma_page = (uint8_t*)page;
     if (find_ramfb(api) != 0) {
         write_str(api, "[framebuffer-ramfb] fw_cfg lists no etc/ramfb\n");
-        return WASMOS_ERR_DRIVER_DEVICE_INIT;
+        return FBTEXT_BACKEND_DECLINED;
     }
     g_fb_phys = boot->framebuffer_base;
     write_str(api, "[framebuffer-ramfb] etc/ramfb found\n");

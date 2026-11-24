@@ -102,6 +102,17 @@ FBTEXT_CAP_SET_RESOLUTION = 1u << 0
 FBTEXT_CAP_QUERY_MODES    = 1u << 1
 ```
 
+#### Backend Selection
+
+Several framebuffer drivers can be spawned on one machine -- the ramfb driver is
+matched on fw_cfg, which every QEMU virt machine has, whatever its display.
+A backend's `init` runs before the server maps or draws on the framebuffer, and
+returns `FBTEXT_BACKEND_DECLINED` when the framebuffer is not its adapter's
+(ramfb: fw_cfg lists no `etc/ramfb`). The driver then exits with status 0, which
+the device manager reads as a declined device and does not retry
+([16-device-manager-and-bus-enumeration.md](16-device-manager-and-bus-enumeration.md)),
+so a declining driver never touches the pixels of the driver that owns them.
+
 #### Driver Variant Differences
 
 | Opcode         | `framebuffer_pci`, `framebuffer_ramfb`                | `framebuffer` (UEFI) |

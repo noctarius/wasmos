@@ -182,6 +182,7 @@ pub const WASMOS_ERR_DRIVER_DEPENDENCY_MISSING: i32 = -0x00070007; // a service 
 pub const WASMOS_ERR_DRIVER_ABI_MISMATCH: i32 = -0x00070008; // the native driver API does not match the ABI the image was built for
 pub const WASMOS_ERR_DRIVER_EVENT_LOOP: i32 = -0x00070009; // the driver's event loop could not be set up, or failed while serving
 pub const WASMOS_ERR_DRIVER_DEVICE_UNSUPPORTED: i32 = -0x0007000A; // the identified device is of a kind this driver does not drive
+pub const WASMOS_ERR_DRIVER_NO_SUBSCRIBER_SLOT: i32 = -0x0007000B; // every subscriber slot of the driver is taken; the subscription is refused
 pub const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
 pub const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 pub const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
@@ -528,6 +529,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_DRIVER_ABI_MISMATCH => "the native driver API does not match the ABI the image was built for",
         WASMOS_ERR_DRIVER_EVENT_LOOP => "the driver's event loop could not be set up, or failed while serving",
         WASMOS_ERR_DRIVER_DEVICE_UNSUPPORTED => "the identified device is of a kind this driver does not drive",
+        WASMOS_ERR_DRIVER_NO_SUBSCRIBER_SLOT => "every subscriber slot of the driver is taken; the subscription is refused",
         WASMOS_ERR_VT_BAD_TTY_ID => "requested tty id is out of range",
         WASMOS_ERR_VT_NO_TTY_FOR_SOURCE => "no tty is associated with the requesting endpoint",
         WASMOS_ERR_VT_READER_BUSY => "another endpoint is already the reader for this tty",

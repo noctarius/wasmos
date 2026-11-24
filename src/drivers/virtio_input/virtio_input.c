@@ -11,7 +11,7 @@
  *   - a device that reports keys (EV_KEY) and no relative axes is a KEYBOARD.
  *     The instance registers "kbd" and speaks the PS/2 keyboard driver's
  *     protocol: each key event becomes KBD_IPC_KEY_NOTIFY carrying the PS/2
- *     Set 1 scancode of the evdev key code (k_set1 below). Clients -- the vt,
+ *     Set 1 scancode of the evdev key code (virtio_input_events.c). Clients -- the vt,
  *     and through it the compositor -- decode Set 1, so a virtio keyboard and
  *     a PS/2 one are indistinguishable to them.
  *   - a device with absolute axes and no relative ones (virtio-tablet) is
@@ -41,6 +41,7 @@
 #include "wasmos/virtio_modern.h"
 #include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
+#include "virtio_input_events.h"
 
 /* PCI identity: 0x1AF4 is the virtio vendor id, 0x1052 the modern-only
  * virtio-input function (0x1040 + device type 18). There is no transitional
@@ -64,19 +65,6 @@
 #define VIRTIO_INPUT_CFG_UNION 8u
 #define VIRTIO_INPUT_CFG_EV_BITS 0x11u
 
-/* evdev event types and codes (Linux input-event-codes.h, which virtio-input
- * adopts verbatim). */
-#define EV_SYN 0x00u
-#define EV_KEY 0x01u
-#define EV_REL 0x02u
-#define EV_ABS 0x03u
-#define SYN_REPORT 0u
-#define REL_X 0x00u
-#define REL_Y 0x01u
-#define BTN_LEFT 0x110u
-#define BTN_RIGHT 0x111u
-#define BTN_MIDDLE 0x112u
-
 /* Interrupt delivery on the service endpoint. A routed INTx line arrives as
  * IPC_IRQ_EVENT_TYPE and owes an ack; MSI-X as WASMOS_IPC_MSI_EVENT_TYPE. Both
  * carry the interrupt id as their request_id, so the loop's own request ids
@@ -88,10 +76,6 @@
  * it to arm the function. */
 #define VIN_PCI_WAIT_MS 2000
 #define VIN_LOOP_TICK_MS 250
-
-#define MAX_SUBSCRIBERS 4
-/* The mouse notify carries a signed 8-bit delta per axis. */
-#define MOUSE_STEP_MAX 127
 
 /* One evdev event as the device writes it into an eventq buffer. */
 typedef struct {
@@ -126,61 +110,13 @@ static int32_t g_register_bid = -1;
 static uint8_t g_bringup_done;
 static vin_device_t g_dev;
 static vin_role_t g_role;
-static int32_t g_subscribers[MAX_SUBSCRIBERS];
+static vin_events_t g_events_state;
 
 static vring_t g_eventq;
 static uint16_t g_eventq_size;
 static virtio_input_event_t* g_events; /* g_eventq_size buffers, DMA-visible */
 static uint64_t g_events_phys;
 static uint16_t g_desc_buf[VIRTIO_INPUT_MAX_QUEUE]; /* descriptor -> buffer */
-
-/* Mouse state accumulated between SYN_REPORTs. */
-static int32_t g_mouse_dx;
-static int32_t g_mouse_dy;
-static int32_t g_mouse_buttons;
-static uint8_t g_mouse_dirty;
-
-/* evdev key code -> PS/2 Set 1 make code, bit 8 set for an 0xE0-prefixed
- * (extended) key, 0 for a key Set 1 cannot express. Codes 1..88 ARE their
- * Set 1 codes (evdev's numbering started from the AT keyboard); the extended
- * keys and the gaps below are not. Release is reported separately, so no
- * entry carries the 0x80 break bit. */
-#define E0(code) (0x100u | (code))
-static const uint16_t k_set1[128] = {
-    [1] = 0x01,       [2] = 0x02,  [3] = 0x03,      [4] = 0x04,  [5] = 0x05,  [6] = 0x06,
-    [7] = 0x07,       [8] = 0x08,  [9] = 0x09,      [10] = 0x0A, [11] = 0x0B, [12] = 0x0C,
-    [13] = 0x0D,      [14] = 0x0E, [15] = 0x0F,     [16] = 0x10, [17] = 0x11, [18] = 0x12,
-    [19] = 0x13,      [20] = 0x14, [21] = 0x15,     [22] = 0x16, [23] = 0x17, [24] = 0x18,
-    [25] = 0x19,      [26] = 0x1A, [27] = 0x1B,     [28] = 0x1C, [29] = 0x1D, [30] = 0x1E,
-    [31] = 0x1F,      [32] = 0x20, [33] = 0x21,     [34] = 0x22, [35] = 0x23, [36] = 0x24,
-    [37] = 0x25,      [38] = 0x26, [39] = 0x27,     [40] = 0x28, [41] = 0x29, [42] = 0x2A,
-    [43] = 0x2B,      [44] = 0x2C, [45] = 0x2D,     [46] = 0x2E, [47] = 0x2F, [48] = 0x30,
-    [49] = 0x31,      [50] = 0x32, [51] = 0x33,     [52] = 0x34, [53] = 0x35, [54] = 0x36,
-    [55] = 0x37,      [56] = 0x38, [57] = 0x39,     [58] = 0x3A, [59] = 0x3B, [60] = 0x3C,
-    [61] = 0x3D,      [62] = 0x3E, [63] = 0x3F,     [64] = 0x40, [65] = 0x41, [66] = 0x42,
-    [67] = 0x43,      [68] = 0x44, [69] = 0x45,     [70] = 0x46, [71] = 0x47, [72] = 0x48,
-    [73] = 0x49,      [74] = 0x4A, [75] = 0x4B,     [76] = 0x4C, [77] = 0x4D, [78] = 0x4E,
-    [79] = 0x4F,      [80] = 0x50, [81] = 0x51,     [82] = 0x52, [83] = 0x53, [86] = 0x56,
-    [87] = 0x57,      [88] = 0x58, [96] = E0(0x1C), /* KEY_KPENTER */
-    [97] = E0(0x1D),                                /* KEY_RIGHTCTRL */
-    [98] = E0(0x35),                                /* KEY_KPSLASH */
-    [99] = E0(0x37),                                /* KEY_SYSRQ */
-    [100] = E0(0x38),                               /* KEY_RIGHTALT (AltGr) */
-    [102] = E0(0x47),                               /* KEY_HOME */
-    [103] = E0(0x48),                               /* KEY_UP */
-    [104] = E0(0x49),                               /* KEY_PAGEUP */
-    [105] = E0(0x4B),                               /* KEY_LEFT */
-    [106] = E0(0x4D),                               /* KEY_RIGHT */
-    [107] = E0(0x4F),                               /* KEY_END */
-    [108] = E0(0x50),                               /* KEY_DOWN */
-    [109] = E0(0x51),                               /* KEY_PAGEDOWN */
-    [110] = E0(0x52),                               /* KEY_INSERT */
-    [111] = E0(0x53),                               /* KEY_DELETE */
-    [125] = E0(0x5B),                               /* KEY_LEFTMETA */
-    [126] = E0(0x5C),                               /* KEY_RIGHTMETA */
-    [127] = E0(0x5D),                               /* KEY_COMPOSE (menu) */
-};
-#undef E0
 
 static void vin_log(const char* msg) {
     (void)printf("%s", msg);
@@ -286,9 +222,9 @@ static int32_t vin_probe_device(void) {
         vin_log("[virtio-input] feature negotiation failed\n");
         return WASMOS_ERR_DRIVER_DEVICE_INIT;
     }
-    if (vin_has_event_type(EV_REL)) {
+    if (vin_has_event_type(VIN_EV_REL)) {
         g_role = VIN_ROLE_MOUSE;
-    } else if (vin_has_event_type(EV_KEY) && !vin_has_event_type(EV_ABS)) {
+    } else if (vin_has_event_type(VIN_EV_KEY) && !vin_has_event_type(VIN_EV_ABS)) {
         g_role = VIN_ROLE_KEYBOARD;
     } else {
         vin_log("[virtio-input] device reports neither relative axes nor keys only; "
@@ -346,6 +282,13 @@ static int vin_setup_eventq(void) {
         goto failed;
     }
     vring_set_notify(&g_eventq, vin_eventq_notify, 0);
+    /* Polled: no interrupt is bound, so none may be raised. An INTx line can be
+     * shared, and an assertion this driver never acknowledges would re-fire for
+     * whichever driver routes that line. The flag is only a hint, so the poll
+     * also reads the ISR (vin_on_tick). */
+    if (!g_dev.msix_enabled && !g_dev.irq_routed) {
+        vring_disable_interrupts(&g_eventq);
+    }
     if (virtio_modern_queue_enable(&g_dev.vm,
                                    (uint16_t)VIRTIO_INPUT_EVENT_QUEUE,
                                    &g_eventq,
@@ -369,27 +312,10 @@ failed:
 
 // ------------------------------------------------------------------ clients
 
-static int32_t vin_add_subscriber(int32_t ep) {
-    for (int i = 0; i < MAX_SUBSCRIBERS; ++i) {
-        if (g_subscribers[i] == ep) {
-            return 0;
-        }
-    }
-    for (int i = 0; i < MAX_SUBSCRIBERS; ++i) {
-        if (g_subscribers[i] < 0) {
-            g_subscribers[i] = ep;
-            return 0;
-        }
-    }
-    return -1; /* full: refused, as the PS/2 drivers refuse it */
-}
-
-static void vin_notify_all(int32_t type, int32_t a0, int32_t a1, int32_t a2) {
-    for (int i = 0; i < MAX_SUBSCRIBERS; ++i) {
-        if (g_subscribers[i] >= 0) {
-            (void)wasmos_ipc_send(g_subscribers[i], g_ep, type, 0, a0, a1, a2, 0);
-        }
-    }
+static int32_t vin_send_notify(void* user, int32_t ep, int32_t type, int32_t a0, int32_t a1,
+                               int32_t a2) {
+    (void)user;
+    return wasmos_ipc_send(ep, g_ep, type, 0, a0, a1, a2, 0);
 }
 
 /* KBD_IPC_SUBSCRIBE_REQ / MOUSE_IPC_SUBSCRIBE_REQ: arg0 of the reply is 0 when
@@ -406,72 +332,17 @@ static void vin_on_subscribe(void* user, const wasmos_ipc_message_t* msg) {
     if (msg->type != want) {
         return;
     }
-    (void)wasmos_ipc_send(
-        msg->source, g_ep, resp, msg->request_id, vin_add_subscriber(msg->source), 0, 0, 0);
+    (void)wasmos_ipc_send(msg->source,
+                          g_ep,
+                          resp,
+                          msg->request_id,
+                          vin_events_subscribe(&g_events_state, msg->source),
+                          0,
+                          0,
+                          0);
 }
 
 // ------------------------------------------------------------------- events
-
-static void vin_key_event(uint16_t code, uint32_t value) {
-    if (code >= sizeof(k_set1) / sizeof(k_set1[0]) || k_set1[code] == 0u) {
-        return;
-    }
-    /* value: 0 release, 1 press, 2 autorepeat. A repeat is another make code,
-     * as a PS/2 keyboard's typematic repeat is. */
-    int32_t keyup = (value == 0u) ? 1 : 0;
-    int32_t extended = (k_set1[code] & 0x100u) ? 1 : 0;
-    vin_notify_all(KBD_IPC_KEY_NOTIFY, (int32_t)(k_set1[code] & 0x7Fu), keyup, extended);
-}
-
-static int32_t vin_clamp_step(int32_t v) {
-    if (v > MOUSE_STEP_MAX) {
-        return MOUSE_STEP_MAX;
-    }
-    if (v < -MOUSE_STEP_MAX) {
-        return -MOUSE_STEP_MAX;
-    }
-    return v;
-}
-
-/* Sends the motion and button state accumulated since the last SYN_REPORT, in
- * as many notifies as the 8-bit deltas need; the last carries the buttons
- * alone when there was no motion. */
-static void vin_mouse_flush(void) {
-    if (!g_mouse_dirty) {
-        return;
-    }
-    do {
-        int32_t sx = vin_clamp_step(g_mouse_dx);
-        int32_t sy = vin_clamp_step(g_mouse_dy);
-        g_mouse_dx -= sx;
-        g_mouse_dy -= sy;
-        vin_notify_all(MOUSE_IPC_MOVE_NOTIFY, sx & 0xFF, sy & 0xFF, g_mouse_buttons);
-    } while (g_mouse_dx != 0 || g_mouse_dy != 0);
-    g_mouse_dirty = 0;
-}
-
-static void vin_mouse_event(const virtio_input_event_t* ev) {
-    if (ev->type == EV_REL) {
-        if (ev->code == REL_X) {
-            g_mouse_dx += (int32_t)ev->value;
-            g_mouse_dirty = 1;
-        } else if (ev->code == REL_Y) {
-            g_mouse_dy += (int32_t)ev->value;
-            g_mouse_dirty = 1;
-        }
-    } else if (ev->type == EV_KEY) {
-        int32_t bit = (ev->code == BTN_LEFT)     ? 0x1
-                      : (ev->code == BTN_RIGHT)  ? 0x2
-                      : (ev->code == BTN_MIDDLE) ? 0x4
-                                                 : 0;
-        if (bit != 0) {
-            g_mouse_buttons = ev->value ? (g_mouse_buttons | bit) : (g_mouse_buttons & ~bit);
-            g_mouse_dirty = 1;
-        }
-    } else if (ev->type == EV_SYN && ev->code == SYN_REPORT) {
-        vin_mouse_flush();
-    }
-}
 
 /* Consumes every event the device has written and gives each buffer back. */
 static void vin_drain_eventq(void) {
@@ -490,11 +361,11 @@ static void vin_drain_eventq(void) {
         if (len >= sizeof(virtio_input_event_t)) {
             virtio_input_event_t ev = g_events[b];
             if (g_role == VIN_ROLE_KEYBOARD) {
-                if (ev.type == EV_KEY) {
-                    vin_key_event(ev.code, ev.value);
+                if (ev.type == VIN_EV_KEY) {
+                    vin_events_key(&g_events_state, ev.code, ev.value);
                 }
             } else {
-                vin_mouse_event(&ev);
+                vin_events_mouse(&g_events_state, ev.type, ev.code, ev.value);
             }
         }
         vin_post_buffer(b);
@@ -527,12 +398,10 @@ static void vin_on_intx(void* user, const wasmos_ipc_message_t* msg) {
 
 // ----------------------------------------------------------------- bring-up
 
-/* Messages no intent or handler claims are dropped, never answered: an error
- * reply to an unsolicited message can ping-pong with a peer that does the
- * same. */
+/* Messages no intent or handler claims (vin_events_unclaimed). */
 static void vin_on_unclaimed(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
-    (void)msg;
+    vin_events_unclaimed(&g_events_state, msg->type, msg->arg0);
 }
 
 static void vin_on_ignored_reply(void* user, const wasmos_ipc_message_t* msg) {
@@ -727,6 +596,9 @@ static void vin_on_tick(void* user) {
     (void)user;
     wasmos_sys_svc_watch_set_expire(&g_watches);
     if (g_bringup_done && !g_dev.msix_enabled && !g_dev.irq_routed) {
+        /* Reading the ISR de-asserts INTx should the device have raised it
+         * despite VRING_AVAIL_F_NO_INTERRUPT. */
+        (void)virtio_modern_isr(&g_dev.vm);
         vin_drain_eventq();
     }
 }
@@ -739,9 +611,7 @@ WASMOS_WASM_EXPORT int32_t initialize(void) {
     if (g_proc_ep < 0) {
         return WASMOS_ERR_DRIVER_NO_PROC_ENDPOINT;
     }
-    for (int i = 0; i < MAX_SUBSCRIBERS; ++i) {
-        g_subscribers[i] = -1;
-    }
+    vin_events_init(&g_events_state, vin_send_notify, 0);
     if (probe_from_startup_args() != 0) {
         vin_log("[virtio-input] startup args name no virtio-input function\n");
         return WASMOS_ERR_DRIVER_NO_DEVICE_IDENTITY;

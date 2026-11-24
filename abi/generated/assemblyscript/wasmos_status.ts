@@ -182,6 +182,7 @@ export const WASMOS_ERR_DRIVER_DEPENDENCY_MISSING: i32 = -0x00070007; // a servi
 export const WASMOS_ERR_DRIVER_ABI_MISMATCH: i32 = -0x00070008; // the native driver API does not match the ABI the image was built for
 export const WASMOS_ERR_DRIVER_EVENT_LOOP: i32 = -0x00070009; // the driver's event loop could not be set up, or failed while serving
 export const WASMOS_ERR_DRIVER_DEVICE_UNSUPPORTED: i32 = -0x0007000A; // the identified device is of a kind this driver does not drive
+export const WASMOS_ERR_DRIVER_NO_SUBSCRIBER_SLOT: i32 = -0x0007000B; // every subscriber slot of the driver is taken; the subscription is refused
 export const WASMOS_ERR_VT_BAD_TTY_ID: i32 = -0x00080001; // requested tty id is out of range
 export const WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: i32 = -0x00080002; // no tty is associated with the requesting endpoint
 export const WASMOS_ERR_VT_READER_BUSY: i32 = -0x00080003; // another endpoint is already the reader for this tty
@@ -521,6 +522,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_DRIVER_ABI_MISMATCH: return "the native driver API does not match the ABI the image was built for";
     case WASMOS_ERR_DRIVER_EVENT_LOOP: return "the driver's event loop could not be set up, or failed while serving";
     case WASMOS_ERR_DRIVER_DEVICE_UNSUPPORTED: return "the identified device is of a kind this driver does not drive";
+    case WASMOS_ERR_DRIVER_NO_SUBSCRIBER_SLOT: return "every subscriber slot of the driver is taken; the subscription is refused";
     case WASMOS_ERR_VT_BAD_TTY_ID: return "requested tty id is out of range";
     case WASMOS_ERR_VT_NO_TTY_FOR_SOURCE: return "no tty is associated with the requesting endpoint";
     case WASMOS_ERR_VT_READER_BUSY: return "another endpoint is already the reader for this tty";

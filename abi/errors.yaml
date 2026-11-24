@@ -218,6 +218,7 @@ domains:
       - { name: ABI_MISMATCH,       description: "the native driver API does not match the ABI the image was built for" }
       - { name: EVENT_LOOP,         description: "the driver's event loop could not be set up, or failed while serving" }
       - { name: DEVICE_UNSUPPORTED, description: "the identified device is of a kind this driver does not drive" }
+      - { name: NO_SUBSCRIBER_SLOT, description: "every subscriber slot of the driver is taken; the subscription is refused" }
 
   vt:
     id: 8

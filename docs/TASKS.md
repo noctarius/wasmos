@@ -2284,6 +2284,11 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
 - [ ] [FEATURE][P3] virtio-tablet (absolute pointer): `virtio_input` refuses a
   device with only absolute axes, because `MOUSE_IPC_MOVE_NOTIFY` carries
   relative 8-bit deltas only. A tablet needs an absolute pointer event.
+- [ ] [BUG][P3] Input drivers drop a notify that a full subscriber queue
+  refuses (`virtio_input_events.c` `vin_notify_all`, and the PS/2 `keyboard` and
+  `mouse` drivers alike): a lost key or button release leaves the client seeing
+  it held. Needs a bounded per-subscriber backlog retried from the loop, in
+  order; dropping must then be an explicit overflow, not a silent loss.
 - [ ] [TEST][P3] `tests/test_virtio_input.py` checks the keyboard end to end
   but not mouse motion: QMP relative motion injected into a `-nographic`
   session never reached the virtio mouse locally (verified interactively on a

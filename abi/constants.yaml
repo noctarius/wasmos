@@ -602,3 +602,4 @@ groups:
       - { symbol: WASMOS_CAP_SPAWN_GRANT, value: 8, doc: "spawn.grant: put hardware grants on a spawned child, directly or through the supervisor." }
       - { symbol: WASMOS_CAP_SVC_CONTROL, value: 9, doc: "svc.control: submit, kill and declare the boot set at the supervisor." }
       - { symbol: WASMOS_CAP_PCI_CONFIG, value: 10, doc: "pci.config: read and write PCI configuration space (pci_config_read/pci_config_write)." }
+      - { symbol: WASMOS_CAP_RTC_EFI, value: 11, doc: "rtc.efi: read and set the clock through UEFI runtime services (rtc_efi_get/rtc_efi_set)." }

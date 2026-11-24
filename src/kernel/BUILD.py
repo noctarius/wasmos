@@ -126,6 +126,7 @@ CORE = [
     "native_driver.c",
     "serial.c",
     "framebuffer.c",
+    "efi_rtc.c",
 ]
 
 WARP_GLUE = [

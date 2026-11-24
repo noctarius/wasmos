@@ -14,6 +14,7 @@ if SCRIPTS not in sys.path:
 from qemu_test_framework import (
     GuestRestarted,
     QemuSession,
+    build_config_enabled,
     default_config,
     guest_arch,
     requires_arch,
@@ -493,6 +494,11 @@ class SupervisorTests(unittest.TestCase):
             "the start did not give the unit a fresh window of five ends",
         )
 
+    @unittest.skipIf(
+        build_config_enabled("WASMOS_RTC_EFI"),
+        "the firmware clock (WASMOS_RTC_EFI) starts from a boot rule, which is not "
+        "a supervised unit",
+    )
     def test_9_a_killed_driver_is_restarted_and_serves_again(self):
         # device-manager hands the clock driver to the supervisor (default.rules,
         # ENV{RESTART}="on-failure"), so a kill on request is a failure the

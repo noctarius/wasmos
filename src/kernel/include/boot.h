@@ -9,7 +9,7 @@
 
 #include <stdint.h>
 
-#define BOOT_INFO_VERSION 6u /* increment on any boot_info_t field change */
+#define BOOT_INFO_VERSION 7u /* increment on any boot_info_t field change */
 /* boot_info_t.flags.  The three PRESENT bits say whether the corresponding
  * pointer/size pair is meaningful; a clear bit means the kernel must not read the
  * pointer at all.  The top nibble of the low 12 bits carries the UEFI
@@ -20,6 +20,7 @@
 #define BOOT_INFO_FLAG_INITFS_PRESENT (1u << 2)
 #define BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT (1u << 3)
 #define BOOT_INFO_FLAG_CMDLINE_PRESENT (1u << 4)
+#define BOOT_INFO_FLAG_EFI_RUNTIME_PRESENT (1u << 5)
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT 8u
 #define BOOT_CMDLINE_MAX 256u
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
@@ -155,6 +156,15 @@ typedef struct {
      * which is clear when the ESP has no such file.  Held inline so it needs no
      * re-mapping. */
     char cmdline[BOOT_CMDLINE_MAX];
+    /* The UEFI runtime services table, valid only with
+     * BOOT_INFO_FLAG_EFI_RUNTIME_PRESENT. Unlike every pointer above, this is a
+     * KERNEL VIRTUAL address: the loader has called SetVirtualAddressMap with
+     * each EFI_MEMORY_RUNTIME region at its direct-map alias
+     * (phys | KERNEL_HIGHER_HALF_BASE), so the table and the code it points at
+     * run where the kernel already maps them, and the memory map's VirtualStart
+     * fields say so. The flag is set only on a loader built with
+     * WASMOS_EFI_RUNTIME (Kconfig WASMOS_RTC_EFI) whose map call succeeded. */
+    uint64_t efi_runtime_services;
 } boot_info_t;
 
 #endif

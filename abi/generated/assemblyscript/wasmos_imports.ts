@@ -980,3 +980,23 @@ export declare function pci_config_write_for(a0: i32, a1: i32, a2: i32, a3: i32)
 // waiter that is not a message endpoint, or WASMOS_FULL.
 @external("wasmos", "ipc_peer_await")
 export declare function ipc_peer_await(a0: i32, a1: i32): i32;
+// Read the firmware clock through the UEFI GetTime runtime service into
+// `buf`: six int32 fields, seconds, minutes, hours, day of month, month and
+// full year, as the rtc protocol orders them. `len` must be at least 24.
+// Requires the rtc.efi capability (WASMOS_ERR_KERNEL_NOT_AUTHORIZED).
+// Returns 0, WASMOS_ERR_RTC_UNAVAILABLE when the loader handed no runtime
+// services over (only a WASMOS_RTC_EFI build does), WASMOS_ERR_RTC_FIRMWARE
+// when GetTime fails, or WASMOS_INVAL for a `len` below 24. A buffer outside
+// linear memory traps the module under wasm3 and answers
+// WASMOS_ERR_KERNEL_BAD_POINTER under WARP.
+@external("wasmos", "rtc_efi_get")
+export declare function rtc_efi_get(a0: i32, a1: i32): i32;
+// Set the firmware clock through the UEFI SetTime runtime service from
+// `buf`, six int32 fields in rtc_efi_get's order, with the time zone left
+// unspecified. `len` must be at least 24. Requires the rtc.efi capability
+// (WASMOS_ERR_KERNEL_NOT_AUTHORIZED). Returns 0, WASMOS_ERR_RTC_INVALID for
+// a field out of range (years 1970-2099), WASMOS_ERR_RTC_UNAVAILABLE,
+// WASMOS_ERR_RTC_FIRMWARE when SetTime fails, or WASMOS_INVAL for a `len`
+// below 24; an unmapped buffer as for rtc_efi_get.
+@external("wasmos", "rtc_efi_set")
+export declare function rtc_efi_set(a0: i32, a1: i32): i32;

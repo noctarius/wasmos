@@ -5,6 +5,9 @@
 #include "uefi.h"
 #include "elf.h"
 #include "boot.h"
+#if defined(WASMOS_EFI_RUNTIME) && defined(__aarch64__)
+#include "arch/aarch64/vm_layout.h"
+#endif
 
 /* EFI_GRAPHICS_OUTPUT_PROTOCOL and its mode structures, mirroring the UEFI spec.
  * Only the fields the framebuffer snapshot reads are typed: Mode->FrameBufferBase
@@ -921,6 +924,49 @@ static void uefi_log_initfs_entry(EFI_SYSTEM_TABLE* system, const char* prefix,
     uefi_log(system, "\n");
 }
 
+#if defined(WASMOS_EFI_RUNTIME) && defined(__aarch64__)
+/* Hand the runtime services to the kernel (Kconfig WASMOS_RTC_EFI): give every
+ * EFI_MEMORY_RUNTIME region of `map` the virtual address the kernel's direct map
+ * already gives it, phys | KERNEL_HIGHER_HALF_BASE, and call
+ * SetVirtualAddressMap with that map, so the firmware's runtime code runs where
+ * the kernel calls it and needs no mapping of its own. The direct map covers
+ * physical [0, KERNEL_HIGHER_HALF_WINDOW_BYTES), the first GiB as device memory
+ * and RAM as kernel-executable (arch/aarch64/paging.c).
+ *
+ * Runs after ExitBootServices, before the kernel, on the firmware's identity
+ * map: SetVirtualAddressMap is called once and only in this state (UEFI 2.10,
+ * 8.4). Any region the window does not cover leaves the runtime services
+ * unhanded -- the map call is not made, the flag stays clear and the kernel
+ * reports the clock unavailable -- since a firmware call into an unmapped
+ * region would fault in the kernel. `map` is boot_info's own copy, so its
+ * VirtualStart fields reach the kernel as they were handed to the firmware. */
+static void efi_runtime_handover(EFI_SYSTEM_TABLE* system, boot_info_t* info, UINT8* map,
+                                 UINTN map_bytes, UINTN desc_size, UINT32 desc_version) {
+    EFI_RUNTIME_SERVICES* rt = system->RuntimeServices;
+    if (!rt || !rt->SetVirtualAddressMap || desc_size < sizeof(EFI_MEMORY_DESCRIPTOR)) {
+        return;
+    }
+    for (UINTN off = 0; off + desc_size <= map_bytes; off += desc_size) {
+        EFI_MEMORY_DESCRIPTOR* d = (EFI_MEMORY_DESCRIPTOR*)(map + off);
+        if ((d->Attribute & EFI_MEMORY_RUNTIME) == 0) {
+            continue;
+        }
+        UINT64 end = d->PhysicalStart + d->NumberOfPages * 0x1000ULL;
+        if (end > KERNEL_HIGHER_HALF_WINDOW_BYTES || end < d->PhysicalStart) {
+            return;
+        }
+        d->VirtualStart = d->PhysicalStart | KERNEL_HIGHER_HALF_BASE;
+    }
+    EFI_STATUS status =
+        rt->SetVirtualAddressMap(map_bytes, desc_size, desc_version, (EFI_MEMORY_DESCRIPTOR*)map);
+    if (EFI_ERROR(status)) {
+        return;
+    }
+    info->efi_runtime_services = (UINT64)(UINTN)rt | KERNEL_HIGHER_HALF_BASE;
+    info->flags |= BOOT_INFO_FLAG_EFI_RUNTIME_PRESENT;
+}
+#endif
+
 /*
  * UEFI application entry point, invoked by the firmware with the loader's own
  * image handle and the system table. Returns only on failure, with the failing
@@ -1272,6 +1318,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
             return status;
         }
     }
+#if defined(WASMOS_EFI_RUNTIME) && defined(__aarch64__)
+    efi_runtime_handover(system, boot_info, (UINT8*)map_dst, map_bytes, desc_size, desc_version);
+#endif
 
 #if defined(__x86_64__)
     /* The kernel _start reads boot_info from RCX (MS x64 ABI arg0). Force the

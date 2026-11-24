@@ -34,6 +34,7 @@
 #include "kernel_ring3_smoke_runtime.h"
 #include "kernel_ring3_suite_runtime.h"
 #include "kpanic.h"
+#include "efi_rtc.h"
 #include "../../abi/generated/c/wasmos_constants.h"
 
 #include <stdint.h>
@@ -270,6 +271,7 @@ void kmain(boot_info_t* boot_info) {
     }
     boot_info = &g_boot_info_shadow;
     g_boot_info = boot_info;
+    efi_rtc_init(boot_info);
     ipc_init();
     process_init();
 #if WASMOS_WASM_RUNTIME == 1

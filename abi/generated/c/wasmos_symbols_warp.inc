@@ -128,4 +128,6 @@
     LINK("wasmos", "pci_config_write", warp_pci_config_write) , \
     LINK("wasmos", "pci_function_check", warp_pci_function_check) , \
     LINK("wasmos", "pci_config_write_for", warp_pci_config_write_for) , \
-    LINK("wasmos", "ipc_peer_await", warp_ipc_peer_await)
+    LINK("wasmos", "ipc_peer_await", warp_ipc_peer_await) , \
+    LINK("wasmos", "rtc_efi_get", warp_rtc_efi_get) , \
+    LINK("wasmos", "rtc_efi_set", warp_rtc_efi_set)

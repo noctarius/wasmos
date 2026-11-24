@@ -1,0 +1,21 @@
+version = 1
+aot = true
+
+[package]
+name = "rtc_efi"
+entry = "initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[deps]
+provides = ["rtc"]
+
+# GetTime and SetTime through the kernel (rtc_efi_get/rtc_efi_set). No device
+# window: the firmware owns the clock hardware.
+[[capabilities]]
+name = "rtc.efi"
+flags = 0

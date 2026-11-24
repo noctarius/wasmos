@@ -52,7 +52,8 @@ Inside `efi_main`:
 10. capture_framebuffer_snapshot(system)                   → framebuffer_snapshot
 11. ExitBootServices() retry loop (below)
 12. fill boot_info_t blob
-13. jump to ehdr->e_entry(boot_info_t *)
+13. (WASMOS_RTC_EFI only) hand the runtime services over (below)
+14. jump to ehdr->e_entry(boot_info_t *)
 ```
 
 Step 10 (framebuffer capture) happens before the `ExitBootServices()` loop
@@ -143,6 +144,21 @@ inside it. The `boot_info_t` blob is allocated before the loop on the first
 pass; if the loop retries, the existing allocation is reused (no
 `AllocatePages` inside the retry window).
 
+### Runtime Services Handover (Kconfig `WASMOS_RTC_EFI`)
+
+A loader built for the firmware clock (`-DWASMOS_EFI_RUNTIME`, aarch64 only)
+calls `SetVirtualAddressMap` after `ExitBootServices`, on the firmware's
+identity map, before entering the kernel (`efi_runtime_handover`,
+`src/boot/boot.c`). Every `EFI_MEMORY_RUNTIME` region of `boot_info`'s own map
+copy gets `VirtualStart = PhysicalStart | KERNEL_HIGHER_HALF_BASE`: the
+kernel's direct map already maps it there, the first GiB as device memory and
+RAM as kernel-executable, so the firmware's runtime code needs no mapping of its
+own. A region past the direct-map window (4 GiB) leaves the services unhanded:
+no map call, `BOOT_INFO_FLAG_EFI_RUNTIME_PRESENT` clear. On success
+`efi_runtime_services` holds the table's kernel virtual address, and the kernel
+calls GetTime/SetTime through it (`src/kernel/efi_rtc.c`). The call cannot be
+undone, which is why only this configuration makes it.
+
 ---
 
 ### Boot Blob Memory Layout
@@ -172,7 +188,7 @@ higher-half aliases first (see Kernel Bootstrap section below).
 
 ### `boot_info_t` Contract
 
-Current version: `BOOT_INFO_VERSION = 4`.
+Current version: `BOOT_INFO_VERSION = 7`.
 
 | Field                             | Type       | Meaning                                          |
 |-----------------------------------|------------|--------------------------------------------------|
@@ -197,6 +213,9 @@ Current version: `BOOT_INFO_VERSION = 4`.
 | `initfs_size`                     | `uint32_t` | initfs blob byte length                          |
 | `boot_config`                     | `void *`   | pointer to boot config payload (within initfs)   |
 | `boot_config_size`                | `uint32_t` | boot config payload byte length                  |
+| `boot_partition_*`                | various    | the partition booted from (see `boot.h`)         |
+| `cmdline`                         | `char[]`   | `\kernel.cmdline`, sanitised, NUL-terminated     |
+| `efi_runtime_services`            | `uint64_t` | runtime services table, KERNEL VIRTUAL address   |
 
 **Flag bits:**
 
@@ -205,6 +224,9 @@ Current version: `BOOT_INFO_VERSION = 4`.
 | `BOOT_INFO_FLAG_GOP_PRESENT` (bit 0)     | framebuffer fields are valid             |
 | `BOOT_INFO_FLAG_MODULES_PRESENT` (bit 1) | modules array is valid                   |
 | `BOOT_INFO_FLAG_INITFS_PRESENT` (bit 2)  | initfs pointer and size are valid        |
+| `BOOT_INFO_FLAG_BOOT_PARTITION_PRESENT` (bit 3) | `boot_partition_*` are valid      |
+| `BOOT_INFO_FLAG_CMDLINE_PRESENT` (bit 4) | `cmdline` holds the ESP's command line   |
+| `BOOT_INFO_FLAG_EFI_RUNTIME_PRESENT` (bit 5) | `efi_runtime_services` is valid      |
 | bits 11:8                                | `EFI_GRAPHICS_PIXEL_FORMAT` (4 bits)     |
 
 **Rules:**

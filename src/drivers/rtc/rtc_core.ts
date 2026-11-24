@@ -1,12 +1,12 @@
 /* rtc_core.ts - the clock-independent half of an RTC driver.
  *
  * An RTC driver is this core linked with one backend: cmos.ts (the x86_64
- * MC146818) or pl031.ts (the Arm PL031).
+ * MC146818), pl031.ts (the Arm PL031) or rtc_efi.ts (UEFI runtime services).
  * The backend knows its clock and nothing else; the core owns everything the
  * rest of the system sees, so every backend registers as "rtc" and serves the
  * same protocol (RTC_IPC_READ_REQ, RTC_IPC_SET_REQ; abi/opcodes.yaml `rtc`).
  * One image per backend, because an image's manifest declares its
- * capabilities: CMOS needs io.port, the PL031 mmio.map.
+ * capabilities: CMOS needs io.port, the PL031 mmio.map, the EFI clock rtc.efi.
  *
  * The driver is one coroutine (rtcTask), started by the backend's exported
  * initialize() through runRtc: registration, the ready notification and the

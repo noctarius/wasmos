@@ -47,10 +47,11 @@ typedef enum {
     CAP_SPAWN_GRANT       = 8,   // mask bit 8: put hardware grants on a spawned child
     CAP_SVC_CONTROL       = 9,   // mask bit 9: submit, kill, declare the boot set (supervisor)
     CAP_PCI_CONFIG        = 10,  // mask bit 10: PCI config space (pci_config_read/write)
+    CAP_RTC_EFI           = 11,  // mask bit 11: the UEFI clock (rtc_efi_get/rtc_efi_set)
 } capability_kind_t;
 
-#define CAPABILITY_KIND_COUNT 11u
-#define CAP_ALL_MASK  ((1u << 11) - 1u)   // every kind
+#define CAPABILITY_KIND_COUNT 12u
+#define CAP_ALL_MASK  ((1u << 12) - 1u)   // every kind
 #define CAPABILITY_DMA_WINDOW_LIMIT 16u
 ```
 
@@ -70,6 +71,7 @@ these kinds via `capability_grant_name`:
 | `"spawn.grant"`        | `CAP_SPAWN_GRANT`        |
 | `"svc.control"`        | `CAP_SVC_CONTROL`        |
 | `"pci.config"`         | `CAP_PCI_CONFIG`         |
+| `"rtc.efi"`            | `CAP_RTC_EFI`            |
 
 The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
 and `capability.h` asserts that the enum matches. Any unrecognized name returns
@@ -87,6 +89,10 @@ Without it, a process may still READ the config space of the one function it
 owns -- the one its spawn profile names, until its reap retires it -- which is
 how a virtio-modern driver finds its register blocks; writing stays
 pci-bus-only (`pci_config_guest_read`, `src/kernel/pci_config.c`).
+`CAP_RTC_EFI` gates the `rtc_efi_get` / `rtc_efi_set` host calls, which run
+the firmware's GetTime and SetTime (`src/kernel/efi_rtc.c`); only the rtc_efi
+driver declares it. It is its own kind, not `system.control`, so the clock
+driver cannot also halt or reboot the machine.
 
 ---
 

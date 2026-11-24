@@ -40,6 +40,16 @@ config WASMOS_RTC_PL031
       tables do not describe it, so acpi-bus publishes it from a board
       table keyed on the tables' OEM ID: it works on QEMU virt only.
 
+config WASMOS_RTC_EFI
+    bool "UEFI runtime services (GetTime/SetTime)"
+    help
+      The rtc_efi driver asks the firmware, through the UEFI GetTime and
+      SetTime runtime services, which work on any UEFI board. The boot
+      loader calls SetVirtualAddressMap before entering the kernel, mapping
+      the firmware's runtime regions at their kernel direct-map addresses;
+      the call cannot be undone, so it is made only with this choice. The
+      driver starts at boot and is not restarted if it ends.
+
 endchoice
 
 menu "Examples"

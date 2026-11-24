@@ -154,11 +154,13 @@ def disk_images(b):
 
 
 # The aarch64 "rtc" service, by Kconfig choice (WASMOS_RTC_*): the PL031 that
-# acpi-bus publishes from its board table. x86_64's CMOS rule is in its rules
-# file.
+# acpi-bus publishes from its board table, or the firmware clock, which has no
+# device to match and starts at boot (a boot rule takes no ENV{RESTART}).
+# x86_64's CMOS rule is in its rules file.
 RTC_RULES = {
     "WASMOS_RTC_PL031": 'SUBSYSTEM=="acpi", ATTR{hid}=="PL031", '
     'ENV{RESTART}="on-failure", RUN+="system/drivers/pl031.wap"',
+    "WASMOS_RTC_EFI": 'SUBSYSTEM=="boot", RUN+="system/drivers/rtc_efi.wap"',
 }
 
 

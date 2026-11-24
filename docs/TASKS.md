@@ -2280,11 +2280,18 @@ and the reason it prints names what is missing. Read `docs/architecture/04-boot-
 
 - [ ] [FEATURE][P2] virtio-input driver for keyboard and mouse (PS/2 stays
   x86_64-only). Until then aarch64's display takes no input.
-- [ ] [FEATURE][P2] A clock on aarch64, chosen in Kconfig (`WASMOS_RTC_*`). The
-  PL031 driver is done (`pl031`, the default): acpi-bus publishes QEMU virt's
-  PL031 from its board table, and the `date` tests run on aarch64. Open: the
-  UEFI runtime-services clock (`WASMOS_RTC_EFI`), for boards whose PL031 is
-  neither in ACPI nor known to acpi-bus.
+- [x] [FEATURE][P2] A clock on aarch64, chosen in Kconfig (`WASMOS_RTC_*`): the
+  `pl031` driver (default; acpi-bus publishes QEMU virt's PL031 from its board
+  table) or `rtc_efi` (UEFI GetTime/SetTime, after the loader's
+  SetVirtualAddressMap). The `date` tests run on aarch64.
+- [ ] [TEST][P3] CI builds only the default clock (PL031); `WASMOS_RTC_EFI` is
+  verified locally (`run-qemu-test`, boot-and-init). A battery cannot be scoped
+  to one configuration, so covering it means a second aarch64 config in
+  `tests/batteries.json` or a dedicated job.
+- [ ] [FEATURE][P3] The firmware clock reports the firmware's wall time
+  unconverted: a firmware configured with a time zone yields local time
+  (`TODO(efi-rtc-timezone)`, `src/kernel/efi_rtc.c`). edk2 on QEMU virt leaves
+  the zone unspecified, so the time is the PL031's UTC.
 - [x] [FEATURE][P2] A framebuffer on aarch64. Done with QEMU ramfb: the harness
   attaches `-device ramfb`, the firmware reports it as the GOP framebuffer, and
   `framebuffer_ramfb` (bound to the fw_cfg device QEMU0002) serves it and sets

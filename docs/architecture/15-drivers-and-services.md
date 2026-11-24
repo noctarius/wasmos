@@ -258,7 +258,7 @@ Services subscriber registration and delivers key events.
 - **Capabilities:** `io.port`
 - **Entry bindings:** `proc.endpoint`
 
-#### `rtc` and `pl031` — Real-Time Clock Drivers
+#### `rtc`, `pl031` and `rtc_efi` — Real-Time Clock Drivers
 
 - **Kind:** WASM drivers (AssemblyScript), one per clock, all registering the
   service name `rtc`
@@ -269,6 +269,13 @@ Services subscriber registration and delivers key events.
   virt's DSDT does not describe its PL031 (0x09010000), so acpi-bus adds it
   when the tables' OEM ID is QEMU's and a GTDT is present. Capability
   `mmio.map`
+- **`rtc_efi` (aarch64, `WASMOS_RTC_EFI`):** the firmware clock, UEFI GetTime
+  and SetTime run by the kernel (`src/kernel/efi_rtc.c`) for the
+  `rtc_efi_get`/`rtc_efi_set` host calls. Started by a boot rule
+  (`SUBSYSTEM=="boot"`), so it is not a supervised unit. Capability `rtc.efi`.
+  The loader hands the runtime services over only in this configuration
+  ([Boot and Handoff](04-boot-and-handoff.md)); without them the driver does
+  not register
 - **Entry bindings:** `proc.endpoint`
 
 The drivers share `src/drivers/rtc/rtc_core.ts` (registration and the request
@@ -276,7 +283,9 @@ loop) and `rtc_time.ts` (the six-field UTC time, its wire packing, validation
 -- the day is checked against its month -- and epoch-seconds conversion); a
 backend supplies `init`, `read` and `set`. The PL031 holds seconds since
 1970-01-01 UTC. The protocol carries years 1970-2099; a PL031 count outside
-them reads as `rtc.OUT_OF_RANGE`.
+them reads as `rtc.OUT_OF_RANGE`. The Kconfig choice "Real-time clock
+(aarch64)" decides which aarch64 driver a build ships a rule for
+(`RTC_RULES`, `scripts/system/BUILD.py`).
 
 | Opcode              | Value   | Meaning           |
 |---------------------|---------|-------------------|

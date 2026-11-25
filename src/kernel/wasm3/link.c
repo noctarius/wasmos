@@ -86,6 +86,12 @@ static wasm_overlay_map_t g_wasm_overlay_maps[WASM_OVERLAY_MAP_SLOTS];
  * windows and therefore must participate in overlap tracking / teardown. */
 #define WASM_DMA_REGION_MAP_SLOTS (PROCESS_MAX_COUNT * 16)
 static wasm_dma_region_map_t g_wasm_dma_region_maps[WASM_DMA_REGION_MAP_SLOTS];
+/* Guards g_wasm_overlay_maps and g_wasm_dma_region_maps. Both tables are shared
+ * by every process, and processes track, untrack, test and release their windows
+ * from any CPU: an unlocked find-empty-then-fill let two processes claim the
+ * same slot. Leaf lock apart from the physical frame allocator, which the reap
+ * path calls under it and which never calls back here. */
+static ksync_spinlock_t g_wasm_window_lock;
 static const boot_info_t* g_wasm_boot_info;
 
 /* Reinterpret a guest i32 argument as a non-negative u32.  Stores *out and returns 0, or
@@ -249,12 +255,14 @@ static void wasm_ipc_slots_init(void) {
 
 static void wasm_overlay_map_track(uint32_t pid, uint32_t overlay_id, uint32_t offset,
                                    uint32_t size) {
+    ksync_spinlock_lock(&g_wasm_window_lock);
     wasm_overlay_map_t* empty = 0;
     for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
         wasm_overlay_map_t* slot = &g_wasm_overlay_maps[i];
         if (slot->valid && slot->pid == pid && slot->overlay_id == overlay_id &&
             slot->offset == offset) {
             slot->size = size;
+            ksync_spinlock_unlock(&g_wasm_window_lock);
             return;
         }
         if (!empty && !slot->valid) {
@@ -268,9 +276,11 @@ static void wasm_overlay_map_track(uint32_t pid, uint32_t overlay_id, uint32_t o
         empty->size = size;
         empty->valid = 1;
     }
+    ksync_spinlock_unlock(&g_wasm_window_lock);
 }
 
 static void wasm_overlay_map_untrack(uint32_t pid, uint32_t overlay_id) {
+    ksync_spinlock_lock(&g_wasm_window_lock);
     for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
         wasm_overlay_map_t* slot = &g_wasm_overlay_maps[i];
         if (!slot->valid)
@@ -279,9 +289,10 @@ static void wasm_overlay_map_untrack(uint32_t pid, uint32_t overlay_id) {
             slot->valid = 0;
         }
     }
+    ksync_spinlock_unlock(&g_wasm_window_lock);
 }
 
-static uint8_t wasm_overlay_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
+static uint8_t wasm_overlay_map_overlaps_locked(uint32_t pid, uint32_t offset, uint32_t size) {
     uint64_t a0 = (uint64_t)offset;
     uint64_t a1 = a0 + (uint64_t)size;
     for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
@@ -300,6 +311,7 @@ static uint8_t wasm_overlay_map_overlaps(uint32_t pid, uint32_t offset, uint32_t
 
 static void wasm_dma_region_map_track(uint32_t pid, uint32_t offset, uint32_t size,
                                       uint64_t phys_base, uint32_t pages) {
+    ksync_spinlock_lock(&g_wasm_window_lock);
     wasm_dma_region_map_t* empty = 0;
     for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
         wasm_dma_region_map_t* slot = &g_wasm_dma_region_maps[i];
@@ -307,6 +319,7 @@ static void wasm_dma_region_map_track(uint32_t pid, uint32_t offset, uint32_t si
             slot->size = size;
             slot->pages = pages;
             slot->phys_base = phys_base;
+            ksync_spinlock_unlock(&g_wasm_window_lock);
             return;
         }
         if (!empty && !slot->valid) {
@@ -321,9 +334,10 @@ static void wasm_dma_region_map_track(uint32_t pid, uint32_t offset, uint32_t si
         empty->phys_base = phys_base;
         empty->valid = 1;
     }
+    ksync_spinlock_unlock(&g_wasm_window_lock);
 }
 
-static uint8_t wasm_dma_region_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
+static uint8_t wasm_dma_region_map_overlaps_locked(uint32_t pid, uint32_t offset, uint32_t size) {
     uint64_t a0 = (uint64_t)offset;
     uint64_t a1 = a0 + (uint64_t)size;
     for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
@@ -341,8 +355,11 @@ static uint8_t wasm_dma_region_map_overlaps(uint32_t pid, uint32_t offset, uint3
 }
 
 static uint8_t wasm_linear_window_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
-    return wasm_overlay_map_overlaps(pid, offset, size) ||
-           wasm_dma_region_map_overlaps(pid, offset, size);
+    ksync_spinlock_lock(&g_wasm_window_lock);
+    uint8_t overlaps = wasm_overlay_map_overlaps_locked(pid, offset, size) ||
+                       wasm_dma_region_map_overlaps_locked(pid, offset, size);
+    ksync_spinlock_unlock(&g_wasm_window_lock);
+    return overlaps;
 }
 
 /* Reclaim every per-pid side-table resource of a reaped process: the phys_map window
@@ -363,6 +380,7 @@ void wasm3_release_pid(uint32_t pid) {
     /* phys_map windows live only in the process's own address space, which is
      * torn down with it; the records are all that is left to drop. */
     phys_map_window_release_pid(pid, 0);
+    ksync_spinlock_lock(&g_wasm_window_lock);
     for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
         wasm_dma_region_map_t* slot = &g_wasm_dma_region_maps[i];
         if (!slot->valid || slot->pid != pid) {
@@ -387,6 +405,7 @@ void wasm3_release_pid(uint32_t pid) {
             g_wasm_overlay_maps[i].valid = 0;
         }
     }
+    ksync_spinlock_unlock(&g_wasm_window_lock);
     /* Reclaim the per-pid block buffer.  Capture the phys under the side-table
      * lock and free outside it so the PFA lock never nests under it. */
     uint64_t block_phys = 0;
@@ -1186,11 +1205,18 @@ m3ApiRawFunction(wasmos_xfer_buffer_map) {
         m3ApiReturn(WASMOS_ERR_XFER_BUFFER_NO_BACKING);
     }
     uint32_t track_id = WASM_XFER_TRACK_ID((uint32_t)buffer_id);
+    int32_t existing = -1;
+    ksync_spinlock_lock(&g_wasm_window_lock);
     for (uint32_t i = 0; i < WASM_OVERLAY_MAP_SLOTS; ++i) {
         if (g_wasm_overlay_maps[i].valid && g_wasm_overlay_maps[i].pid == proc->pid &&
             g_wasm_overlay_maps[i].overlay_id == track_id) {
-            m3ApiReturn((int32_t)g_wasm_overlay_maps[i].offset); /* idempotent */
+            existing = (int32_t)g_wasm_overlay_maps[i].offset;
+            break;
         }
+    }
+    ksync_spinlock_unlock(&g_wasm_window_lock);
+    if (existing >= 0) {
+        m3ApiReturn(existing); /* idempotent */
     }
 
     uint32_t mem_size = 0;

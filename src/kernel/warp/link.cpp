@@ -1512,24 +1512,29 @@ struct WarpOverlayMap {
 };
 
 static WarpOverlayMap g_warp_overlay_maps[WARP_OVERLAY_MAP_SLOTS];
+/* Guards g_warp_overlay_maps, which every process shares and tracks, untracks and
+ * tests from any CPU. Leaf lock. */
+static ksync_spinlock_t g_overlay_lock;
 
 /* Registry of the linear-memory windows a process has had something mapped into, used
  * only to keep a later placement from overlapping an earlier one.  Three id namespaces
  * share it: bit 31 marks a region/block window
  * and bit 30 an xfer-buffer overlay.  The table is a fixed PROCESS_MAX_COUNT*32 array;
  * when it is full a new window is simply not recorded, so it can no longer be seen by
- * the overlap check.  Unsynchronised — safe only under the WARP single-CPU invariant.
+ * the overlap check.  Every access holds g_overlay_lock.
  *
  * warp_overlay_map_track: record or resize the (pid, id, offset) window.
  * warp_overlay_map_untrack: drop every window this pid holds under `id`.
- * warp_overlay_map_find: the first window matching (pid, id), or nullptr.
+ * warp_overlay_map_find: copy of the first window matching (pid, id); 1 if found.
  * warp_overlay_map_overlaps: whether [offset, offset+size) intersects any window of pid. */
 static void warp_overlay_map_track(uint32_t pid, uint32_t id, uint32_t offset, uint32_t size) {
     WarpOverlayMap* empty = nullptr;
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
         WarpOverlayMap* s = &g_warp_overlay_maps[i];
         if (s->valid && s->pid == pid && s->overlay_id == id && s->offset == offset) {
             s->size = size;
+            ksync_spinlock_unlock(&g_overlay_lock);
             return;
         }
         if (!empty && !s->valid)
@@ -1542,36 +1547,49 @@ static void warp_overlay_map_track(uint32_t pid, uint32_t id, uint32_t offset, u
         empty->size = size;
         empty->valid = 1;
     }
+    ksync_spinlock_unlock(&g_overlay_lock);
 }
 
 static void warp_overlay_map_untrack(uint32_t pid, uint32_t id) {
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i)
         if (g_warp_overlay_maps[i].valid && g_warp_overlay_maps[i].pid == pid &&
             g_warp_overlay_maps[i].overlay_id == id)
             g_warp_overlay_maps[i].valid = 0;
+    ksync_spinlock_unlock(&g_overlay_lock);
 }
 
-static WarpOverlayMap* warp_overlay_map_find(uint32_t pid, uint32_t id) {
+static int warp_overlay_map_find(uint32_t pid, uint32_t id, WarpOverlayMap* out) {
+    int found = 0;
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
-        WarpOverlayMap* slot = &g_warp_overlay_maps[i];
+        const WarpOverlayMap* slot = &g_warp_overlay_maps[i];
         if (slot->valid && slot->pid == pid && slot->overlay_id == id) {
-            return slot;
+            *out = *slot;
+            found = 1;
+            break;
         }
     }
-    return nullptr;
+    ksync_spinlock_unlock(&g_overlay_lock);
+    return found;
 }
 
 static uint8_t warp_overlay_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
     uint64_t a0 = offset, a1 = (uint64_t)offset + size;
+    uint8_t overlaps = 0;
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
         const WarpOverlayMap* s = &g_warp_overlay_maps[i];
         if (!s->valid || s->pid != pid || s->size == 0)
             continue;
         uint64_t b0 = s->offset, b1 = b0 + s->size;
-        if (a0 < b1 && b0 < a1)
-            return 1;
+        if (a0 < b1 && b0 < a1) {
+            overlaps = 1;
+            break;
+        }
     }
-    return 0;
+    ksync_spinlock_unlock(&g_overlay_lock);
+    return overlaps;
 }
 
 /* Bytes of linear memory WARP currently treats as live, read from the basedata field
@@ -2221,9 +2239,9 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     if (phys_base == 0 || (phys_base & 0xFFFULL) != 0 || buf.size_bytes == 0)
         return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_BACKING;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
-    WarpOverlayMap* existing = warp_overlay_map_find(ctx->pid, track_id);
-    if (existing)
-        return existing->offset; /* idempotent */
+    WarpOverlayMap existing;
+    if (warp_overlay_map_find(ctx->pid, track_id, &existing))
+        return existing.offset; /* idempotent */
     uint64_t pages = ((uint64_t)buf.size_bytes + 0xFFFULL) >> 12;
     uint32_t window = (uint32_t)(pages << 12);
     int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, window);
@@ -2249,9 +2267,10 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     if (!ctx || (int32_t)buffer_id <= 0)
         return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
-    WarpOverlayMap* slot = warp_overlay_map_find(ctx->pid, track_id);
-    if (!slot)
+    WarpOverlayMap found;
+    if (!warp_overlay_map_find(ctx->pid, track_id, &found))
         return 0;
+    const WarpOverlayMap* slot = &found;
     uint64_t pages = ((uint64_t)slot->size + 0xFFFULL) / 0x1000ULL;
     uint8_t* base = warp_linear_mem_window(ctx, slot->offset, slot->size);
     if (base) {

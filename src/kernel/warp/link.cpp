@@ -43,6 +43,7 @@ extern "C" {
 #include "process_manager.h"
 #include "list.h"
 #include "hashmap.h"
+#include "sync/spinlock.h"
 #include "memory.h"
 #include "physmem.h"
 #include "thread.h"
@@ -107,9 +108,37 @@ static int warp_ring3_sync_linmem_user_window(uint8_t* linmem_base);
 // key's lifetime (chaining + rehash relinks, never moves nodes), so the
 // pointer handed to WasmModule::setContext() stays valid.  Pre-sized so the
 // spawn hot path (which runs under the preempt-guard drain) does not rehash.
-// TODO(smp-warp): lookups/alloc here are unsynchronised; safe under the WARP
-// single-CPU invariant (see warp/shim.cpp), revisit for SMP.
 static hashmap_t g_ctx_map;
+
+/* Guards the bucket arrays of every per-pid map in this file (g_ctx_map,
+ * g_ipc_last_map, g_fs_peer_map, g_block_map). hashmap.h carries no lock, and
+ * processes on different CPUs look up, insert and remove their own keys
+ * concurrently: an insert that rehashes frees the bucket array a concurrent
+ * lookup is walking. The lock covers the map operation only. A returned value
+ * pointer stays valid without it, because nodes never move and a pid's entry is
+ * removed only by that pid's own reap (warp_release_pid). Leaf lock: nothing is
+ * taken while it is held except the kmem allocator inside hashmap_put. */
+static ksync_spinlock_t g_pid_maps_lock;
+
+static void* pid_map_get(hashmap_t* map, uint32_t pid) {
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    void* value = hashmap_get(map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    return value;
+}
+
+static void* pid_map_put(hashmap_t* map, uint32_t pid) {
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    void* value = hashmap_put(map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    return value;
+}
+
+static void pid_map_remove(hashmap_t* map, uint32_t pid) {
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    (void)hashmap_remove(map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+}
 
 /* Look up the WARP call context for `pid` without creating one.  Returns nullptr for
  * pid 0 and for a pid whose module has not been bound (or was already released). */
@@ -117,7 +146,7 @@ static WarpCallContext* ctx_find(uint32_t pid) {
     if (pid == 0) {
         return nullptr;
     }
-    return static_cast<WarpCallContext*>(hashmap_get(&g_ctx_map, pid));
+    return static_cast<WarpCallContext*>(pid_map_get(&g_ctx_map, pid));
 }
 
 /* Kernel-side pointer for the guest linear-memory range [offset, offset+size).
@@ -229,7 +258,7 @@ static void warp_ipc_slots_init(void) {
 WarpIpcLastSlot* warp_ipc_slot_for_pid(uint32_t pid) {
     if (!pid)
         return nullptr;
-    auto* slot = static_cast<WarpIpcLastSlot*>(hashmap_put(&g_ipc_last_map, pid));
+    auto* slot = static_cast<WarpIpcLastSlot*>(pid_map_put(&g_ipc_last_map, pid));
     if (slot)
         slot->pid = pid;
     return slot;
@@ -239,7 +268,7 @@ WarpFsPeerSlot* warp_fs_peer_slot_for_pid(uint32_t pid) {
     if (!pid) {
         return nullptr;
     }
-    auto* slot = static_cast<WarpFsPeerSlot*>(hashmap_put(&g_fs_peer_map, pid));
+    auto* slot = static_cast<WarpFsPeerSlot*>(pid_map_put(&g_fs_peer_map, pid));
     if (slot)
         slot->pid = pid;
     return slot;
@@ -699,7 +728,7 @@ static void warp_block_slots_init(void) {
 static WarpBlockSlot* warp_block_slot(uint32_t pid) {
     if (!pid)
         return nullptr;
-    auto* s = static_cast<WarpBlockSlot*>(hashmap_put(&g_block_map, pid));
+    auto* s = static_cast<WarpBlockSlot*>(pid_map_put(&g_block_map, pid));
     if (s)
         s->pid = pid;
     return s;
@@ -709,12 +738,17 @@ static WarpBlockSlot* warp_block_slot(uint32_t pid) {
 static WarpBlockSlot* warp_block_slot_by_phys(uint64_t phys) {
     hashmap_iter_t it;
     uint32_t key = 0;
+    WarpBlockSlot* found = nullptr;
+    ksync_spinlock_lock(&g_pid_maps_lock);
     for (auto* s = static_cast<WarpBlockSlot*>(hashmap_first(&g_block_map, &it, &key)); s;
          s = static_cast<WarpBlockSlot*>(hashmap_next(&it, &key))) {
-        if (s->phys == phys)
-            return s;
+        if (s->phys == phys) {
+            found = s;
+            break;
+        }
     }
-    return nullptr;
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    return found;
 }
 
 /* hostcalls.yaml `block_buffer_phys`: physical base of this process's private 8 KiB
@@ -1478,24 +1512,29 @@ struct WarpOverlayMap {
 };
 
 static WarpOverlayMap g_warp_overlay_maps[WARP_OVERLAY_MAP_SLOTS];
+/* Guards g_warp_overlay_maps, which every process shares and tracks, untracks and
+ * tests from any CPU. Leaf lock. */
+static ksync_spinlock_t g_overlay_lock;
 
 /* Registry of the linear-memory windows a process has had something mapped into, used
  * only to keep a later placement from overlapping an earlier one.  Three id namespaces
  * share it: bit 31 marks a region/block window
  * and bit 30 an xfer-buffer overlay.  The table is a fixed PROCESS_MAX_COUNT*32 array;
  * when it is full a new window is simply not recorded, so it can no longer be seen by
- * the overlap check.  Unsynchronised — safe only under the WARP single-CPU invariant.
+ * the overlap check.  Every access holds g_overlay_lock.
  *
  * warp_overlay_map_track: record or resize the (pid, id, offset) window.
  * warp_overlay_map_untrack: drop every window this pid holds under `id`.
- * warp_overlay_map_find: the first window matching (pid, id), or nullptr.
+ * warp_overlay_map_find: copy of the first window matching (pid, id); 1 if found.
  * warp_overlay_map_overlaps: whether [offset, offset+size) intersects any window of pid. */
 static void warp_overlay_map_track(uint32_t pid, uint32_t id, uint32_t offset, uint32_t size) {
     WarpOverlayMap* empty = nullptr;
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
         WarpOverlayMap* s = &g_warp_overlay_maps[i];
         if (s->valid && s->pid == pid && s->overlay_id == id && s->offset == offset) {
             s->size = size;
+            ksync_spinlock_unlock(&g_overlay_lock);
             return;
         }
         if (!empty && !s->valid)
@@ -1508,36 +1547,60 @@ static void warp_overlay_map_track(uint32_t pid, uint32_t id, uint32_t offset, u
         empty->size = size;
         empty->valid = 1;
     }
+    ksync_spinlock_unlock(&g_overlay_lock);
 }
 
 static void warp_overlay_map_untrack(uint32_t pid, uint32_t id) {
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i)
         if (g_warp_overlay_maps[i].valid && g_warp_overlay_maps[i].pid == pid &&
             g_warp_overlay_maps[i].overlay_id == id)
             g_warp_overlay_maps[i].valid = 0;
+    ksync_spinlock_unlock(&g_overlay_lock);
 }
 
-static WarpOverlayMap* warp_overlay_map_find(uint32_t pid, uint32_t id) {
+/* Drops every window `pid` holds, whatever its id. Called from the reap path:
+ * pids are never reused and the table is fixed-size, so an entry left behind by a
+ * dead process is a slot lost for the life of the kernel. */
+static void warp_overlay_map_release_pid(uint32_t pid) {
+    ksync_spinlock_lock(&g_overlay_lock);
+    for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i)
+        if (g_warp_overlay_maps[i].valid && g_warp_overlay_maps[i].pid == pid)
+            g_warp_overlay_maps[i].valid = 0;
+    ksync_spinlock_unlock(&g_overlay_lock);
+}
+
+static int warp_overlay_map_find(uint32_t pid, uint32_t id, WarpOverlayMap* out) {
+    int found = 0;
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
-        WarpOverlayMap* slot = &g_warp_overlay_maps[i];
+        const WarpOverlayMap* slot = &g_warp_overlay_maps[i];
         if (slot->valid && slot->pid == pid && slot->overlay_id == id) {
-            return slot;
+            *out = *slot;
+            found = 1;
+            break;
         }
     }
-    return nullptr;
+    ksync_spinlock_unlock(&g_overlay_lock);
+    return found;
 }
 
 static uint8_t warp_overlay_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size) {
     uint64_t a0 = offset, a1 = (uint64_t)offset + size;
+    uint8_t overlaps = 0;
+    ksync_spinlock_lock(&g_overlay_lock);
     for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i) {
         const WarpOverlayMap* s = &g_warp_overlay_maps[i];
         if (!s->valid || s->pid != pid || s->size == 0)
             continue;
         uint64_t b0 = s->offset, b1 = b0 + s->size;
-        if (a0 < b1 && b0 < a1)
-            return 1;
+        if (a0 < b1 && b0 < a1) {
+            overlaps = 1;
+            break;
+        }
     }
-    return 0;
+    ksync_spinlock_unlock(&g_overlay_lock);
+    return overlaps;
 }
 
 /* Bytes of linear memory WARP currently treats as live, read from the basedata field
@@ -2187,9 +2250,9 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
     if (phys_base == 0 || (phys_base & 0xFFFULL) != 0 || buf.size_bytes == 0)
         return (uint32_t)WASMOS_ERR_XFER_BUFFER_NO_BACKING;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
-    WarpOverlayMap* existing = warp_overlay_map_find(ctx->pid, track_id);
-    if (existing)
-        return existing->offset; /* idempotent */
+    WarpOverlayMap existing;
+    if (warp_overlay_map_find(ctx->pid, track_id, &existing))
+        return existing.offset; /* idempotent */
     uint64_t pages = ((uint64_t)buf.size_bytes + 0xFFFULL) >> 12;
     uint32_t window = (uint32_t)(pages << 12);
     int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, window);
@@ -2215,9 +2278,10 @@ static uint32_t warp_xfer_buffer_unmap(uint32_t buffer_id, void* ctx_) {
     if (!ctx || (int32_t)buffer_id <= 0)
         return (uint32_t)WASMOS_ERR_XFER_BUFFER_INVALID_CONTEXT;
     uint32_t track_id = WARP_XFER_TRACK_ID(buffer_id);
-    WarpOverlayMap* slot = warp_overlay_map_find(ctx->pid, track_id);
-    if (!slot)
+    WarpOverlayMap found;
+    if (!warp_overlay_map_find(ctx->pid, track_id, &found))
         return 0;
+    const WarpOverlayMap* slot = &found;
     uint64_t pages = ((uint64_t)slot->size + 0xFFFULL) / 0x1000ULL;
     uint8_t* base = warp_linear_mem_window(ctx, slot->offset, slot->size);
     if (base) {
@@ -2958,7 +3022,7 @@ static WarpCallContext* ctx_acquire(uint32_t pid) {
     if (pid == 0) {
         return nullptr;
     }
-    WarpCallContext* c = static_cast<WarpCallContext*>(hashmap_put(&g_ctx_map, pid));
+    WarpCallContext* c = static_cast<WarpCallContext*>(pid_map_put(&g_ctx_map, pid));
     if (!c) {
         return nullptr; // out of memory — genuine, not a fixed cap
     }
@@ -2985,7 +3049,7 @@ void* warp_context_for_pid(uint32_t pid) {
 }
 
 void warp_ctx_release_pid(uint32_t pid) {
-    (void)hashmap_remove(&g_ctx_map, pid);
+    pid_map_remove(&g_ctx_map, pid);
 }
 
 /* Release ALL per-pid WARP state for an exiting process.  Called once from
@@ -2998,20 +3062,19 @@ extern "C" void warp_release_pid(uint32_t pid) {
     if (pid == 0) {
         return;
     }
-    (void)hashmap_remove(&g_ctx_map, pid);
-    (void)hashmap_remove(&g_ipc_last_map, pid);
-    (void)hashmap_remove(&g_fs_peer_map, pid);
+    pid_map_remove(&g_ctx_map, pid);
+    pid_map_remove(&g_ipc_last_map, pid);
+    pid_map_remove(&g_fs_peer_map, pid);
     /* Reclaim the per-pid block buffer pages before dropping the slot, else the
      * 2 pages leak on every process exit. */
-    if (auto* bslot = static_cast<WarpBlockSlot*>(hashmap_get(&g_block_map, pid))) {
-        if (bslot->map_off) {
-            warp_overlay_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
-        }
+    if (auto* bslot = static_cast<WarpBlockSlot*>(pid_map_get(&g_block_map, pid))) {
         if (bslot->phys) {
             pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
         }
     }
-    (void)hashmap_remove(&g_block_map, pid);
+    pid_map_remove(&g_block_map, pid);
+    /* Every window record of the process: block buffer, regions, xfer overlays. */
+    warp_overlay_map_release_pid(pid);
     /* phys_map windows map firmware frames into the linear-memory slot; unmap them
      * before warp_heap_release decommits the slot, which frees every frame still
      * mapped there. */

@@ -160,6 +160,7 @@ static int thread_reset_slot(thread_t* thread) {
     thread->wait_target_pid = 0;
     thread->join_waiter_tid = 0;
     thread->detached = 0;
+    thread->collected = 0;
     thread->exit_status = 0;
     thread->wasm3_heap_bound_pid = 0;
     thread->sched_timeout_tick = 0;
@@ -264,6 +265,7 @@ int thread_spawn_in_owner(uint32_t owner_pid, const char* name, thread_state_t i
     slot->wait_target_pid = 0;
     slot->join_waiter_tid = 0;
     slot->detached = 0;
+    slot->collected = 0;
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
         (void)thread_reset_slot(slot);

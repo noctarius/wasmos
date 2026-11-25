@@ -1696,6 +1696,134 @@ static void s_a_kill_on_behalf_is_judged_by_its_requester(void) {
     drop_transition_target(parent);
 }
 
+static uint32_t g_wait_window_victim;
+
+static void kill_inside_the_wait_window(uint32_t target_pid) {
+    if (target_pid == g_wait_window_victim) {
+        (void)process_kill(target_pid, 7);
+    }
+}
+
+/* Regression: 2026-11-25-process-wait-lost-wakeup -- process_wait tested
+ * "is the child a zombie yet", then parked the caller and only afterwards named
+ * the child it waits for. A child that ended between the test and that store
+ * ran process_wake_waiters while the parent was not yet BLOCKED on it, found no
+ * waiter, and woke nobody; the parent then parked on a zombie for good. A
+ * syscall WAIT (the CLI collecting a foreground child on another CPU) hung
+ * forever on SMP. The kill is injected at exactly that point through
+ * process_test_wait_window. */
+static void s_a_child_ending_inside_the_wait_still_wakes_its_parent(void) {
+    uint32_t parent = 0;
+    uint32_t child = 0;
+    int32_t status = 0;
+
+    be_cpu(0);
+    if (process_spawn("wait-parent", idle_main, 0, &parent) != 0 ||
+        process_spawn_as(parent, "wait-child", idle_main, 0, &child) != 0) {
+        CHECK(0, "spawned a parent and its child");
+        return;
+    }
+    process_t* proc = process_get(parent);
+    thread_t* waiter = proc ? thread_get(proc->main_tid) : 0;
+    CHECK(waiter != 0, "the parent has a main thread");
+    if (!waiter) {
+        drop_transition_target(child);
+        drop_transition_target(parent);
+        return;
+    }
+
+    g_wait_window_victim = child;
+    process_test_wait_window = kill_inside_the_wait_window;
+    int rc = process_wait(proc, child, &status);
+    process_test_wait_window = 0;
+    g_wait_window_victim = 0;
+
+    process_t* ended = process_get(child);
+    CHECK(rc == 1, "the parent was parked to retry");
+    CHECK(ended && ended->state == PROCESS_STATE_ZOMBIE, "the child ended inside the window");
+    CHECK(waiter->state != THREAD_STATE_BLOCKED,
+          "the parent is runnable, not parked on a child that already ended");
+
+    rc = process_wait(proc, child, &status);
+    CHECK(rc == 0 && status == 7, "the retry collects the child's exit");
+    drop_transition_target(parent);
+}
+
+static process_run_result_t retire_at_once_worker(process_t* process, uint32_t tid, void* arg) {
+    (void)process;
+    (void)tid;
+    (void)arg;
+    return PROCESS_RUN_THREAD_EXITED;
+}
+
+static uint32_t g_join_window_victim;
+
+/* Retires the joined thread on the other CPUs while the joiner sits inside the
+ * window. CPU 0 is skipped: the joiner is its current thread. */
+static void retire_inside_the_join_window(uint32_t target_tid) {
+    if (target_tid != g_join_window_victim) {
+        return;
+    }
+    for (uint32_t round = 0; round < 256u; ++round) {
+        for (uint32_t cpu = 1; cpu < NCPU; ++cpu) {
+            be_cpu(cpu);
+            (void)process_schedule_once();
+        }
+        thread_t* t = thread_get(target_tid);
+        if (!t || t->state == THREAD_STATE_ZOMBIE) {
+            break;
+        }
+    }
+    be_cpu(0);
+}
+
+/* Regression: 2026-11-25-thread-join-lost-wakeup -- process_thread_join tested
+ * "has the target exited", then registered itself as the target's joiner and
+ * parked. A target that exited between the two found no joiner to wake, and the
+ * joiner parked on a zombie for good: a guest thread_join hung forever on SMP.
+ * The exit is injected at exactly that point through process_test_join_window. */
+static void s_a_thread_exiting_inside_the_join_still_wakes_its_joiner(void) {
+    uint32_t pid = 0;
+    uint32_t caller_tid = 0;
+    uint32_t target_tid = 0;
+    int32_t status = 0;
+
+    be_cpu(0);
+    if (process_spawn("join-owner", idle_main, 0, &pid) != 0) {
+        CHECK(0, "spawned the owner");
+        return;
+    }
+    if (process_thread_spawn_worker_internal(pid, "joiner", sibling_worker, 0, &caller_tid) != 0 ||
+        process_thread_spawn_worker_internal(
+            pid, "joined", retire_at_once_worker, 0, &target_tid) != 0) {
+        CHECK(0, "spawned the joiner and the joined thread");
+        drop_transition_target(pid);
+        return;
+    }
+    thread_t* caller = thread_get(caller_tid);
+    cpu_sched_remove_thread(caller);
+    cpu_local()->current_thread = caller;
+
+    g_join_window_victim = target_tid;
+    process_test_join_window = retire_inside_the_join_window;
+    int rc = process_thread_join(process_get(pid), target_tid, &status);
+    process_test_join_window = 0;
+    g_join_window_victim = 0;
+
+    /* Either the join saw the exit and collected it at once, or it parked and
+     * was woken; what must never happen is a joiner parked on a thread that
+     * already exited. */
+    if (rc == 1) {
+        CHECK(caller->state != THREAD_STATE_BLOCKED,
+              "the joiner is runnable, not parked on a thread that already exited");
+        rc = process_thread_join(process_get(pid), target_tid, &status);
+    }
+    CHECK(rc == 0, "the join collects the exit");
+    CHECK(thread_get(target_tid) == 0, "and releases the thread's slot");
+    cpu_local()->current_thread = 0;
+    drop_transition_target(pid);
+}
+
 /* The child dies before it ever latches READY: the spawner hears only of the
  * exit, and the READY record is given back rather than leaked. */
 static void s_a_child_that_dies_first_reports_only_its_exit(void) {
@@ -1761,6 +1889,8 @@ int main(void) {
     s_a_child_that_dies_first_reports_only_its_exit();
     s_ready_carries_the_liveness_endpoint();
     s_a_kill_on_behalf_is_judged_by_its_requester();
+    s_a_child_ending_inside_the_wait_still_wakes_its_parent();
+    s_a_thread_exiting_inside_the_join_still_wakes_its_joiner();
     s_an_unwatched_process_owes_nothing();
 
     s_healthy_owner_still_runs_and_requeues();

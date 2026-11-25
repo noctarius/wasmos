@@ -480,12 +480,22 @@ struct WarpPidConfig {
  * warp_heap_release (driven from warp_release_pid in warp/link.cpp).  Lazily
  * initialized on first configure since shim.cpp has no init entry point. */
 static hashmap_t g_pid_config_map;
+/* Guards g_pid_config_map's lazy init and its bucket array: processes on
+ * different CPUs configure, look up and release their own pids concurrently,
+ * and an insert that rehashes frees the array a concurrent lookup walks. A
+ * returned WarpPidConfig stays valid without the lock -- nodes never move and a
+ * pid's entry is removed only by its own reap (warp_heap_release). */
+static ksync_spinlock_t g_pid_config_lock;
 static uint8_t g_env_initialized = 0;
 
 static WarpPidConfig* pid_config_get(uint32_t pid) {
-    if (g_pid_config_map.bucket_count == 0)
-        return nullptr;
-    return static_cast<WarpPidConfig*>(hashmap_get(&g_pid_config_map, pid));
+    WarpPidConfig* cfg = nullptr;
+    ksync_spinlock_lock(&g_pid_config_lock);
+    if (g_pid_config_map.bucket_count != 0) {
+        cfg = static_cast<WarpPidConfig*>(hashmap_get(&g_pid_config_map, pid));
+    }
+    ksync_spinlock_unlock(&g_pid_config_lock);
+    return cfg;
 }
 
 } // namespace
@@ -605,6 +615,7 @@ extern "C" {
 void warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size) {
     if (pid == 0)
         return;
+    ksync_spinlock_lock(&g_pid_config_lock);
     if (!g_env_initialized) {
         vb::WasmModule::initEnvironment(warp_kmalloc, warp_krealloc, warp_kfree);
         g_env_initialized = 1;
@@ -613,6 +624,7 @@ void warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
         hashmap_init(&g_pid_config_map, sizeof(WarpPidConfig), 64);
     }
     WarpPidConfig* cfg = static_cast<WarpPidConfig*>(hashmap_put(&g_pid_config_map, pid));
+    ksync_spinlock_unlock(&g_pid_config_lock);
     if (!cfg)
         return;
     cfg->heap_size = initial_size;
@@ -661,7 +673,9 @@ void warp_heap_release(uint32_t pid) {
      * sync teardown already freed it).  Must run BEFORE the cfg is removed — it
      * reads va_base/committed_pages from the cfg to walk-unmap + pfa_free. */
     warp_linmem_slot_free_pid(pid);
+    ksync_spinlock_lock(&g_pid_config_lock);
     (void)hashmap_remove(&g_pid_config_map, pid);
+    ksync_spinlock_unlock(&g_pid_config_lock);
 }
 
 uint64_t warp_heap_committed_bytes(uint32_t pid) {

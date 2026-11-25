@@ -586,6 +586,16 @@ int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
  * caller must not enqueue/dispatch. NOT "did the thread's state change". */
 int process_test_set_ready(process_t* proc, struct thread* thread);
 int process_test_set_running(process_t* proc, struct thread* thread);
+
+/* Called by process_wait after its "already a zombie?" test and before it parks
+ * the caller, with the pid being waited for. NULL (the default) calls nothing.
+ * A target that ends inside this window is the interleaving the wait/wake
+ * handshake exists to absorb; on a host it is otherwise unreachable, because the
+ * window lies inside one call. */
+extern void (*process_test_wait_window)(uint32_t target_pid);
+/* The same window in process_thread_join: after its "already a zombie?" test,
+ * before it registers as the target's joiner and parks. */
+extern void (*process_test_join_window)(uint32_t target_tid);
 #endif
 
 #endif

@@ -5,8 +5,18 @@
 #include "paging.h"
 #include "klog.h"
 #include "physmem.h"
+#include "sync/spinlock.h"
 #include "memory.h"
 #include <stdint.h>
+
+/* Serialises every change to the page tables. The kernel half of every root
+ * shares its intermediate tables, so two CPUs mapping into the same absent
+ * range would each allocate a table and install it in the same entry, and the
+ * second install discards the first CPU's mapping (and leaks its frame). Leaf
+ * lock apart from the physical frame allocator, which never calls back into
+ * paging. Lookups (paging_virt_to_phys*) read without it: tables are only ever
+ * installed under it, never freed while shared. */
+static ksync_spinlock_t g_paging_lock;
 
 #define PAGE_SIZE_4K 0x1000ULL
 #define PAGE_SIZE_2M 0x200000ULL
@@ -443,7 +453,7 @@ __attribute__((naked)) int paging_switch_root(uint64_t root_table) {
  * success, -1 on a NULL out pointer, before paging_init, on frame exhaustion, or
  * when the assembled root fails paging_verify_user_root_impl (in which case the
  * frames taken here are released again). */
-int paging_create_address_space(uint64_t* out_root_table) {
+static int paging_create_address_space_locked(uint64_t* out_root_table) {
     if (!out_root_table || !g_pml4_phys) {
         return -1;
     }
@@ -482,6 +492,13 @@ int paging_create_address_space(uint64_t* out_root_table) {
     }
     *out_root_table = root;
     return 0;
+}
+
+int paging_create_address_space(uint64_t* out_root_table) {
+    ksync_spinlock_lock(&g_paging_lock);
+    int rc = paging_create_address_space_locked(out_root_table);
+    ksync_spinlock_unlock(&g_paging_lock);
+    return rc;
 }
 
 /* Frees the page-table STRUCTURE owned by a user root: every PT and PD below
@@ -641,7 +658,8 @@ int paging_clone_low_slot_in_root(uint64_t root_table) {
  *
  * Returns 0 on success, -1 on a zero root, a flags/VA user-bit mismatch, a W^X
  * violation, or table-frame exhaustion. */
-int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags) {
+static int paging_map_4k_in_root_locked(uint64_t root_table, uint64_t virt, uint64_t phys,
+                                        uint64_t flags) {
     if (!root_table) {
         return -1;
     }
@@ -714,6 +732,13 @@ int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uin
     pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
     invlpg(virt);
     return 0;
+}
+
+int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags) {
+    ksync_spinlock_lock(&g_paging_lock);
+    int rc = paging_map_4k_in_root_locked(root_table, virt, phys, flags);
+    ksync_spinlock_unlock(&g_paging_lock);
+    return rc;
 }
 
 /* Resolve the physical address backing `virt` in `root_table` (0 = current
@@ -821,7 +846,7 @@ int paging_strip_low_slot_in_root(uint64_t root_table) {
  *
  * Returns 0 on success, -1 for a zero root or when any level along the walk,
  * including the leaf, is not present. */
-int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
+static int paging_unmap_4k_in_root_locked(uint64_t root_table, uint64_t virt) {
     if (!root_table) {
         return -1;
     }
@@ -855,6 +880,13 @@ int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
     pt[pt_idx] = 0;
     invlpg(virt);
     return 0;
+}
+
+int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
+    ksync_spinlock_lock(&g_paging_lock);
+    int rc = paging_unmap_4k_in_root_locked(root_table, virt);
+    ksync_spinlock_unlock(&g_paging_lock);
+    return rc;
 }
 
 /* paging_map_4k_in_root against the executing CPU's live CR3, so on a user CR3

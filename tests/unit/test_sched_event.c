@@ -550,6 +550,47 @@ static void test_arm_during_scan_is_not_lost(void) {
     CHECK(g_last_woken == g_hook_thread, "and it is the thread that armed it");
 }
 
+extern void (*sched_event_test_publish_window)(void);
+
+/* Regression: 2026-11-25-timeout-hint-raised-past-an-arm -- sched_timeout_check
+ * re-reads the arm generation and only then publishes its recomputed hint. An arm
+ * landing between the two, with a deadline above the hint the scan started from,
+ * neither moved the hint (an arm only lowers it) nor was seen by the re-check, so
+ * the publish raised the hint above that deadline. The fast path then skipped every
+ * scan until the hint's own deadline, and the timed wait fired late or, with no
+ * other deadline armed, never. The arm is injected exactly there through
+ * sched_event_test_publish_window. */
+static void arm_in_publish_window(void) {
+    sched_event_test_publish_window = NULL; /* once */
+    arm_during_scan();
+}
+
+static void test_arm_before_the_publish_is_not_lost(void) {
+    reset();
+    sched_event_t ev, far_ev;
+    sched_event_init(&ev, SCHED_EVENT_TYPE_IPC);
+    sched_event_init(&far_ev, SCHED_EVENT_TYPE_IPC);
+    sched_event_init(&g_hook_ev, SCHED_EVENT_TYPE_IPC);
+    thread_t* due = mk();
+    block_on(&ev, due, 10); /* deadline 110: forces a scan at 120 */
+    thread_t* far = mk();
+    block_on(&far_ev, far, 100); /* deadline 200: what the scan would publish */
+
+    g_hook_thread = mk();
+    sched_event_test_publish_window = arm_in_publish_window;
+
+    g_now = 120;
+    sched_timeout_check(); /* fires `due`; the hook arms 125 before the publish */
+    sched_event_test_publish_window = NULL;
+
+    g_now = 130;
+    g_wake_calls = 0;
+    g_last_woken = NULL;
+    sched_timeout_check();
+    CHECK(g_wake_calls == 1, "the deadline armed before the publish fires on time");
+    CHECK(g_last_woken == g_hook_thread, "and it is the thread that armed it");
+}
+
 /* Regression: 2026-11-17-pm-poll-timeout-lost -- sched_event_wait arms a thread's
  * deadline and only afterwards marks it BLOCKED. A scan on another CPU inside that
  * window read the RUNNING thread's deadline as stale and cleared it, so the thread
@@ -708,6 +749,7 @@ int main(void) {
          test_wait_list_survives_interleaved_waits_and_wakes},
         {"V18 a deadline armed before the block survives a scan",
          test_deadline_armed_before_the_block_survives_a_scan},
+        {"V19 an arm before the publish is not lost", test_arm_before_the_publish_is_not_lost},
     };
 
     /* Randomized order: a case that leaks state must not be able to make its

@@ -5,6 +5,7 @@
  * Each case returns 0 to pass or __LINE__ to fail (test_shuffle.h). */
 #include "capability.h"
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -148,6 +149,52 @@ static int test_a_region_the_kernel_cannot_honour_refuses_the_profile(void) {
     return 0;
 }
 
+#define SOAK_THREADS 4u
+#define SOAK_ROUNDS 20000u
+
+static uint32_t g_soak_lost;
+
+/* One "CPU": grants a context of its own, checks it, and releases it, over and
+ * over. Context ids are disjoint between threads, so any answer other than
+ * "granted" while the context is live means another CPU's record took or
+ * clobbered this one's slot. */
+static void* soak_cpu(void* arg) {
+    uint32_t base = 0x1000u + (uint32_t)(uintptr_t)arg * 0x100000u;
+    for (uint32_t i = 0; i < SOAK_ROUNDS; ++i) {
+        uint32_t ctx = base + i;
+        if (grant(ctx, "irq.route") != 0 || !capability_has(ctx, CAP_IRQ_ROUTE)) {
+            __atomic_fetch_add(&g_soak_lost, 1u, __ATOMIC_RELAXED);
+        }
+        capability_release_context(ctx);
+    }
+    return NULL;
+}
+
+/* Regression: 2026-11-25-capability-table-unlocked -- the capability table had
+ * no lock, while grants and releases (spawn and reap, from the process manager
+ * and the reaping CPU) and checks (every hardware host call) run on any CPU.
+ * Two concurrent grants could claim the same free slot (list_alloc's
+ * test-then-set), and a release zeroed a record another CPU was reading, so a
+ * driver's own grant could vanish or answer for a different context. */
+static int test_concurrent_grants_keep_their_own_records(void) {
+    pthread_t cpus[SOAK_THREADS];
+    capability_init();
+    g_soak_lost = 0;
+    for (uint32_t i = 0; i < SOAK_THREADS; ++i) {
+        if (pthread_create(&cpus[i], NULL, soak_cpu, (void*)(uintptr_t)i) != 0) {
+            return __LINE__;
+        }
+    }
+    for (uint32_t i = 0; i < SOAK_THREADS; ++i) {
+        pthread_join(cpus[i], NULL);
+    }
+    if (g_soak_lost != 0) {
+        printf("  %u grants lost or misattributed\n", (unsigned)g_soak_lost);
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_released_context_holds_nothing),
@@ -155,6 +202,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_regions_resolve_by_position_and_kind),
         WASMOS_TEST_CASE(test_region_refusals_name_their_reason),
         WASMOS_TEST_CASE(test_a_region_the_kernel_cannot_honour_refuses_the_profile),
+        WASMOS_TEST_CASE(test_concurrent_grants_keep_their_own_records),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

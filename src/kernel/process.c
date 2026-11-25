@@ -48,6 +48,12 @@ static process_t g_processes[PROCESS_MAX_COUNT];
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
 static ksync_spinlock_t g_process_table_lock;
+/* Serialises the hand-off of an exiting thread between its own exit path, its
+ * joiner and a detach: the ZOMBIE transition, thread_t::join_waiter_tid,
+ * ::detached and ::collected are only read and written under it, so exactly one
+ * party collects a thread and a joiner that parks is always seen by the exit.
+ * Lock order: this lock, then the thread-table and run-queue locks. */
+static ksync_spinlock_t g_thread_join_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see cpu_local.h. */
 static process_t* g_idle_process;
 /* in_context_switch is per-CPU (cpu_local_t), not global: a global flag would
@@ -337,7 +343,10 @@ static process_t* process_owner_for_thread(thread_t* thread);
 static thread_t* process_thread_for_transition(process_t* proc);
 static thread_t* process_first_owner_ready_thread(process_t* proc);
 static process_context_t* process_sched_ctx_for_thread(process_t* proc, thread_t* thread);
-static void process_wake_thread_joiner(process_t* owner, thread_t* exited);
+static void process_wake_thread_joiner(process_t* owner, uint32_t waiter_tid);
+static uint32_t process_retire_thread(process_t* proc, thread_t* thread);
+static int process_release_collected_locked(uint32_t tid);
+static int process_release_collected(uint32_t tid);
 static void process_reap(process_t* proc);
 static void process_sched_invariant_fail(const char* msg, uint64_t a, uint64_t b);
 static void process_set_blocked(process_t* proc, thread_t* thread, process_block_reason_t reason,
@@ -1047,10 +1056,15 @@ static process_t* process_find_by_context_internal(uint32_t context_id) {
     return 0;
 }
 
+/* Wakes every thread parked in process_wait on target_pid. The exit path calls
+ * it after publishing the target's ZOMBIE state; the fence pairs with the one in
+ * process_wait (see there), so a waiter that parks concurrently is either seen
+ * here or sees the exit itself. */
 static void process_wake_waiters(uint32_t target_pid) {
     if (target_pid == 0) {
         return;
     }
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t* proc = &g_processes[i];
         uint8_t woke_any = 0;
@@ -1071,10 +1085,10 @@ static void process_wake_waiters(uint32_t target_pid) {
             if (waiter->block_reason != THREAD_BLOCK_WAIT_PROCESS) {
                 continue;
             }
-            if (waiter->wait_target_pid != target_pid) {
+            if (__atomic_load_n(&waiter->wait_target_pid, __ATOMIC_RELAXED) != target_pid) {
                 continue;
             }
-            waiter->wait_target_pid = 0;
+            __atomic_store_n(&waiter->wait_target_pid, 0u, __ATOMIC_RELAXED);
             woke_any = 1;
             int runnable = 1;
             /* The fast path marks the waiter READY directly, without a process
@@ -1194,15 +1208,20 @@ static uint8_t process_has_waiters(uint32_t target_pid) {
  * zero is what gates process_mark_exited, so a lost update marks a process exited
  * early or never. The `if (c > 0) c--;` these sites used was both non-atomic and
  * a check-then-act; a CAS loop is what expresses "decrement unless already zero"
- * without either flaw. */
-static void process_count_dec(uint32_t* counter) {
+ * without either flaw.
+ *
+ * Returns the value BEFORE the decrement, 0 when there was nothing to take. A
+ * caller deciding "was that the last one" must use this return and not a second
+ * load: two concurrent decrements of 2 would both load 0 afterwards. */
+static uint32_t process_count_dec(uint32_t* counter) {
     uint32_t cur = __atomic_load_n(counter, __ATOMIC_ACQUIRE);
     while (cur != 0u) {
         if (__atomic_compare_exchange_n(
                 counter, &cur, cur - 1u, 1, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            return;
+            return cur;
         }
     }
+    return 0u;
 }
 
 static void process_reap_claim(process_t* proc) {
@@ -1374,6 +1393,7 @@ process_context_t* cpu_local_sched_ctx(void) {
 void process_init(void) {
     g_next_pid = 1;
     ksync_spinlock_init(&g_process_table_lock);
+    ksync_spinlock_init(&g_thread_join_lock);
     cpu_local()->last_index = 0;
     cpu_local()->current_pid = 0;
     cpu_local()->need_resched = 0;
@@ -2228,10 +2248,30 @@ int process_wait(process_t* process, uint32_t target_pid, int32_t* out_exit_stat
         return 0;
     }
 
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    if (process_test_wait_window) {
+        process_test_wait_window(target_pid);
+    }
+#endif
+    /* Park, then look again. The waiter names its child BEFORE it parks, and
+     * re-reads the child's state AFTER, with a full fence between; the exit path
+     * (process_mark_exited -> process_wake_waiters) publishes ZOMBIE and fences
+     * before it scans for waiters. Of the two, at least one sees the other: the
+     * scan finds this thread BLOCKED on target_pid, or the re-read below finds
+     * the child gone and runs the same wake itself. Both may happen; the wake is
+     * idempotent (thread_wake_if_blocked lets one caller win). Testing ZOMBIE
+     * only before parking loses the wake of a child that ends in between. */
     thread_t* thread = process_thread_for_transition(process);
-    process_set_blocked(process, thread, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_PROCESS);
     if (thread) {
-        thread->wait_target_pid = target_pid;
+        __atomic_store_n(&thread->wait_target_pid, target_pid, __ATOMIC_RELAXED);
+    }
+    process_set_blocked(process, thread, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_PROCESS);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    process_state_t now = __atomic_load_n(&target->state, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&target->pid, __ATOMIC_RELAXED) != target_pid ||
+        now == PROCESS_STATE_ZOMBIE || now == PROCESS_STATE_REAPING || now == PROCESS_STATE_DEAD ||
+        now == PROCESS_STATE_UNUSED) {
+        process_wake_waiters(target_pid);
     }
     return 1;
 }
@@ -2262,23 +2302,43 @@ int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_ex
     if (target->owner_pid != process->pid || caller->owner_pid != process->pid) {
         return WASMOS_ERR_THREAD_NOT_OWNER;
     }
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    if (process_test_join_window) {
+        process_test_join_window(target_tid);
+    }
+#endif
+    /* The test of the target's state and the registration as its joiner are one
+     * step under g_thread_join_lock, which process_retire_thread also takes to
+     * publish ZOMBIE and read the joiner: a target cannot exit between them. */
+    ksync_spinlock_lock(&g_thread_join_lock);
+    if (target->tid != target_tid || target->collected) {
+        /* Released, or collected by another joiner, since the lookup above. */
+        ksync_spinlock_unlock(&g_thread_join_lock);
+        return WASMOS_ERR_THREAD_NOT_FOUND;
+    }
     if (target->detached) {
+        ksync_spinlock_unlock(&g_thread_join_lock);
         return WASMOS_ERR_THREAD_JOIN_FAILED;
     }
     if (target->state == THREAD_STATE_ZOMBIE) {
         if (out_exit_status) {
             *out_exit_status = target->exit_status;
         }
-        thread_reap(target->tid);
+        target->collected = 1;
         process_count_dec(&process->thread_count);
+        /* A refusal leaves the release to the exiting dispatch's dispatch_done. */
+        (void)process_release_collected_locked(target_tid);
+        ksync_spinlock_unlock(&g_thread_join_lock);
         return 0;
     }
     if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
+        ksync_spinlock_unlock(&g_thread_join_lock);
         return WASMOS_ERR_THREAD_BUSY;
     }
     target->join_waiter_tid = caller_tid;
     process_set_blocked(process, caller, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_THREAD);
     caller->wait_target_pid = 0;
+    ksync_spinlock_unlock(&g_thread_join_lock);
     return 1;
 }
 
@@ -2310,14 +2370,26 @@ int process_thread_detach(process_t* process, uint32_t target_tid) {
     if (target->owner_pid != process->pid) {
         return WASMOS_ERR_THREAD_NOT_OWNER;
     }
+    ksync_spinlock_lock(&g_thread_join_lock);
+    if (target->tid != target_tid || (target->collected && !target->detached)) {
+        /* Released, or collected by its joiner, since the lookup above. */
+        ksync_spinlock_unlock(&g_thread_join_lock);
+        return WASMOS_ERR_THREAD_NOT_FOUND;
+    }
     if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
+        ksync_spinlock_unlock(&g_thread_join_lock);
         return WASMOS_ERR_THREAD_BUSY;
     }
     target->detached = 1;
-    if (target->state == THREAD_STATE_ZOMBIE) {
-        thread_reap(target->tid);
+    /* Under the lock, exactly one of this and process_retire_thread sees both
+     * `detached` and ZOMBIE, and only that one collects. */
+    if (target->state == THREAD_STATE_ZOMBIE && !target->collected) {
+        target->collected = 1;
         process_count_dec(&process->thread_count);
+        /* A refusal leaves the release to the exiting dispatch's dispatch_done. */
+        (void)process_release_collected_locked(target_tid);
     }
+    ksync_spinlock_unlock(&g_thread_join_lock);
     return 0;
 }
 
@@ -2876,15 +2948,10 @@ static int process_schedule_once_impl(void) {
     }
 
     if (result == PROCESS_RUN_EXITED) {
-        uint8_t reap_detached = 0;
-        uint32_t exited_tid = thread->tid;
         if (thread->is_kernel_worker && thread->tid != proc->main_tid) {
-            thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
-            thread_set_exit_status(thread->tid, proc->exit_status);
-            process_wake_thread_joiner(proc, thread);
-            reap_detached = thread->detached;
-            process_count_dec(&proc->live_thread_count);
-            if (__atomic_load_n(&proc->live_thread_count, __ATOMIC_ACQUIRE) > 0) {
+            /* Released at dispatch_done if collected by then. */
+            reap_tid = thread->tid;
+            if (process_retire_thread(proc, thread) > 1u) {
                 thread_t* next = process_first_owner_ready_thread(proc);
                 if (next && next->state != THREAD_STATE_ZOMBIE && process_set_ready(proc, next)) {
                     /* Duplicate enqueues are dropped by the on_rq claim. */
@@ -2894,23 +2961,15 @@ static int process_schedule_once_impl(void) {
         } else {
             process_mark_exited(proc, proc->exit_status, proc->exit_reason);
         }
-        if (reap_detached) {
-            /* Deferred to dispatch_done: exited_tid is the thread this dispatch
-             * holds the claim on, so reaping it here refuses every time and the
-             * slot stays behind while thread_count is decremented. */
-            reap_tid = exited_tid;
-            process_count_dec(&proc->thread_count);
-        }
     } else if (result == PROCESS_RUN_THREAD_EXITED) {
         thread_t* next = 0;
-        uint8_t reap_detached = 0;
-        uint32_t exited_tid = thread->tid;
-        thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
-        thread_set_exit_status(thread->tid, proc->exit_status);
-        process_wake_thread_joiner(proc, thread);
-        reap_detached = thread->detached;
-        process_count_dec(&proc->live_thread_count);
-        if (__atomic_load_n(&proc->live_thread_count, __ATOMIC_ACQUIRE) == 0) {
+        /* Released at dispatch_done if collected by then. */
+        reap_tid = thread->tid;
+        /* 0 as well as 1: a count already at 0 means a kill marked the owner
+         * exited first, and marking again is the idempotent completion. Only the
+         * retirement that took the count from 1 to 0 -- not every one that sees
+         * 0 afterwards -- may decide it was the last. */
+        if (process_retire_thread(proc, thread) <= 1u) {
             process_mark_exited(proc, proc->exit_status, proc->exit_reason);
         } else {
             next = process_first_owner_ready_thread(proc);
@@ -2927,13 +2986,6 @@ static int process_schedule_once_impl(void) {
                  * there is nothing to block. */
                 (void)process_force_transit(proc, PROCESS_STATE_BLOCKED);
             }
-        }
-        if (reap_detached) {
-            /* Deferred to dispatch_done: exited_tid is the thread this dispatch
-             * holds the claim on, so reaping it here refuses every time and the
-             * slot stays behind while thread_count is decremented. */
-            reap_tid = exited_tid;
-            process_count_dec(&proc->thread_count);
         }
     } else if (result == PROCESS_RUN_BLOCKED) {
         /* The thread is already in BLOCKED state
@@ -3090,13 +3142,15 @@ dispatch_done:
          * reader is meant to act on.  The count reaches a reader through the kpanic
          * counter dump instead. */
     }
-    /* Now that the claim is gone, a detached thread this dispatch retired can be
-     * released. Its refusal path is not expected to trigger here -- nothing else
-     * holds this slot -- so a refusal is reported rather than retried. */
-    if (reap_tid != 0 && !thread_reap(reap_tid)) {
+    /* Now that the claim is gone, a worker this dispatch retired can be released
+     * if it has been collected -- detached, or joined on another CPU while this
+     * claim was still held. A joinable thread nobody has joined yet stays a
+     * ZOMBIE for its joiner. A refusal here is not expected -- nothing else
+     * holds this slot -- so it is reported rather than retried. */
+    if (reap_tid != 0 && process_release_collected(reap_tid) < 0) {
         uint32_t rn = sched_debug_note(SCHED_DEBUG_THREAD_REAP_REFUSED);
         if ((rn & (rn - 1u)) == 0u) {
-            serial_printf_unlocked("[sched] detached reap refused tid=%u (n=%u)\n",
+            serial_printf_unlocked("[sched] collected reap refused tid=%u (n=%u)\n",
                                    (unsigned)reap_tid,
                                    (unsigned)(rn + 1u));
         }
@@ -3831,6 +3885,9 @@ static int process_set_running(process_t* proc, thread_t* thread) {
 }
 
 #ifdef WASMOS_PROCESS_TEST_SEAMS
+void (*process_test_wait_window)(uint32_t target_pid);
+void (*process_test_join_window)(uint32_t target_tid);
+
 /* Host-test entries; see process.h.  Forwarding only. */
 int process_test_set_ready(process_t* proc, thread_t* thread) {
     return process_set_ready(proc, thread);
@@ -3841,17 +3898,11 @@ int process_test_set_running(process_t* proc, thread_t* thread) {
 }
 #endif
 
-static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
+static void process_wake_thread_joiner(process_t* owner, uint32_t waiter_tid) {
     thread_t* waiter = 0;
-    uint32_t waiter_tid = 0;
-    if (!owner || !exited) {
+    if (!owner || waiter_tid == 0) {
         return;
     }
-    waiter_tid = exited->join_waiter_tid;
-    if (waiter_tid == 0) {
-        return;
-    }
-    exited->join_waiter_tid = 0;
     waiter = thread_get(waiter_tid);
     if (!waiter) {
         return;
@@ -3865,4 +3916,62 @@ static void process_wake_thread_joiner(process_t* owner, thread_t* exited) {
     if (process_set_ready(owner, waiter) && sched_wake_claim_enqueue(waiter)) {
         sched_enqueue_thread(waiter);
     }
+}
+
+/* Retires `thread` (a worker that returned from its entry): records its exit
+ * status, makes it a ZOMBIE, collects it when it is detached, and wakes its
+ * joiner. Returns live_thread_count as it was BEFORE this retirement, so 1 means
+ * this was the owner's last live thread.
+ *
+ * The slot is NOT released here: this dispatch still holds its claim. The caller
+ * passes the tid to process_release_collected once the claim is dropped, which
+ * releases it if it has been collected by then -- by the detach check below, or
+ * by a joiner or detach on another CPU that lost the race for the slot. */
+static uint32_t process_retire_thread(process_t* proc, thread_t* thread) {
+    uint32_t joiner = 0;
+    /* The status is published before ZOMBIE: a joiner that sees ZOMBIE reads it
+     * at once. */
+    thread_set_exit_status(thread->tid, proc->exit_status);
+    ksync_spinlock_lock(&g_thread_join_lock);
+    thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
+    if (thread->detached && !thread->collected) {
+        thread->collected = 1;
+        process_count_dec(&proc->thread_count);
+    }
+    joiner = thread->join_waiter_tid;
+    thread->join_waiter_tid = 0;
+    ksync_spinlock_unlock(&g_thread_join_lock);
+    process_wake_thread_joiner(proc, joiner);
+    return process_count_dec(&proc->live_thread_count);
+}
+
+/* Releases the slot of a collected ZOMBIE thread, by tid (tids are never reused,
+ * so a slot already released and taken again answers "not found"). Returns 1 if
+ * the slot is gone, 0 if the thread is not collected (its joiner releases it
+ * later), -1 if it is collected but a dispatch claim still holds the slot.
+ *
+ * Collection and release are separate because the thread's own dispatch holds
+ * the slot claim until its dispatch_done: a joiner or detach on another CPU can
+ * collect the thread inside that window, and its release then refuses. Both the
+ * collector (under the lock, right after collecting) and the exiting dispatch
+ * (after dropping its claim) call this; because the collector tries under the
+ * same lock the dispatch takes after its claim is gone, one of the two always
+ * finds the claim free. */
+static int process_release_collected_locked(uint32_t tid) {
+    thread_t* t = thread_get(tid);
+    if (!t) {
+        return 1;
+    }
+    if (!t->collected) {
+        return 0;
+    }
+    return thread_reap(tid) ? 1 : -1;
+}
+
+static int process_release_collected(uint32_t tid) {
+    int released = 0;
+    ksync_spinlock_lock(&g_thread_join_lock);
+    released = process_release_collected_locked(tid);
+    ksync_spinlock_unlock(&g_thread_join_lock);
+    return released;
 }

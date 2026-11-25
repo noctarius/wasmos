@@ -99,7 +99,12 @@ typedef struct thread {
     uint32_t join_waiter_tid; /* tid joining this thread; 0 = none, so a second joiner
                                * can be refused with WASMOS_ERR_THREAD_BUSY */
     uint8_t detached;         /* unjoinable; reaped automatically on exit */
-    int32_t exit_status;      /* valid from ZOMBIE onward */
+    /* 1 once a ZOMBIE's exit has been taken -- by its joiner, by a detach, or by
+     * its own exit when detached -- and its thread_count share given back. The
+     * slot may still await release (process_release_collected). join_waiter_tid,
+     * detached and collected are accessed under process.c's g_thread_join_lock. */
+    uint8_t collected;
+    int32_t exit_status; /* valid from ZOMBIE onward */
     /* Saved per-CPU wasm3 heap binding, carried across a block so a thread that
      * resumes on a DIFFERENT CPU does not inherit that CPU's stale binding. */
     uint32_t wasm3_heap_bound_pid;

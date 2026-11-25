@@ -474,6 +474,12 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
     wasm32 = [
         "--target=wasm32-unknown-unknown",
         "-Oz",
+        # Threads-proposal atomics (both runtimes execute the load/store/fence
+        # subset): guest acquire/release accesses become sequentially consistent
+        # atomic accesses instead of plain ones that order nothing on a weakly
+        # ordered CPU. Atomic read-modify-write ops are NOT executed by either
+        # runtime; a module that emits one fails to compile when spawned.
+        "-matomics",
         "-nostdlib",
         "-ffreestanding",
         "-fno-builtin",

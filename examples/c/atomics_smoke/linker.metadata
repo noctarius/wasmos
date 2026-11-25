@@ -1,0 +1,19 @@
+version = 1
+# Not AOT-compiled: the module uses the 0xFE (atomics) opcodes, and an AOT
+# compile happens at build time, where a runtime that cannot compile them would
+# fail the build instead of the app. The JIT compiles it at load time.
+aot = false
+
+[package]
+name = "atomics-smoke"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

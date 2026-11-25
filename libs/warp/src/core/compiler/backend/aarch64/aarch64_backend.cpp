@@ -3122,6 +3122,19 @@ StackElement Backend::executeLinearMemoryLoad(OPCode const opcode, uint32_t cons
   return targetRegElem.elem;
 }
 
+// TODO: lower threads-proposal atomics on this backend (alignment trap plus barriers); modules built with
+// -matomics are rejected at compile time until then.
+void Backend::emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2) const {
+  static_cast<void>(addrElem);
+  static_cast<void>(offset);
+  static_cast<void>(sizeLog2);
+  throw FeatureNotSupportedException(ErrorCode::Not_implemented);
+}
+
+void Backend::executeAtomicFence() const {
+  throw FeatureNotSupportedException(ErrorCode::Not_implemented);
+}
+
 void Backend::executeLinearMemoryStore(OPCode const opcode, uint32_t const offset) {
   assert(moduleInfo_.hasMemory && "Memory not defined");
   // coverity[autosar_cpp14_a8_5_2_violation]

@@ -2573,6 +2573,37 @@ StackElement Backend::executeLinearMemoryLoad(OPCode const opcode, uint32_t cons
   return targetRegElem.elem;
 }
 
+void Backend::emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2) {
+  uint32_t const alignMask{(1_U32 << sizeLog2) - 1_U32};
+  if (alignMask == 0U) {
+    return;
+  }
+  if (addrElem->getBaseType() == StackType::CONSTANT) {
+    if (((addrElem->data.constUnion.u32 + offset) & alignMask) != 0U) {
+      as_.TRAP(TrapCode::UNALIGNED_ATOMIC);
+    }
+    return;
+  }
+  // Only the low bits of the effective address decide alignment, so the offset contributes offset & alignMask. A
+  // nonzero contribution is added to a writable copy of the address and subtracted again, which leaves the operand
+  // unchanged on the non-trapping path.
+  uint32_t const offsetBits{offset & alignMask};
+  RegAllocTracker regAllocTracker{};
+  REG const addrReg{common_.liftToRegInPlaceProt(*addrElem, offsetBits != 0U, regAllocTracker).reg};
+  if (offsetBits != 0U) {
+    as_.INSTR(ADD_rm32_imm8sx).setR4RM(addrReg).setImm8(static_cast<uint8_t>(offsetBits))();
+  }
+  as_.INSTR(TEST_rm32_imm32).setR4RM(addrReg).setImm32(alignMask)();
+  as_.cTRAP(TrapCode::UNALIGNED_ATOMIC, CC::NE);
+  if (offsetBits != 0U) {
+    as_.INSTR(SUB_rm32_imm8sx).setR4RM(addrReg).setImm8(static_cast<uint8_t>(offsetBits))();
+  }
+}
+
+void Backend::executeAtomicFence() const {
+  as_.INSTR(MFENCE_t).setR4RM(REG::A)();
+}
+
 void Backend::executeLinearMemoryStore(OPCode const opcode, uint32_t const offset) {
   assert(moduleInfo_.hasMemory && "Memory not defined");
   Stack::iterator const valueElem{common_.condenseValentBlockBelow(stack_.end())};

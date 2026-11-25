@@ -248,6 +248,14 @@ public:
   void executeLinearMemoryStore(OPCode const opcode, uint32_t const offset);
 
   ///
+  /// @brief Alignment check of a threads-proposal atomic access; not implemented on this backend (throws)
+  void emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2) const;
+
+  ///
+  /// @brief Full memory barrier for threads-proposal atomics; not implemented on this backend (throws)
+  void executeAtomicFence() const;
+
+  ///
   /// @brief Produces machine code for a memory copy instruction
   /// @pre dst src size should be should be i32.
   /// @post stack will be handled correctly.

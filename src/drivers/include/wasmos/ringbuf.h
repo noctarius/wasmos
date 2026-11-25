@@ -229,6 +229,10 @@ static inline uint32_t wasmos_ringbuf_flags(const wasmos_ringbuf_t* rb) {
     return __atomic_load_n(&rb->hdr->flags, __ATOMIC_ACQUIRE);
 }
 
+/* TODO: this is an atomic read-modify-write, which neither WASM runtime
+ * executes (a guest built with atomics that calls it fails to compile at
+ * spawn); only the native net-stack calls it today. A guest caller needs
+ * single-writer flag words or runtime RMW support. */
 static inline void wasmos_ringbuf_set_flags(wasmos_ringbuf_t* rb, uint32_t mask) {
     __atomic_or_fetch(&rb->hdr->flags, mask, __ATOMIC_RELEASE);
 }

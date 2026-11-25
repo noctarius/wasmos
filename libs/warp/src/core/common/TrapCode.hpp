@@ -74,7 +74,10 @@ enum class TrapCode : uint32_t {
   ///@brief Called function was not linked
   CALLED_FUNCTION_NOT_LINKED,
 
-  MAX_TRAP_CODE = CALLED_FUNCTION_NOT_LINKED,
+  /// @brief Trap when an atomic memory access is not naturally aligned (threads proposal)
+  UNALIGNED_ATOMIC,
+
+  MAX_TRAP_CODE = UNALIGNED_ATOMIC,
 };
 
 /// @brief Human readable descriptions for the TrapCode
@@ -104,7 +107,9 @@ constexpr auto trapCodeErrorMessages = make_array(
 
     /* STACKFENCEBREACHED */ "Stack fence breached",
 
-    /* CALLED_FUNCTION_NOT_LINKED */ "Called function not linked");
+    /* CALLED_FUNCTION_NOT_LINKED */ "Called function not linked",
+
+    /* UNALIGNED_ATOMIC */ "Unaligned atomic memory access");
 
 } // namespace vb
 

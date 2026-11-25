@@ -174,6 +174,7 @@ d_m3ErrorConst  (globalNotMutable,              "global is not mutable")
 
 // traps
 d_m3ErrorConst  (trapOutOfBoundsMemoryAccess,   "[trap] out of bounds memory access")
+d_m3ErrorConst  (trapUnalignedAtomic,           "[trap] unaligned atomic")
 d_m3ErrorConst  (trapDivisionByZero,            "[trap] integer divide by zero")
 d_m3ErrorConst  (trapIntegerOverflow,           "[trap] integer overflow")
 d_m3ErrorConst  (trapIntegerConversion,         "[trap] invalid conversion to integer")

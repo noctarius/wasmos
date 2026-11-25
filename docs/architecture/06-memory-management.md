@@ -374,6 +374,18 @@ Correct memory ordering (release/acquire on the ring indices) is a *separate*
 requirement layered on top; it governs visibility ordering of accesses to a
 correctly mapped page and does nothing if the page itself moved.
 
+In a WASM guest that ordering comes only from **atomic** accesses to the ring
+indices. Guests are compiled with WebAssembly atomics (`-matomics` for C,
+`-mcpu generic+atomics` for Zig), and both runtimes execute the threads
+proposal's `atomic.fence` and the `i32.atomic.load`/`.load8_u`/`.load16_u` and
+`i32.atomic.store`/`.store8`/`.store16` forms. All of them are sequentially
+consistent, and a misaligned access traps. A fence orders nothing on its own:
+the wasm memory model orders fences only against atomics, and the Binaryen pass
+clang runs after every guest link deletes them. So a publisher release-stores
+the index and a consumer acquire-loads it (`wasmos/vring.h`,
+`wasmos/ringbuf.h`). Atomic read-modify-write forms are not executed by either
+runtime, and a module containing one fails to compile when it is spawned.
+
 ---
 
 ### User-Pointer Copy

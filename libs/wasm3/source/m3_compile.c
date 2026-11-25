@@ -1200,7 +1200,46 @@ _   (PushConst (o, value.u, c_m3Type_f64));
 }
 #endif
 
+// WASMOS: threads-proposal atomics (0xFE prefix). Only the forms guests emit are
+// implemented: atomic.fence and the i32 atomic loads and stores of 8, 16 and 32
+// bits; any other 0xFE opcode is an unknown opcode. The memarg alignment of an
+// atomic access must be its natural alignment (validation rule of the proposal).
+static
+M3Result  Compile_AtomicFence  (IM3Compilation o, m3opcode_t i_opcode)
+{
+_try {
+    u8 reserved;
+_   (Read_u8 (& reserved, & o->wasm, o->wasmEnd));
+    _throwif (m3Err_wasmMalformed, reserved != 0);
+
+_   (EmitOp (o, op_AtomicFence));
+}
+    _catch: return result;
+}
+
 #if d_m3CascadedOpcodes
+
+static
+M3Result  Compile_AtomicOpcode  (IM3Compilation o, m3opcode_t i_opcode)
+{
+_try {
+    u32 opcode;
+_   (ReadLEB_u32 (& opcode, & o->wasm, o->wasmEnd));        m3log (compile, d_indent " (FE: %" PRIi32 ")", get_indention_string (o), opcode);
+    _throwif (m3Err_unknownOpcode, opcode > 0xFF);
+
+    i_opcode = (i_opcode << 8) | opcode;
+
+    IM3OpInfo opInfo = GetOpInfo (i_opcode);
+    _throwif (m3Err_unknownOpcode, not opInfo);
+
+    M3Compiler compiler = opInfo->compiler;
+    _throwif (m3Err_noCompiler, not compiler);
+
+_   ((* compiler) (o, i_opcode));
+
+    o->previousOpcode = i_opcode;
+}   _catch: return result;
+}
 
 static
 M3Result  Compile_ExtendedOpcode  (IM3Compilation o, m3opcode_t i_opcode)
@@ -2218,6 +2257,30 @@ _   (Compile_Operator (o, i_opcode));
     _catch: return result;
 }
 
+static
+M3Result  Compile_AtomicLoadStore  (IM3Compilation o, m3opcode_t i_opcode)
+{
+_try {
+    u32 alignHint, memoryOffset;
+    u32 naturalAlign;
+
+_   (ReadLEB_u32 (& alignHint, & o->wasm, o->wasmEnd));
+_   (ReadLEB_u32 (& memoryOffset, & o->wasm, o->wasmEnd));
+
+    switch (i_opcode & 0xFF) {
+    case 0x12: case 0x19: naturalAlign = 0; break;      // 8 bit
+    case 0x13: case 0x1a: naturalAlign = 1; break;      // 16 bit
+    default:              naturalAlign = 2; break;      // 32 bit
+    }
+    _throwif (m3Err_wasmMalformed, alignHint != naturalAlign);
+
+_   (Compile_Operator (o, i_opcode));
+
+    EmitConstant32 (o, memoryOffset);
+}
+    _catch: return result;
+}
+
 
 M3Result  CompileRawFunction  (IM3Module io_module,  IM3Function io_function, const void * i_function, const void * i_userdata)
 {
@@ -2517,6 +2580,7 @@ const M3OpInfo c_operations [] =
 
 # if d_m3CascadedOpcodes
     [c_waOp_extended] = M3OP( "0xFC", 0, c_m3Type_unknown,   d_emptyOpList,  Compile_ExtendedOpcode ),
+    [0xFE]            = M3OP( "0xFE", 0, c_m3Type_unknown,   d_emptyOpList,  Compile_AtomicOpcode ),
 # endif
 
 # ifdef DEBUG
@@ -2547,6 +2611,29 @@ const M3OpInfo c_operationsFC [] =
 };
 
 
+// WASMOS: the 0xFE (atomics) operations this interpreter implements.
+const M3OpInfo c_operationsFE [] =
+{
+    M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED,                                                                       // 0x00-0x02
+    M3OP( "atomic.fence",           0,  none,   d_emptyOpList,                           Compile_AtomicFence ),     // 0x03
+    M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED,                                                       // 0x04-0x07
+    M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED,                                                       // 0x08-0x0b
+    M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED,                                                       // 0x0c-0x0f
+    M3OP( "i32.atomic.load",        0,  i_32,   d_unaryOpList (i32, AtomicLoad_u32),     Compile_AtomicLoadStore ), // 0x10
+    M3OP_RESERVED,                                                                                                    // 0x11 i64.atomic.load
+    M3OP( "i32.atomic.load8_u",     0,  i_32,   d_unaryOpList (i32, AtomicLoad_u8),      Compile_AtomicLoadStore ), // 0x12
+    M3OP( "i32.atomic.load16_u",    0,  i_32,   d_unaryOpList (i32, AtomicLoad_u16),     Compile_AtomicLoadStore ), // 0x13
+    M3OP_RESERVED, M3OP_RESERVED, M3OP_RESERVED,                                                                       // 0x14-0x16 i64 narrow loads
+    M3OP( "i32.atomic.store",       -2, none,   d_binOpList (i32, AtomicStore_u32),      Compile_AtomicLoadStore ), // 0x17
+    M3OP_RESERVED,                                                                                                    // 0x18 i64.atomic.store
+    M3OP( "i32.atomic.store8",      -2, none,   d_binOpList (i32, AtomicStore_u8),       Compile_AtomicLoadStore ), // 0x19
+    M3OP( "i32.atomic.store16",     -2, none,   d_binOpList (i32, AtomicStore_u16),      Compile_AtomicLoadStore ), // 0x1a
+
+# ifdef DEBUG
+    M3OP( "termination", 0, c_m3Type_unknown ) // for find_operation_info
+# endif
+};
+
 IM3OpInfo  GetOpInfo  (m3opcode_t opcode)
 {
     switch (opcode >> 8) {
@@ -2559,6 +2646,12 @@ IM3OpInfo  GetOpInfo  (m3opcode_t opcode)
         opcode &= 0xFF;
         if (M3_LIKELY(opcode < M3_COUNT_OF(c_operationsFC))) {
             return &c_operationsFC[opcode];
+        }
+        break;
+    case 0xFE:
+        opcode &= 0xFF;
+        if (M3_LIKELY(opcode < M3_COUNT_OF(c_operationsFE))) {
+            return &c_operationsFE[opcode];
         }
         break;
     }

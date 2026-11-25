@@ -155,9 +155,9 @@ with `kconfiglib`.
 |------------------|--------------------------|-----------------------------------------------|
 | UEFI bootloader  | `x86_64-unknown-uefi`    | PE/COFF, `-fshort-wchar -mno-red-zone`        |
 | Kernel + drivers | `x86_64-elf`             | Freestanding, `-mcmodel=kernel -mno-red-zone` |
-| WASM modules     | `wasm32`                 | `-Oz -nostdlib`                               |
+| WASM modules     | `wasm32`                 | `-Oz -matomics -nostdlib`                     |
 | Rust examples    | `wasm32-unknown-unknown` | via rustc                                     |
-| Zig examples     | `wasm32-freestanding`    | via zig build-exe                             |
+| Zig examples     | `wasm32-freestanding`    | via zig build-exe, `-mcpu generic+atomics`    |
 | Go examples      | `wasm` (GOOS)            | via tinygo                                    |
 
 ---

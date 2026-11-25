@@ -65,6 +65,17 @@ def build(b):
     )
     install(b, "apps/net_tcp_echo.wap", wap)
 
+    # Built with the WebAssembly atomics feature: the module exists to run the
+    # 0xFE atomic loads and stores (8, 16 and 32 bit) on both runtimes.
+    wap = guest(
+        b,
+        "atomics_smoke",
+        [b.src("atomics_smoke/atomics_smoke.c")],
+        manifest=b.src("atomics_smoke/linker.metadata"),
+        flags=["-matomics"],
+    )
+    install(b, "apps/atomics_smoke.wap", wap)
+
     for name in SIMPLE:
         wap = guest(
             b,

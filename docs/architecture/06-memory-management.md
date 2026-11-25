@@ -204,8 +204,19 @@ typedef struct {
     uint64_t next_shared_base; // advance pointer for MEM_REGION_SHARED mappings
     uint32_t region_count;
     list_t   regions;         // list of mem_region_t
+    ksync_spinlock_t regions_lock; // serialises regions and region_count
 } mm_context_t;
 ```
+
+`regions_lock` guards every walk and change of a context's regions. A thread
+of the process can fault on one CPU while another grows or rebinds its linear
+memory on another, so the fault path holds the lock from the region lookup
+through the mapping, and the rebind and bind paths hold it across their unmap,
+free and update: a fault never maps a page computed from one binding's bounds
+and another's backing, nor a backing a rebind has freed
+(`tests/unit/test_mm_regions.c`). Readers outside `memory.c` take copies
+(`mm_context_region_for_type`, `mm_context_region_at`). It is a leaf lock;
+paging takes its own beneath it.
 
 The global context list (`g_contexts`) grows in chunks of 16. The root
 context (`g_root_ctx`, id=0) is static and not in the dynamic list.
@@ -273,7 +284,8 @@ architecture's exception handler decodes it from its fault syndrome (x86_64: the
 syndrome, and the memory service's `IPC_MEM_FAULT` carries the mask in `arg2`.
 
 1. Rejects `MM_FAULT_PRESENT` faults (protection violation, not absence).
-2. Finds the containing `mem_region_t` for `addr`.
+2. Takes the context's `regions_lock`, held through step 5, and finds the
+   containing `mem_region_t` for `addr`.
 3. Checks the user/write/exec bits against region flags.
 4. Computes `phys_page = region->phys_base + (page_base − region->base)`.
 5. Calls `paging_map_4k_in_root(ctx->root_table, page_base, phys_page, flags)`.

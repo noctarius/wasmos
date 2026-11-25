@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include "boot.h"
 #include "list.h"
+#include "sync/spinlock.h"
 
 /* TODO: legacy guard constant, enforced nowhere -- the context list grows on
  * demand and has no cap (docs/architecture/06-memory-management.md). Either
@@ -93,6 +94,13 @@ typedef struct {
     uint64_t root_table;   /* physical address of this context's PML4; 0 = not built yet */
     uint32_t region_count; /* number of entries in `regions` */
     list_t regions;        /* mem_region_t list, owned by the context */
+    /* Serialises `regions` and `region_count`. A thread of the process can
+     * fault on one CPU while another grows or rebinds its memory on another,
+     * so every walk and every change holds it; the fault and rebind paths keep
+     * holding it across the page-table update, which makes a rebind atomic
+     * with respect to a fault. Leaf lock: nothing that takes another
+     * mm lock is called under it (paging takes its own). */
+    ksync_spinlock_t regions_lock;
 } mm_context_t;
 
 /* Initialize the memory manager from UEFI memory map in boot_info.  Brings up the PFA

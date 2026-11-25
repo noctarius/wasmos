@@ -157,6 +157,7 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
         return -1;
     }
     list_iter_t it;
+    ksync_spinlock_lock(&ctx->regions_lock);
     mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->type == MEM_REGION_WASM_LINEAR) {
@@ -166,6 +167,7 @@ int kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t* out_pid) {
         }
         region = (mem_region_t*)list_next(&it);
     }
+    ksync_spinlock_unlock(&ctx->regions_lock);
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {

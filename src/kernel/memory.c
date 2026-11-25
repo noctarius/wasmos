@@ -37,6 +37,9 @@ static inline uintptr_t mm_kernel_alias_addr(uintptr_t addr) {
 }
 
 static int mm_region_flags_valid(uint32_t flags);
+static int mm_range_permitted_locked(mm_context_t* ctx, uint64_t cur, uint64_t end,
+                                     uint32_t needed_flags);
+static int mm_fault_map_locked(mm_context_t* ctx, uint64_t addr, uint32_t access);
 typedef int (*mm_copy_work_fn)(void* arg);
 static mem_region_t* mm_context_add_region_slot(mm_context_t* ctx, uint64_t base, uint64_t size,
                                                 uint32_t flags, mem_region_type_t type);
@@ -123,6 +126,7 @@ int mm_context_init(mm_context_t* ctx, uint32_t id) {
     ctx->id = id;
     ctx->root_table = 0;
     ctx->region_count = 0;
+    ksync_spinlock_init(&ctx->regions_lock);
     if (list_init(&ctx->regions, (uint32_t)sizeof(mem_region_t), LIST_IMPL_ARRAY_CHUNK, 8) != 0) {
         return -1;
     }
@@ -139,7 +143,13 @@ int mm_context_init(mm_context_t* ctx, uint32_t id) {
  * full region list. */
 int mm_context_add_region(mm_context_t* ctx, uint64_t base, uint64_t size, uint32_t flags,
                           mem_region_type_t type) {
-    return mm_context_add_region_slot(ctx, base, size, flags, type) ? 0 : -1;
+    if (!ctx) {
+        return -1;
+    }
+    ksync_spinlock_lock(&ctx->regions_lock);
+    int rc = mm_context_add_region_slot(ctx, base, size, flags, type) ? 0 : -1;
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
 }
 
 /* Copies the FIRST region of the given type into *out_region by value, so the
@@ -152,16 +162,20 @@ int mm_context_region_for_type(mm_context_t* ctx, mem_region_type_t type,
     if (!ctx || !out_region) {
         return -1;
     }
+    int rc = -1;
+    ksync_spinlock_lock(&ctx->regions_lock);
     list_iter_t it;
     mem_region_t* region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->type == type) {
             *out_region = *region;
-            return 0;
+            rc = 0;
+            break;
         }
         region = (mem_region_t*)list_next(&it);
     }
-    return -1;
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
 }
 
 /* Copies the region at a zero-based iteration position into *out_region.  The
@@ -176,17 +190,23 @@ int mm_context_region_at(mm_context_t* ctx, uint32_t index, mem_region_t* out_re
     if (!ctx || !out_region) {
         return -1;
     }
+    int rc = -1;
+    ksync_spinlock_lock(&ctx->regions_lock);
     region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (current == index) {
             *out_region = *region;
-            return 0;
+            rc = 0;
+            break;
         }
         current++;
         region = (mem_region_t*)list_next(&it);
     }
-    return -1;
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
 }
+/* The region containing `addr`, or 0. The caller holds ctx->regions_lock for as
+ * long as it uses the result. */
 static mem_region_t* mm_find_region_for_addr(mm_context_t* ctx, uint64_t addr) {
     if (!ctx) {
         return 0;
@@ -218,6 +238,7 @@ static uint64_t mm_page_align_up(uint64_t size) {
     return (size + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
 }
 
+/* Appends a region; the caller holds ctx->regions_lock. */
 static mem_region_t* mm_context_add_region_slot(mm_context_t* ctx, uint64_t base, uint64_t size,
                                                 uint32_t flags, mem_region_type_t type) {
     mem_region_t* region = 0;
@@ -244,6 +265,7 @@ static void mm_context_release_regions(mm_context_t* ctx) {
     if (!ctx) {
         return;
     }
+    ksync_spinlock_lock(&ctx->regions_lock);
     region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->phys_base != 0 && region->size != 0) {
@@ -259,6 +281,7 @@ static void mm_context_release_regions(mm_context_t* ctx) {
     }
     list_destroy(&ctx->regions);
     ctx->region_count = 0;
+    ksync_spinlock_unlock(&ctx->regions_lock);
 }
 
 static void mm_trace_copy_fail(const char* op, const char* stage, uint32_t context_id,
@@ -286,9 +309,10 @@ static void mm_trace_copy_fail(const char* op, const char* stage, uint32_t conte
     trace_do(klog_write("\n"));
 }
 
-static int mm_ensure_user_range_mapped(mm_context_t* ctx, uint64_t user_addr, uint64_t size,
-                                       uint32_t needed_flags) {
-    if (!ctx || ctx->root_table == 0 || user_addr == 0 || size == 0) {
+/* mm_ensure_user_range_mapped's body; the caller holds ctx->regions_lock. */
+static int mm_ensure_user_range_mapped_locked(mm_context_t* ctx, uint64_t user_addr, uint64_t size,
+                                              uint32_t needed_flags) {
+    if (ctx->root_table == 0 || user_addr == 0 || size == 0) {
         return -1;
     }
     uint64_t end = user_addr + size;
@@ -326,6 +350,17 @@ static int mm_ensure_user_range_mapped(mm_context_t* ctx, uint64_t user_addr, ui
     return 0;
 }
 
+static int mm_ensure_user_range_mapped(mm_context_t* ctx, uint64_t user_addr, uint64_t size,
+                                       uint32_t needed_flags) {
+    if (!ctx) {
+        return -1;
+    }
+    ksync_spinlock_lock(&ctx->regions_lock);
+    int rc = mm_ensure_user_range_mapped_locked(ctx, user_addr, size, needed_flags);
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
+}
+
 /* Permission check for a user virtual range, answering 0 for PERMITTED and -1
  * for refused — inverted relative to a boolean predicate, so read the polarity
  * carefully.
@@ -339,8 +374,8 @@ static int mm_ensure_user_range_mapped(mm_context_t* ctx, uint64_t user_addr, ui
  * refused.
  *
  * This is a check against the REGION table, not the page tables: it says the
- * access is allowed, not that the pages are currently mapped.  It maps nothing
- * and takes no lock. */
+ * access is allowed, not that the pages are currently mapped.  It maps nothing;
+ * it walks the regions under the context's regions_lock. */
 int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size,
                             uint32_t needed_flags) {
     if (context_id == 0 || user_addr == 0 || size == 0) {
@@ -357,7 +392,16 @@ int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t si
         return -1;
     }
 
-    uint64_t cur = user_addr;
+    ksync_spinlock_lock(&ctx->regions_lock);
+    int rc = mm_range_permitted_locked(ctx, user_addr, end, needed_flags);
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
+}
+
+/* mm_user_range_permitted's region walk over [cur, end); the caller holds
+ * ctx->regions_lock. */
+static int mm_range_permitted_locked(mm_context_t* ctx, uint64_t cur, uint64_t end,
+                                     uint32_t needed_flags) {
     while (cur < end) {
         mem_region_t* region = mm_find_region_for_addr(ctx, cur);
         if (!region) {
@@ -400,8 +444,8 @@ int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t si
  *
  * Returns 0 once the page is mapped, writing the page-aligned VA to
  * *out_mapped_base when it is non-NULL, and -1 when the fault is not one this
- * function may resolve.  Runs in the fault handler and takes no lock beyond
- * mm_context_get's. */
+ * function may resolve.  Runs in the fault handler; holds the context's
+ * regions_lock from the region lookup through the mapping. */
 int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint32_t access,
                          uint64_t* out_mapped_base) {
     mm_context_t* ctx = mm_context_get(context_id);
@@ -413,6 +457,24 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint32_t access,
         return -1;
     }
 
+    /* Held from the lookup through the mapping: the page installed is computed
+     * from one binding of the region, never from one binding's bounds and
+     * another's backing, and never from a backing a rebind has already freed. */
+    ksync_spinlock_lock(&ctx->regions_lock);
+    int rc = mm_fault_map_locked(ctx, addr, access);
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    if (rc < 0) {
+        return -1;
+    }
+    if (out_mapped_base) {
+        *out_mapped_base = addr & ~(PAGE_SIZE - 1ULL);
+    }
+    return 0;
+}
+
+/* mm_handle_page_fault's lookup and mapping; the caller holds ctx->regions_lock.
+ * Returns 0 once the page is mapped, -1 otherwise. */
+static int mm_fault_map_locked(mm_context_t* ctx, uint64_t addr, uint32_t access) {
     mem_region_t* region = mm_find_region_for_addr(ctx, addr);
     if (!region) {
         return -1;
@@ -433,15 +495,7 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint32_t access,
      * backing base, so the faulting page resolves to phys_base + (VA offset into
      * the region) and is wired into the owning context's private root table. */
     uint64_t phys_page = region->phys_base + (page_base - region->base);
-    int rc = paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags);
-    if (rc < 0) {
-        return -1;
-    }
-
-    if (out_mapped_base) {
-        *out_mapped_base = page_base;
-    }
-    return 0;
+    return paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags) < 0 ? -1 : 0;
 }
 
 /* Allocates `pages` physically contiguous frames and records a region of the
@@ -474,13 +528,17 @@ int mm_context_alloc_region(mm_context_t* ctx, uint64_t pages, uint32_t flags,
         pfa_free_pages(phys, pages);
         return -1;
     }
+    ksync_spinlock_lock(&ctx->regions_lock);
     mem_region_t* added = mm_context_add_region_slot(ctx, virt, pages * PAGE_SIZE, flags, type);
+    if (added) {
+        added->phys_base = phys;
+        added->backing_pages = pages;
+    }
+    ksync_spinlock_unlock(&ctx->regions_lock);
     if (!added) {
         pfa_free_pages(phys, pages);
         return -1;
     }
-    added->phys_base = phys;
-    added->backing_pages = pages;
     return 0;
 }
 
@@ -502,23 +560,32 @@ int mm_context_alloc_region(mm_context_t* ctx, uint64_t pages, uint32_t flags,
  * Rebinding to exactly the current external backing is a no-op returning 0.
  * Returns -1 for a zero context, a zero or misaligned phys_base, a zero size, an
  * unknown context, or a context with no WASM_LINEAR region. */
+static int mm_rebind_wasm_linear_locked(mm_context_t* ctx, uint64_t phys_base, uint64_t size);
+
 int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size) {
-    mm_context_t* ctx = 0;
+    if (context_id == 0 || phys_base == 0 || size == 0 || (phys_base & (PAGE_SIZE - 1ULL)) != 0) {
+        return -1;
+    }
+    mm_context_t* ctx = mm_context_get(context_id);
+    if (!ctx) {
+        return -1;
+    }
+    /* Held across the unmap, the free and the update, so no fault in between
+     * maps the old backing or pairs the old bounds with the new backing. */
+    ksync_spinlock_lock(&ctx->regions_lock);
+    int rc = mm_rebind_wasm_linear_locked(ctx, phys_base, size);
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
+}
+
+/* mm_context_rebind_wasm_linear's body; the caller holds ctx->regions_lock. */
+static int mm_rebind_wasm_linear_locked(mm_context_t* ctx, uint64_t phys_base, uint64_t size) {
     mem_region_t* region = 0;
     list_iter_t it;
     uint64_t old_phys = 0;
     uint64_t old_size = 0;
     uint32_t old_flags = 0;
     uint64_t unmap_bytes = 0;
-
-    if (context_id == 0 || phys_base == 0 || size == 0 || (phys_base & (PAGE_SIZE - 1ULL)) != 0) {
-        return -1;
-    }
-
-    ctx = mm_context_get(context_id);
-    if (!ctx) {
-        return -1;
-    }
 
     region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
@@ -567,21 +634,33 @@ int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint6
  * describe scattered backing, which is why both exist.
  * Returns 0 on success, -1 on a bad argument, a missing WASM_LINEAR region, an
  * unmapped slot page, or a failed mapping (internal status, not a packed code). */
+static int mm_bind_wasm_linear_scattered_locked(mm_context_t* ctx, uint64_t slot_va_base,
+                                                uint64_t from_page, uint64_t to_page);
+
 int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
                                           uint64_t from_page, uint64_t to_page) {
-    mm_context_t* ctx = 0;
-    mem_region_t* region = 0;
-    list_iter_t it;
-    uint64_t new_size = 0;
-
     if (context_id == 0 || slot_va_base == 0 || to_page <= from_page ||
         (slot_va_base & (PAGE_SIZE - 1ULL)) != 0) {
         return -1;
     }
-    ctx = mm_context_get(context_id);
+    mm_context_t* ctx = mm_context_get(context_id);
     if (!ctx) {
         return -1;
     }
+    ksync_spinlock_lock(&ctx->regions_lock);
+    int rc = mm_bind_wasm_linear_scattered_locked(ctx, slot_va_base, from_page, to_page);
+    ksync_spinlock_unlock(&ctx->regions_lock);
+    return rc;
+}
+
+/* mm_context_bind_wasm_linear_scattered's body; the caller holds
+ * ctx->regions_lock. */
+static int mm_bind_wasm_linear_scattered_locked(mm_context_t* ctx, uint64_t slot_va_base,
+                                                uint64_t from_page, uint64_t to_page) {
+    mem_region_t* region = 0;
+    list_iter_t it;
+    uint64_t new_size = 0;
+
     region = (mem_region_t*)list_first(&ctx->regions, &it);
     while (region) {
         if (region->type == MEM_REGION_WASM_LINEAR) {

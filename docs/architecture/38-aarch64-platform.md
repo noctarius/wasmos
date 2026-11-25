@@ -134,7 +134,10 @@ is [28-smp.md](28-smp.md).
   (`GICD_CTLR.DS = 1`, QEMU `virt`) the SGI is Group 0 and arrives as an FIQ.
   The kernel masks only `PSTATE.I`, and every exception handler unmasks F on
   entry, so like x86_64's NMI the stop reaches a CPU spinning with interrupts
-  off (`tests/test_kpanic_stop.py`, boot option `debug.kpanic_stop_test=1`).
+  off. Its priority (0x40) is above every IRQ's (0x80), so it also reaches a
+  CPU stuck in a handler before the end of interrupt, which the GIC holds at
+  that interrupt's priority (`tests/test_kpanic_stop.py`, boot option
+  `debug.kpanic_stop_test=1` and `=2`).
   With two security states Group 0 is the secure world's and the stop is an
   ordinary Group 1 SGI, masked with IRQs.
 - **TLB.** Every invalidation is already broadcast (`TLBI ...IS`), so mappings

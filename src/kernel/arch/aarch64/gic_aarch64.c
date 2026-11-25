@@ -76,6 +76,11 @@
 /* Lower values are higher priority; PMR 0xF0 lets every priority below it
  * through. */
 #define GIC_DEFAULT_PRIORITY 0x80u
+/* The stop SGI's priority, strictly higher (numerically lower) than every
+ * other interrupt's: a CPU inside a handler runs at that interrupt's priority
+ * until its end of interrupt, and the GIC signals only a higher-priority one,
+ * so at GIC_DEFAULT_PRIORITY the stop would not reach a CPU stuck there. */
+#define GIC_STOP_PRIORITY 0x40u
 #define GIC_PMR_ALL 0xF0u
 
 /* Interrupt lines the distributor implements (GICD_TYPER.ITLinesNumber). */
@@ -171,7 +176,9 @@ int gic_cpu_init(void) {
     /* The stop request every CPU must be able to take. As Group 0 it arrives
      * as an FIQ, which this CPU takes from here on: PSTATE.F stays clear
      * outside the exception entry and exit (aarch64_exception). */
-    gic_enable_ppi(GIC_SGI_STOP);
+    arch_mmio_write8((uintptr_t)(GICR_SGI_BASE + GICR_IPRIORITYR + GIC_SGI_STOP),
+                     GIC_STOP_PRIORITY);
+    arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_ISENABLER0), 1u << GIC_SGI_STOP);
     if (g_gic_stop_fiq) {
         __asm__ volatile("msr icc_bpr0_el1, xzr\n"
                          "msr icc_igrpen0_el1, %0\n"

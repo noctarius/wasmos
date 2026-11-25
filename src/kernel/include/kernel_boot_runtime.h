@@ -22,10 +22,17 @@ void kernel_boot_run_low_slot_sweep_diagnostic(void);
  * when not even the idle thread is dispatchable. */
 void kernel_boot_run_scheduler_loop(void);
 
-/* With the boot option debug.kpanic_stop_test=1, make CPU 1 spin with
- * interrupts masked and panic, so a test can check that kpanic captured that
- * CPU. Does nothing without the option; without a second online CPU it logs
- * that and returns. Boot CPU only, after smp_cpus_up. */
+/* With the boot option debug.kpanic_stop_test=<mode>, make CPU 1 spin where it
+ * takes no ordinary interrupt and panic, so a test can check that kpanic
+ * captured that CPU: mode 1 spins with interrupts masked, mode 2 inside the
+ * timer interrupt before it is ended. Does nothing without the option; without
+ * a second online CPU, or for an unknown mode, it logs that and returns. Boot
+ * CPU only, after smp_cpus_up. */
 void kernel_boot_kpanic_stop_test(void);
+
+/* Mode 2's spin: called from each architecture's timer interrupt before the
+ * interrupt is ended. Returns at once unless the test is armed in mode 2 and
+ * this is CPU 1. */
+void kernel_boot_kpanic_stop_test_tick(void);
 
 #endif

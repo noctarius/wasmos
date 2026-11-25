@@ -40,25 +40,35 @@ static volatile uint64_t g_sched_timeout_next = (uint64_t)-1;
  * was installed while it was scanning -- see the publish step there. */
 static volatile uint32_t g_sched_timeout_arm_seq = 0;
 
+#ifdef WASMOS_SCHED_EVENT_TEST_SEAMS
+/* Host-test seam: called by sched_timeout_check between its arm-generation
+ * re-check and the publish of the recomputed hint. NULL calls nothing. Compiled
+ * out of the kernel. */
+void (*sched_event_test_publish_window)(void);
+#endif
+
+/* Lowers the hint to `bound` unless it is already at or below it. A hint below
+ * every live deadline is always safe -- it only costs a scan. */
+static void sched_timeout_lower_hint(uint64_t bound) {
+    uint64_t cur = __atomic_load_n(&g_sched_timeout_next, __ATOMIC_SEQ_CST);
+    while (bound < cur) {
+        if (__atomic_compare_exchange_n(
+                &g_sched_timeout_next, &cur, bound, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            break;
+        }
+    }
+}
+
 static void sched_timeout_arm(thread_t* t, uint64_t deadline_tick) {
     if (deadline_tick == 0) {
         deadline_tick = 1; /* 0 is reserved for "no timeout" */
     }
     __atomic_store_n(&t->sched_timeout_tick, deadline_tick, __ATOMIC_RELEASE);
-    __atomic_fetch_add(&g_sched_timeout_arm_seq, 1u, __ATOMIC_ACQ_REL);
-    /* Atomically lower the hint so it never sits above this deadline, even when
-     * sched_timeout_check() publishes a recomputed bound concurrently. */
-    uint64_t cur = __atomic_load_n(&g_sched_timeout_next, __ATOMIC_ACQUIRE);
-    while (deadline_tick < cur) {
-        if (__atomic_compare_exchange_n(&g_sched_timeout_next,
-                                        &cur,
-                                        deadline_tick,
-                                        1,
-                                        __ATOMIC_ACQ_REL,
-                                        __ATOMIC_ACQUIRE)) {
-            break;
-        }
-    }
+    /* Generation bump, then hint load, both SEQ_CST: sched_timeout_check
+     * publishes the hint and then re-reads the generation, so either that
+     * re-read sees this bump or the load below sees the published hint. */
+    __atomic_fetch_add(&g_sched_timeout_arm_seq, 1u, __ATOMIC_SEQ_CST);
+    sched_timeout_lower_hint(deadline_tick);
 }
 
 /* Detach an expired-timeout thread from its wait event and mark it runnable.
@@ -156,13 +166,25 @@ void sched_timeout_check(void) {
      * The value CAS alone cannot detect this.  sched_timeout_arm only LOWERS the
      * hint, so an arm whose deadline sits ABOVE the current hint leaves the value
      * untouched, the CAS succeeds, and the new deadline is orphaned.  The
-     * generation counter catches every arm regardless of its deadline.  Losing
-     * the race just leaves the old bound in place, which costs one extra scan and
-     * is self-correcting. */
-    uint32_t arm_seq_now = __atomic_load_n(&g_sched_timeout_arm_seq, __ATOMIC_ACQUIRE);
-    if (arm_seq_now == arm_seq) {
-        (void)__atomic_compare_exchange_n(
-            &g_sched_timeout_next, &observed, next, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+     * generation counter catches every arm regardless of its deadline -- but only
+     * one that lands before the re-check below. An arm landing between that
+     * re-check and the CAS is caught by reading the generation once more AFTER
+     * the publish: that arm's own hint load comes after its bump, so either it
+     * sees the published (raised) hint and lowers it itself, or the read below
+     * sees its bump and the hint goes back to the bound the scan started from.
+     * Losing either race just leaves a lower bound in place, which costs one
+     * extra scan and is self-correcting. */
+    uint32_t arm_seq_now = __atomic_load_n(&g_sched_timeout_arm_seq, __ATOMIC_SEQ_CST);
+#ifdef WASMOS_SCHED_EVENT_TEST_SEAMS
+    if (sched_event_test_publish_window) {
+        sched_event_test_publish_window();
+    }
+#endif
+    if (arm_seq_now == arm_seq &&
+        __atomic_compare_exchange_n(
+            &g_sched_timeout_next, &observed, next, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) &&
+        __atomic_load_n(&g_sched_timeout_arm_seq, __ATOMIC_SEQ_CST) != arm_seq) {
+        sched_timeout_lower_hint(observed);
     }
 }
 

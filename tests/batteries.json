@@ -72,6 +72,7 @@
         "test_cli.py",
         "test_rtc_range.py",
         "test_decode_kernel_panic.py",
+        "test_kpanic_stop.py",
         "test_device_manager.py",
         "test_devmgr_declined_spawn.py",
         "test_init_smoke.py",

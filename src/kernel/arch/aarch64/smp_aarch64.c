@@ -211,14 +211,14 @@ void smp_cpus_up(void) {
     }
 }
 
-/* kpanic's stop request: an SGI to every other CPU. Unlike x86_64's NMI it is
- * an ordinary interrupt, so a CPU spinning with IRQs masked does not take it and
- * kpanic reports that CPU as uncaptured.
- * TODO: deliver the stop as a GICv3 pseudo-NMI (priority masking through
- * ICC_PMR_EL1 instead of DAIF.I) so a CPU spinning with IRQs masked is stopped
- * too. */
+/* kpanic's stop request: an SGI to every other CPU, taken as an FIQ where the
+ * controller has one security state, so a CPU spinning with IRQs masked is
+ * stopped as x86_64's NMI stops it.
+ * TODO: with two security states Group 0 is the secure world's, and the stop is
+ * an ordinary SGI that a CPU with IRQs masked never takes; a GICv3 pseudo-NMI
+ * (priority masking through ICC_PMR_EL1 instead of DAIF.I) would reach it. */
 void arch_stop_other_cpus(void) {
-    gic_send_sgi_others(GIC_SGI_STOP);
+    gic_send_stop_others();
 }
 
 #endif /* WASMOS_SMP */

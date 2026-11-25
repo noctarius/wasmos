@@ -1,9 +1,13 @@
 /* gic_aarch64.c - GICv3 on QEMU virt: distributor, the boot CPU's
  * redistributor, and the system-register CPU interface (ARM IHI 0069).
  *
- * Every interrupt is Group 1 with affinity routing; the machine has one
- * security state (QEMU virt without secure=on reports GICD_CTLR.DS = 1), so
- * the non-secure view is the whole controller.
+ * Every interrupt is Group 1 with affinity routing, except the stop SGI. The
+ * machine has one security state (QEMU virt without secure=on reports
+ * GICD_CTLR.DS = 1), so the non-secure view is the whole controller -- and
+ * Group 0 is then signalled to EL1 as an FIQ. The stop SGI is Group 0 on such a
+ * controller: the kernel masks only PSTATE.I, so the stop reaches a CPU that
+ * spins with interrupts masked. With two security states Group 0 belongs to the
+ * secure world and the stop stays an ordinary Group 1 SGI.
  *
  * Each CPU has its own redistributor; gic_cpu_init finds it among the
  * contiguous frames at QEMU virt's GICR base and records it in cpu_local, and
@@ -36,6 +40,9 @@
 #define GICD_CTLR_RWP (1u << 31)
 #define GICD_CTLR_ARE (1u << 4)
 #define GICD_CTLR_ENABLE_G1 (1u << 1)
+/* GICD_CTLR with DS = 1 (single security state view). */
+#define GICD_CTLR_ENABLE_G0 (1u << 0)
+#define GICD_CTLR_DS (1u << 6)
 #define GICD_TYPER 0x0004u
 #define GICD_IGROUPR 0x0080u
 #define GICD_ISENABLER 0x0100u
@@ -73,6 +80,9 @@
 
 /* Interrupt lines the distributor implements (GICD_TYPER.ITLinesNumber). */
 static uint32_t g_gicd_lines;
+/* Set by gic_init when the stop SGI is Group 0 (an FIQ); see the file comment.
+ * Written once on the boot CPU before any secondary starts. */
+static uint8_t g_gic_stop_fiq;
 
 static void gicd_wait_rwp(void) {
     while (arch_mmio_read32((uintptr_t)(GICD_BASE + GICD_CTLR)) & GICD_CTLR_RWP) {
@@ -94,6 +104,12 @@ void gic_init(void) {
     gicd_wait_rwp();
     arch_mmio_write32((uintptr_t)(GICD_BASE + GICD_CTLR), GICD_CTLR_ARE | GICD_CTLR_ENABLE_G1);
     gicd_wait_rwp();
+    if (arch_mmio_read32((uintptr_t)(GICD_BASE + GICD_CTLR)) & GICD_CTLR_DS) {
+        arch_mmio_write32((uintptr_t)(GICD_BASE + GICD_CTLR),
+                          GICD_CTLR_ARE | GICD_CTLR_ENABLE_G1 | GICD_CTLR_ENABLE_G0);
+        gicd_wait_rwp();
+        g_gic_stop_fiq = 1;
+    }
     (void)gic_cpu_init();
 }
 
@@ -137,7 +153,8 @@ int gic_cpu_init(void) {
         arch_cpu_relax();
     }
     arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_ICENABLER0), 0xFFFFFFFFu);
-    arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_IGROUPR0), 0xFFFFFFFFu);
+    uint32_t group1 = g_gic_stop_fiq ? ~(1u << GIC_SGI_STOP) : 0xFFFFFFFFu;
+    arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_IGROUPR0), group1);
 
     /* CPU interface through system registers (ICC_SRE_EL1.SRE). */
     uint64_t sre;
@@ -151,14 +168,48 @@ int gic_cpu_init(void) {
                      "isb" ::"r"((uint64_t)GIC_PMR_ALL),
                      "r"((uint64_t)1)
                      : "memory");
-    /* The stop request every CPU must be able to take. */
+    /* The stop request every CPU must be able to take. As Group 0 it arrives
+     * as an FIQ, which this CPU takes from here on: PSTATE.F stays clear
+     * outside the exception entry and exit (aarch64_exception). */
     gic_enable_ppi(GIC_SGI_STOP);
+    if (g_gic_stop_fiq) {
+        __asm__ volatile("msr icc_bpr0_el1, xzr\n"
+                         "msr icc_igrpen0_el1, %0\n"
+                         "isb\n"
+                         "msr daifclr, #1" ::"r"((uint64_t)1)
+                         : "memory");
+    }
     return 0;
 }
 
 void gic_enable_ppi(uint32_t intid) {
     arch_mmio_write8((uintptr_t)(GICR_SGI_BASE + GICR_IPRIORITYR + intid), GIC_DEFAULT_PRIORITY);
     arch_mmio_write32((uintptr_t)(GICR_SGI_BASE + GICR_ISENABLER0), 1u << intid);
+}
+
+void gic_send_stop_others(void) {
+    if (!g_gic_stop_fiq) {
+        gic_send_sgi_others(GIC_SGI_STOP);
+        return;
+    }
+    /* ICC_SGI0R_EL1, laid out as ICC_SGI1R_EL1: a Group 0 SGI. */
+    uint64_t value = ((uint64_t)GIC_SGI_STOP << 24) | (1ULL << 40);
+    __asm__ volatile("dsb ishst\n"
+                     "msr icc_sgi0r_el1, %0\n"
+                     "isb" ::"r"(value)
+                     : "memory");
+}
+
+uint32_t gic_fiq_ack(void) {
+    uint64_t intid;
+    __asm__ volatile("mrs %0, icc_iar0_el1" : "=r"(intid)::"memory");
+    return (uint32_t)(intid & 0xFFFFFFu);
+}
+
+void gic_fiq_eoi(uint32_t intid) {
+    __asm__ volatile("msr icc_eoir0_el1, %0\n"
+                     "isb" ::"r"((uint64_t)intid)
+                     : "memory");
 }
 
 void gic_send_sgi_others(uint32_t intid) {

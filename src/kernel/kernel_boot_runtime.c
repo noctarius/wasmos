@@ -7,7 +7,10 @@
  *   - kernel_boot_run_low_slot_sweep_diagnostic: strips and verifies the low
  *     slot of every live process root, logging (not panicking) on failure.
  *   - kernel_boot_run_scheduler_loop: the BSP's terminal scheduler loop, which
- *     panics only when not even the idle thread is dispatchable. */
+ *     panics only when not even the idle thread is dispatchable.
+ *   - kernel_boot_kpanic_stop_test: the debug.kpanic_stop_test=1 boot option,
+ *     which panics with a CPU spinning interrupts-masked so a test can see
+ *     whether kpanic's stop reached it. */
 #include "kernel_boot_runtime.h"
 
 #include "arch/arch_cpu.h"
@@ -21,6 +24,56 @@
 #include "string.h"
 #include "timer.h"
 #include "sched.h"
+#include "cpu_local.h"
+#include "kenv.h"
+#include "wasmos_status.h"
+
+#if WASMOS_SMP
+/* debug.kpanic_stop_test: the boot CPU arms the test, CPU 1 masks interrupts
+ * and announces that it spins, and the boot CPU then panics. kpanic's stop has
+ * to reach a CPU in exactly that state -- one that takes no ordinary
+ * interrupt -- for its frame to appear in the dump. */
+static uint32_t g_kpanic_stop_test_armed;
+static uint32_t g_kpanic_stop_test_spinning;
+
+static __attribute__((noreturn)) void kpanic_stop_test_spin(void) {
+    arch_irq_disable();
+    __atomic_store_n(&g_kpanic_stop_test_spinning, 1u, __ATOMIC_RELEASE);
+    for (;;) {
+        arch_cpu_relax();
+    }
+}
+#endif
+
+void kernel_boot_kpanic_stop_test(void) {
+    char value[4];
+    uint32_t written = 0;
+    if (kenv_get("debug.kpanic_stop_test", value, sizeof(value), &written) != WASMOS_OK ||
+        strcmp(value, "1") != 0) {
+        return;
+    }
+#if WASMOS_SMP
+    if (g_cpu_count < 2u || !__atomic_load_n(&g_cpus[1].started, __ATOMIC_ACQUIRE)) {
+        klog_write("[kpanic-stop-test] needs a second online CPU; not run\n");
+        return;
+    }
+    __atomic_store_n(&g_kpanic_stop_test_armed, 1u, __ATOMIC_RELEASE);
+    /* CPU 1 reaches its scheduler loop within a tick; the bound only keeps a
+     * CPU that never does from hanging the boot, and the panic then reports it
+     * as it is. */
+    for (uint64_t spin = 0; spin < 2000000000ULL; ++spin) {
+        if (__atomic_load_n(&g_kpanic_stop_test_spinning, __ATOMIC_ACQUIRE)) {
+            break;
+        }
+        arch_cpu_relax();
+    }
+    klog_printf("[kpanic-stop-test] cpu 1 spinning with interrupts masked: %u\n",
+                (unsigned)__atomic_load_n(&g_kpanic_stop_test_spinning, __ATOMIC_ACQUIRE));
+    kpanic("kpanic stop test", 1, 0);
+#else
+    klog_write("[kpanic-stop-test] needs an SMP kernel; not run\n");
+#endif
+}
 
 /* Allocate zeroed frames inside the bootstrap window (KERNEL_BOOTSTRAP_WINDOW_BYTES,
  * arch/vm_layout.h: 64 MiB on x86_64, the whole direct map on aarch64, whose RAM
@@ -218,6 +271,12 @@ void kernel_boot_run_low_slot_sweep_diagnostic(void) {
 void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
         arch_irq_disable();
+#if WASMOS_SMP
+        if (__atomic_load_n(&g_kpanic_stop_test_armed, __ATOMIC_RELAXED) &&
+            cpu_local()->cpu_id == 1u) {
+            kpanic_stop_test_spin();
+        }
+#endif
         int rc = process_schedule_once();
         /* SCHED_OK, or a thread that just blocked/exited/zombied/raced
          * (including SCHED_R_STALE, a thread reaped out from under the picker),

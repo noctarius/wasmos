@@ -2368,9 +2368,13 @@ and the reason it prints names what is missing. Read
   test can force -- so none has a red-first test. Validated under
   `-accel hvf -smp 4` (real Apple cores, weak ordering): the stress gate 15/15
   and the full aarch64 suite (337 tests).
-- [ ] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64:
-  `arch_stop_other_cpus` raises an ordinary SGI (`smp_aarch64.c` TODO); a GICv3
-  pseudo-NMI (priority masking through `ICC_PMR_EL1`) would reach it.
+- [x] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64: on a GIC
+  with one security state the stop SGI is Group 0, taken as an FIQ, and FIQs
+  stay unmasked in the kernel (`tests/test_kpanic_stop.py`).
+- [ ] [FEATURE][P3] The same on a GIC with two security states, where Group 0
+  is the secure world's and the stop is still an ordinary SGI
+  (`smp_aarch64.c` TODO): a GICv3 pseudo-NMI (priority masking through
+  `ICC_PMR_EL1`) would reach it.
 - [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
   TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
 - [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3

@@ -107,7 +107,10 @@ static void kernel_publish_boot_partition(const boot_info_t* boot_info) {
  *                     and ignored.
  *   linmem.slots=N    hand out at most N linear-memory slots (linmem_slot_set_limit),
  *                     so a test can run the pool out.  A value that is not a decimal
- *                     number is reported and ignored. */
+ *                     number is reported and ignored.
+ *   debug.kpanic_stop_test=1
+ *                     panic on purpose once the CPUs are up, with CPU 1 spinning
+ *                     interrupts-masked (kernel_boot_kpanic_stop_test). */
 static void kernel_apply_log_serial(void);
 static void kernel_apply_linmem_slots(void);
 
@@ -347,6 +350,7 @@ void kmain(boot_info_t* boot_info) {
     klog_write("[kernel] interrupts on\n");
     arch_irq_enable();
     smp_cpus_up();
+    kernel_boot_kpanic_stop_test();
 
     /* Each AP installs its own per-CPU idle thread in smp_ap_c_entry BEFORE it
      * joins the scheduler loop; the BSP must not take that on after

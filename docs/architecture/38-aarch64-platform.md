@@ -130,8 +130,13 @@ is [28-smp.md](28-smp.md).
   the secondaries one at a time, because they share the boot block, and gives
   each a second before reporting it absent.
 - **Stopping.** `arch_stop_other_cpus` raises SGI 1 on every other CPU, which
-  hands its frame to `kpanic_nmi`. Unlike x86_64's NMI it is masked with IRQs, so
-  a CPU spinning with interrupts off is reported uncaptured.
+  hands its frame to `kpanic_nmi`. On a GIC with one security state
+  (`GICD_CTLR.DS = 1`, QEMU `virt`) the SGI is Group 0 and arrives as an FIQ.
+  The kernel masks only `PSTATE.I`, and every exception handler unmasks F on
+  entry, so like x86_64's NMI the stop reaches a CPU spinning with interrupts
+  off (`tests/test_kpanic_stop.py`, boot option `debug.kpanic_stop_test=1`).
+  With two security states Group 0 is the secure world's and the stop is an
+  ordinary Group 1 SGI, masked with IRQs.
 - **TLB.** Every invalidation is already broadcast (`TLBI ...IS`), so mappings
   need no shootdown IPI.
 
@@ -222,10 +227,9 @@ whose reason names what is missing.
 
 ### Deferred Work
 
-- Stopping a CPU that spins with IRQs masked: `arch_stop_other_cpus` would
-  need a GICv3 pseudo-NMI (priority masking through `ICC_PMR_EL1`).
-- The aarch64-only items of the weak-memory audit, validated under
-  `-accel hvf -smp N`.
+- Stopping a CPU that spins with IRQs masked on a GIC with two security
+  states: there Group 0 is the secure world's, and the stop would need a GICv3
+  pseudo-NMI (priority masking through `ICC_PMR_EL1`).
 - WARP: the aarch64 backend in the kernel (code loading, ring-3 trampolines)
   and per-arch AOT artifacts.
 - Containment of every EL0 exception: only an unresolved instruction or data

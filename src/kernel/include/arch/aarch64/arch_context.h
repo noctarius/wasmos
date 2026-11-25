@@ -47,9 +47,9 @@ static inline __attribute__((always_inline)) uint64_t arch_read_flags(void) {
 #define AARCH64_SPSR_MODE_MASK 0xFu
 #define AARCH64_SPSR_EL0T 0x0u
 #define AARCH64_SPSR_EL1H 0x5u
-/* Interrupts (IRQ) unmasked, FIQ/SError/debug masked: the PSTATE a fresh
- * context starts with. */
-#define AARCH64_SPSR_DAIF_FIQ_SERR_DBG 0x340u
+/* IRQ and FIQ unmasked, SError and debug masked: the PSTATE a fresh kernel
+ * context starts with. FIQ is kpanic's stop request (gic_aarch64.c). */
+#define AARCH64_SPSR_DAIF_SERR_DBG 0x300u
 
 /* Saved state of a thread. `sp` is the kernel stack pointer (SP_EL1) to resume
  * on; `user_sp` is SP_EL0. `root_table` is the physical address of the
@@ -106,7 +106,7 @@ static inline void arch_context_init_kernel_entry(process_context_t* ctx, uint64
     ctx->sp = kernel_sp;
     ctx->user_sp = kernel_sp;
     ctx->pc = pc;
-    ctx->pstate = AARCH64_SPSR_EL1H | AARCH64_SPSR_DAIF_FIQ_SERR_DBG;
+    ctx->pstate = AARCH64_SPSR_EL1H | AARCH64_SPSR_DAIF_SERR_DBG;
 }
 
 static inline void arch_context_set_user_entry(process_context_t* ctx, uint64_t pc,

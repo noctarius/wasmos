@@ -7,6 +7,7 @@
 #include "arch/arch_cpu.h"
 #include "cpu.h"
 #include "cpu_local.h"
+#include "gic_aarch64.h"
 #include "irq.h"
 #include "klog.h"
 #include "kpanic.h"
@@ -72,12 +73,28 @@ void arch_irq_frame_log(const irq_frame_t* frame) {
                 (unsigned long long)frame->x[30]);
 }
 
-/* Vector indices (vectors.S): synchronous and IRQ, taken from EL1 on SP_EL1
- * and from EL0. */
+/* Vector indices (vectors.S): synchronous, IRQ and FIQ, taken from EL1 on
+ * SP_EL1 and from EL0. */
 #define VECTOR_EL1_SYNC 4u
 #define VECTOR_EL1_IRQ 5u
+#define VECTOR_EL1_FIQ 6u
 #define VECTOR_EL0_SYNC 8u
 #define VECTOR_EL0_IRQ 9u
+#define VECTOR_EL0_FIQ 10u
+
+/* The only FIQ is kpanic's stop request (gic_send_stop_others): capture the
+ * interrupted state and halt. Ended first, since a panicking capture does not
+ * return. Anything else Group 0 is ended and ignored. */
+static void aarch64_fiq(irq_frame_t* frame) {
+    uint32_t intid = gic_fiq_ack();
+    if (intid >= GIC_INTID_SPECIAL_FIRST) {
+        return;
+    }
+    gic_fiq_eoi(intid);
+    if (intid == GIC_SGI_STOP) {
+        kpanic_nmi(frame->elr, frame->sp, frame->x[29], frame->spsr, 0);
+    }
+}
 
 /* ESR_EL1 exception classes and abort fields (ARM ARM D17.2.37). */
 #define ESR_EC(esr) (((esr) >> 26) & 0x3Fu)
@@ -149,6 +166,18 @@ static int handle_abort(uint64_t esr, uint64_t far, const irq_frame_t* frame) {
  * BRK, an alignment fault -- panics the kernel instead of terminating the
  * process, so a user program can take the system down (docs/TASKS.md). */
 void aarch64_exception(irq_frame_t* frame, uint64_t kind) {
+    if (kind == VECTOR_EL1_FIQ || kind == VECTOR_EL0_FIQ) {
+        aarch64_fiq(frame);
+        return;
+    }
+    /* Taking the exception masked FIQs along with everything else. Only the
+     * stop request is an FIQ and it never returns, so unmasking here is safe
+     * at any depth -- and it is what lets the stop reach a CPU spinning inside
+     * a handler, a syscall or the kernel code they call. */
+    if (kind == VECTOR_EL1_SYNC || kind == VECTOR_EL0_SYNC || kind == VECTOR_EL1_IRQ ||
+        kind == VECTOR_EL0_IRQ) {
+        __asm__ volatile("msr daifclr, #1" ::: "memory");
+    }
     if (kind == VECTOR_EL1_IRQ || kind == VECTOR_EL0_IRQ) {
         aarch64_irq(frame);
         return;

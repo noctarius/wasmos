@@ -62,11 +62,15 @@ def main():
         )
     else:
         cfg = default_config()
-    # A kernel self-test tree: the kernel log goes to COM2, which the
-    # kernel writes itself, rather than to the virtio console a
+    # A kernel self-test tree: on x86_64 the kernel log goes to COM2, which
+    # the kernel writes itself, rather than to the virtio console a
     # user-space driver feeds -- the self-tests run before (or without)
-    # that driver, and their failures are what the log must show.
-    cfg.klog_port = "com2"
+    # that driver, and their failures are what the log must show. aarch64
+    # has no second UART; its early kernel log reaches the console UART
+    # until the console driver takes over, which is where the stress
+    # markers land.
+    if cfg.arch == "x86_64":
+        cfg.klog_port = "com2"
 
     if stress_test_compiled_in(cfg.esp_dir) is False:
         sys.stderr.write(

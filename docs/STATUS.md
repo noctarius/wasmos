@@ -783,17 +783,19 @@ linked feature documents for rationale and rollout plans.
 - Target architecture is a Kconfig choice (`WASMOS_ARCH_X86_64` /
   `WASMOS_ARCH_AARCH64`); `ARCHES` in `scripts/buildgen/toolchains.py` holds
   every per-architecture build and QEMU value. aarch64
-  (`aarch64_wasm3_single_defconfig`, QEMU `virt` with GICv3, HVF locally and TCG
-  in CI) boots to the CLI on one core under wasm3 and runs every QEMU battery,
-  in CI on an aarch64-linux runner; `run-qemu-test` and
+  (`aarch64_wasm3_{single,smp}_defconfig`, QEMU `virt` with GICv3, HVF locally
+  and TCG in CI) boots to the CLI under wasm3, on one core or on four with the
+  secondaries started through PSCI `CPU_ON`, and runs every QEMU battery on the
+  SMP configuration, in CI on an aarch64-linux runner; `run-qemu-test` and
   `run-qemu-ring3-threading-test` pass. It drives: EL0/EL1 with `svc` syscalls,
   TTBR0/TTBR1 paging with the x86_64 slot geometry, GICv3 SPIs, MSI/MSI-X
   through the ITS, PCIe through ECAM, ACPI devices plus a board table, the
   PL011 console, virtio-blk as the boot disk, virtio-net, -rng, -console, the
   clock (below), the display and input (below), and PSCI power-off. The design
   is [architecture/38-aarch64-platform.md](architecture/38-aarch64-platform.md);
-  SMP, WARP, ASIDs and a framebuffer for firmware without a GOP are open
-  (`TASKS.md`, "arm64 Port").
+  WARP, ASIDs and a framebuffer for firmware without a GOP are open
+  (`TASKS.md`, "arm64 Port"). The SMP scheduler stress gate
+  (`run-qemu-sched-stress-test`) panics on aarch64 SMP under HVF (TASKS.md).
 - The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
   (aarch64)"); both serve the `rtc` protocol through the shared core
   (`src/drivers/rtc/core/rtc_core.ts`), as the x86_64 CMOS driver now does. The

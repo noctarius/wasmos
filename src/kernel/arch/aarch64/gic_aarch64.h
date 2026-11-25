@@ -7,13 +7,29 @@
 
 #define GIC_INTID_SPURIOUS 1023u
 
-/* Bring the distributor, the boot CPU's redistributor and its system-register
- * CPU interface up with every interrupt disabled. Call once, with IRQs masked,
- * before any other gic_* call. */
+/* Bring the distributor up with every SPI disabled, then the boot CPU's own
+ * part (gic_cpu_init). Call once on the boot CPU, with IRQs masked, before any
+ * other gic_* call. */
 void gic_init(void);
+
+/* Bring up the calling CPU's part of the controller: find its redistributor
+ * among the contiguous frames at QEMU virt's GICR base by matching MPIDR_EL1
+ * against GICR_TYPER, record it in cpu_local()->arch.gicr_base, wake it with
+ * every SGI and PPI Group 1 and disabled, and enable the system-register CPU
+ * interface. Returns 0, or -1 when no redistributor carries this CPU's
+ * affinity. Every CPU runs it once, with IRQs masked, before taking an
+ * interrupt; cpu_local() must already resolve to the CPU's own slot. */
+int gic_cpu_init(void);
 
 /* Enable a PPI (16..31) on the calling CPU at the default priority. */
 void gic_enable_ppi(uint32_t intid);
+
+/* SGI a secondary-CPU stop request is sent as (arch_stop_other_cpus). */
+#define GIC_SGI_STOP 1u
+
+/* Raise SGI `intid` (0..15) on every CPU but the caller. Enabled on each CPU by
+ * gic_cpu_init. */
+void gic_send_sgi_others(uint32_t intid);
 
 /* Acknowledge the highest-priority pending interrupt and return its INTID
  * (GIC_INTID_SPURIOUS and the other special values when there is none). */
@@ -29,9 +45,9 @@ void gic_eoi(uint32_t intid);
 /* Whether intid is an SPI the distributor implements. */
 int gic_spi_valid(uint32_t intid);
 
-/* Make SPI `intid` a Group 1 interrupt routed to the boot CPU at the default
- * priority, level-sensitive (`level` non-zero) or edge-triggered, and leave it
- * disabled. */
+/* Make SPI `intid` a Group 1 interrupt routed to the boot CPU (whichever CPU
+ * the caller runs on) at the default priority, level-sensitive (`level` non-zero) or
+ * edge-triggered, and leave it disabled. */
 void gic_spi_configure(uint32_t intid, int level);
 
 /* Enable / disable delivery of SPI `intid` at the distributor. */

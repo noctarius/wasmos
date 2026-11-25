@@ -2280,9 +2280,10 @@ Other graphics/VT/UI:
 
 The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
 HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
-to the CLI on one core under wasm3, with console input through the PL011
-driver, and passes `run-qemu-test`. Every QEMU battery runs on it in CI
-(`aarch64_wasm3_single` in `tests/batteries.json`); a test whose subject aarch64
+to the CLI under wasm3 on one core or, with `WASMOS_SMP`, on several started
+through PSCI `CPU_ON`, with console input through the PL011 driver, and passes
+`run-qemu-test`. Every QEMU battery runs on it in CI (`aarch64_wasm3_smp` in
+`tests/batteries.json`); a test whose subject aarch64
 lacks is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
 and the reason it prints names what is missing. Read
 `docs/architecture/38-aarch64-platform.md` first, then `04-boot-and-handoff.md`,
@@ -2348,10 +2349,23 @@ and the reason it prints names what is missing. Read
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
   UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
   (`cpu_aarch64.c`).
-- [ ] [FEATURE][P2] SMP: PSCI `CPU_ON` bring-up behind `smp.h` and
-  `arch_stop_other_cpus` through an SGI; then the weak-memory audit under
-  `-accel hvf -smp N` of the plain loads and stores used as synchronisation
-  (IPC, xfer-buffer rings, `ringbuf.h`, futex, run queues).
+- [ ] [BUG][P1] The SMP scheduler stress gate (`WASMOS_SCHED_SMP_STRESS`,
+  `run-qemu-sched-stress-test`) panics on `aarch64_wasm3_smp` under HVF, 3 of 3
+  runs: a value just returned by `cpu_local()` is replaced by a small integer
+  on the scheduler's stack between the `mrs tpidr_el1` and its use in
+  `process_schedule_once_impl` (`arch_context_snapshot_callee_saved` of the
+  kernel-worker dispatch), so the snapshot writes near address 0. The register
+  itself is intact; the stack slot is overwritten. This looks like the same
+  race as the intermittent x86_64 MTTCG stress-gate panic (wild rip in
+  `process_schedule_once`), reproducible here on demand. The QEMU batteries
+  pass on the same tree.
+- [ ] [FEATURE][P2] The aarch64-only items of the weak-memory audit, validated
+  under `-accel hvf -smp N` (real Apple cores, weak ordering): new page tables
+  published before their zeroing is visible, the klog doorbell and ring
+  registration, `started`/kpanic `captured` read without acquire.
+- [ ] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64:
+  `arch_stop_other_cpus` raises an ordinary SGI (`smp_aarch64.c` TODO); a GICv3
+  pseudo-NMI (priority masking through `ICC_PMR_EL1`) would reach it.
 - [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
   TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
 - [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3

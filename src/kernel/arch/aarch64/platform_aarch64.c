@@ -35,9 +35,11 @@
 #define PL011_IMSC_RXIM (1u << 4)
 #define PL011_IMSC_RTIM (1u << 6)
 
-/* PSCI 0.2 function IDs (ARM DEN 0022, SMC32 convention). */
+/* PSCI 0.2 function IDs (ARM DEN 0022, SMC32 convention; CPU_ON is the SMC64
+ * form, which takes 64-bit addresses). */
 #define PSCI_SYSTEM_OFF 0x84000008u
 #define PSCI_SYSTEM_RESET 0x84000009u
+#define PSCI_CPU_ON_64 0xC4000003u
 
 extern uint32_t aarch64_boot_el;
 
@@ -86,25 +88,72 @@ void arch_log_uart_write(uint8_t byte) {
     (void)byte;
 }
 
-/* Issue a PSCI call through the conduit the boot exception level implies. A
- * SYSTEM_OFF or SYSTEM_RESET that succeeds does not return. */
-static void psci_call(uint32_t function) {
+/* Issue a PSCI call through the conduit the boot exception level implies and
+ * return x0 (a PSCI status: 0 success, negative errors). SMCCC lets the callee
+ * clobber x0-x17. A SYSTEM_OFF or SYSTEM_RESET that succeeds does not return. */
+static int64_t psci_call(uint32_t function, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
     register uint64_t x0 __asm__("x0") = function;
+    register uint64_t x1 __asm__("x1") = arg1;
+    register uint64_t x2 __asm__("x2") = arg2;
+    register uint64_t x3 __asm__("x3") = arg3;
     if (aarch64_boot_el == 2u) {
-        __asm__ volatile("smc #0" : "+r"(x0)::"x1", "x2", "x3", "memory");
+        __asm__ volatile("smc #0"
+                         : "+r"(x0),
+                           "+r"(x1),
+                           "+r"(x2),
+                           "+r"(x3)::"x4",
+                           "x5",
+                           "x6",
+                           "x7",
+                           "x8",
+                           "x9",
+                           "x10",
+                           "x11",
+                           "x12",
+                           "x13",
+                           "x14",
+                           "x15",
+                           "x16",
+                           "x17",
+                           "memory");
     } else {
-        __asm__ volatile("hvc #0" : "+r"(x0)::"x1", "x2", "x3", "memory");
+        __asm__ volatile("hvc #0"
+                         : "+r"(x0),
+                           "+r"(x1),
+                           "+r"(x2),
+                           "+r"(x3)::"x4",
+                           "x5",
+                           "x6",
+                           "x7",
+                           "x8",
+                           "x9",
+                           "x10",
+                           "x11",
+                           "x12",
+                           "x13",
+                           "x14",
+                           "x15",
+                           "x16",
+                           "x17",
+                           "memory");
     }
+    return (int64_t)x0;
+}
+
+/* PSCI CPU_ON: start the CPU with affinity `mpidr` at physical `entry`, MMU
+ * off, with `context` in x0. Returns the PSCI status (0 on success). */
+int64_t aarch64_psci_cpu_on(uint64_t mpidr, uint64_t entry, uint64_t context) {
+    return psci_call(PSCI_CPU_ON_64, mpidr, entry, context);
 }
 
 void kernel_system_poweroff(void) {
     arch_irq_disable();
-    psci_call(PSCI_SYSTEM_OFF);
+    (void)psci_call(PSCI_SYSTEM_OFF, 0, 0, 0);
     arch_halt_forever();
 }
 
 void kernel_system_reboot(void) {
     arch_irq_disable();
-    psci_call(PSCI_SYSTEM_RESET);
+    (void)psci_call(PSCI_SYSTEM_RESET, 0, 0, 0);
     arch_halt_forever();
 }

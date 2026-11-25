@@ -14,6 +14,7 @@
 #include "ipc.h"
 #include "irq.h"
 #include "klog.h"
+#include "kpanic.h"
 #include "msi.h"
 #include "policy.h"
 #include "process.h"
@@ -228,6 +229,14 @@ void aarch64_irq(irq_frame_t* frame) {
     if (intid >= GIC_LPI_BASE) {
         aarch64_msi_dispatch(intid);
         gic_eoi(intid);
+        return;
+    }
+    if (intid == GIC_SGI_STOP) {
+        /* kpanic's stop request (arch_stop_other_cpus): capture this CPU's
+         * interrupted state and halt. Ended first, since a panicking capture
+         * does not return. */
+        gic_eoi(intid);
+        kpanic_nmi(frame->elr, frame->sp, frame->x[29], frame->spsr, 0);
         return;
     }
     if (aarch64_timer_is_tick(intid)) {

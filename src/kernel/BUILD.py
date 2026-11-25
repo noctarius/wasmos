@@ -46,6 +46,7 @@ ARCH = {
             "arch/aarch64/its_aarch64.c",
             "arch/aarch64/msi_aarch64.c",
             "arch/aarch64/platform_aarch64.c",
+            "arch/aarch64/smp_aarch64.c",
         ],
         "ldscript": "arch/aarch64/linker.ld",
         "core": True,

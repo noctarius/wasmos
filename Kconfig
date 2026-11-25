@@ -17,9 +17,10 @@ config WASMOS_ARCH_X86_64
 config WASMOS_ARCH_AARCH64
     bool "aarch64 (QEMU virt, edk2)"
     help
-      arm64 port: one core under wasm3, booting to the CLI and gated by
-      run-qemu-test and the QEMU batteries. SMP and WARP are not implemented
-      on aarch64 yet; the interrupt controller choice (PIC/LAPIC/IOAPIC) is
+      arm64 port under wasm3, booting to the CLI and gated by
+      run-qemu-test and the QEMU batteries, on one core or (WASMOS_SMP)
+      several brought up through PSCI CPU_ON. WARP is not implemented on
+      aarch64 yet; the interrupt controller choice (PIC/LAPIC/IOAPIC) is
       x86_64's.
 
 endchoice
@@ -118,7 +119,7 @@ endchoice
 
 config WASMOS_SMP
     bool "Enable Symmetric Multi-Processing (SMP)"
-    depends on WASMOS_IRQ_IOAPIC
+    depends on WASMOS_IRQ_IOAPIC || WASMOS_ARCH_AARCH64
     default n
 
 config WASMOS_SCHED_CALLER_CPU_BIAS

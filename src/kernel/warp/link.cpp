@@ -2202,7 +2202,7 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
     }
     int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, (uint32_t)region_bytes, true);
     if (placed < 0) {
-        pfa_free_pages(phys_base, pages);
+        dma_region_unreserve(context_id, phys_base, pages);
         return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
     }
     uint32_t found_off = (uint32_t)placed;
@@ -2211,7 +2211,6 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
     warp_overlay_map_track(
         ctx->pid, WARP_REGION_TRACK_ID(found_off), found_off, (uint32_t)region_bytes);
     __builtin_memcpy(out_ptr, &phys_base, sizeof(uint64_t));
-    capability_dma_commit(context_id, region_bytes); /* charge the pinned footprint */
     return found_off;
 }
 

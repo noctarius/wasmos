@@ -685,6 +685,29 @@ static void run_reserve_cases(void) {
                       g_pfa_free_calls == 1,
                   "two pages against a one-page budget are refused and returned");
 
+    /* Regression: 2026-11-25-dma-budget-check-then-charge -- the budget was
+     * tested at reserve but charged only by the caller's commit after mapping,
+     * so two reservations outstanding at once (two threads of one driver, on
+     * two CPUs) both passed the test and together pinned twice the declared
+     * budget. A reservation counts from the moment it is granted. */
+    reserve_reset(CAPABLE_WINDOW_BASE);
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_NONE,
+                  "the first page of a one-page budget is granted");
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_DMA_RANGE &&
+                      g_pfa_free_calls == 1,
+                  "a second page while the first is still being mapped is refused");
+
+    /* Undoing a reservation whose mapping failed returns its frames and its
+     * share of the budget, so the next reservation fits again. */
+    reserve_reset(CAPABLE_WINDOW_BASE);
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_NONE,
+                  "a page is granted before the mapping that fails");
+    dma_region_unreserve(CTX_CAPABLE, phys, 1);
+    reserve_check(g_pfa_free_calls == 1 && g_pfa_freed_base == phys,
+                  "an undone reservation returns its frames");
+    reserve_check(dma_region_reserve(CTX_CAPABLE, 1, &phys) == WASMOS_ERR_NONE,
+                  "an undone reservation returns its budget");
+
     reserve_reset(CAPABLE_WINDOW_BASE);
     g_proc.context_id = CTX_BARE;
     reserve_check(dma_region_reserve(CTX_BARE, 1, &phys) == WASMOS_ERR_DMA_DENY &&

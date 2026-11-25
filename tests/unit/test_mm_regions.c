@@ -22,9 +22,8 @@
  * linked in whole; the paging and frame-allocator calls it makes are stubs.
  */
 
-#define _POSIX_C_SOURCE 200809L
-
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -152,8 +151,10 @@ int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
 #define BACKING_A 0x40000000ull
 #define BACKING_B 0x50000000ull
 static uint64_t g_linear_base;
-static volatile int g_torn;
-static volatile uint64_t g_torn_phys;
+/* Written by the faulting thread, read by the main one: atomics, so the test
+ * itself has no data race. */
+static atomic_int g_torn;
+static _Atomic uint64_t g_torn_phys;
 
 int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags) {
     (void)root_table;
@@ -181,7 +182,7 @@ int paging_unmap_4k(uint64_t virt) {
 /* --- The race. -------------------------------------------------------------- */
 
 #define CONTEXT_ID 7u
-static volatile int g_stop;
+static atomic_int g_stop;
 
 static void* rebind_writer(void* arg) {
     (void)arg;
@@ -242,7 +243,7 @@ static void s_a_fault_never_maps_past_the_backing_a_rebind_installs(void) {
     pthread_join(reader, 0);
     if (g_torn) {
         printf("  torn mapping: phys %llx for offset %llx\n",
-               (unsigned long long)g_torn_phys,
+               (unsigned long long)atomic_load(&g_torn_phys),
                (unsigned long long)PAGE);
     }
     CHECK(!g_torn, "every fault mapped a page of the backing bound at that moment");

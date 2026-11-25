@@ -119,6 +119,8 @@ endchoice
 
 config WASMOS_SMP
     bool "Enable Symmetric Multi-Processing (SMP)"
+    # The PIC modes keep their mask bytes unlocked and are sound only on one
+    # CPU (irq_x86_64.c, g_pic_mask1).
     depends on WASMOS_IRQ_IOAPIC || WASMOS_ARCH_AARCH64
     default n
 

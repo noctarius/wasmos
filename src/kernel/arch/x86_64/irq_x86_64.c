@@ -53,7 +53,13 @@
  * preemption, so it is safe to take from an ISR. */
 static irq_line_t g_irq_lines[IRQ_COUNT];
 static ksync_spinlock_t g_irq_lines_lock;
-/* PIC mask state used in modes 0 (direct PIC) and 1 (PIC via LINT0 ExtINT). */
+/* PIC mask state used in modes 0 (direct PIC) and 1 (PIC via LINT0 ExtINT).
+ * Read-modify-written without a lock of its own (irq_mask, irq_unmask), which
+ * is sound only because these modes run on one CPU: there the writers either
+ * hold g_irq_lines_lock, which masks interrupts, or run before interrupts are
+ * enabled (arch_timer_start). Kconfig is what keeps these modes single-CPU:
+ * WASMOS_SMP depends on WASMOS_IRQ_IOAPIC, and dropping that dependency makes
+ * these two bytes a cross-CPU race. */
 #if WASMOS_IRQ_MODE <= 1
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
@@ -249,9 +255,10 @@ void irq_init(void) {
  * ops table rather than from a host call. Unmasking a slave line (>= 8) also
  * clears the master's cascade bit, without which no slave IRQ is delivered.
  * Locking: the IOAPIC path takes the IOAPIC register lock internally. The PIC
- * path takes none and read-modify-writes the cached mask bytes, so callers that
- * can run concurrently must serialise themselves; the irq_sharing ops path does,
- * by holding g_irq_lines_lock. */
+ * path takes none and read-modify-writes the cached mask bytes; it runs only on
+ * a single-CPU build (see g_pic_mask1), where the callers hold
+ * g_irq_lines_lock (the irq_sharing ops) or run before interrupts are enabled
+ * (arch_timer_start). */
 int irq_mask(uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return -1;

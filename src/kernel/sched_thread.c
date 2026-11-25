@@ -148,7 +148,9 @@ static inline uint32_t cpu_sched_online_mask(void) {
         limit = WASMOS_MAX_CPUS;
     }
     for (uint32_t i = 1; i < limit && i < 32u; ++i) {
-        if (g_cpus[i].started) {
+        /* Acquire pairs with the CPU's release of `started`: its scheduler
+         * state is initialised before a thread is placed on its queue. */
+        if (__atomic_load_n(&g_cpus[i].started, __ATOMIC_ACQUIRE)) {
             mask |= (1u << i);
         }
     }

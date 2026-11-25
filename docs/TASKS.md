@@ -2358,10 +2358,16 @@ and the reason it prints names what is missing. Read
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
   UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
   (`cpu_aarch64.c`).
-- [ ] [FEATURE][P2] The aarch64-only items of the weak-memory audit, validated
-  under `-accel hvf -smp N` (real Apple cores, weak ordering): new page tables
-  published before their zeroing is visible, the klog doorbell and ring
-  registration, `started`/kpanic `captured` read without acquire.
+- [x] [FEATURE][P2] The aarch64-only items of the weak-memory audit: a new
+  page table is ordered (`dmb ishst`) before the descriptor that publishes it
+  and a new root before it can reach a TTBR; the klog ring is registered with a
+  release on `phys` read with acquire, and its doorbell set with release and
+  taken with an exchange; `started` and kpanic's `captured` are read with
+  acquire; the console ring's `write_pos` is a release store. None of these is
+  reproducible on demand -- each needs a table walk or a store reordering no
+  test can force -- so none has a red-first test. Validated under
+  `-accel hvf -smp 4` (real Apple cores, weak ordering): the stress gate 15/15
+  and the full aarch64 suite (337 tests).
 - [ ] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64:
   `arch_stop_other_cpus` raises an ordinary SGI (`smp_aarch64.c` TODO); a GICv3
   pseudo-NMI (priority masking through `ICC_PMR_EL1`) would reach it.

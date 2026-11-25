@@ -151,9 +151,9 @@ void smp_ap_c_entry(uint32_t cpu_id) {
      * current_pid == 0), and the idle thread is now already in place. */
     lapic_ap_enable(250u);
 
-    /* Signal the BSP that this AP has completed initialisation. */
-    __sync_synchronize();
-    g_cpus[cpu_id].started = 1;
+    /* Signal the BSP that this AP has completed initialisation: everything it
+     * set up above is visible to a CPU that acquires `started`. */
+    __atomic_store_n(&g_cpus[cpu_id].started, 1u, __ATOMIC_RELEASE);
 
     /* Join the scheduler loop — identical to the BSP path. */
     kernel_boot_run_scheduler_loop();

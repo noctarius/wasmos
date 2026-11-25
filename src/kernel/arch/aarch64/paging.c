@@ -142,6 +142,18 @@ static int alloc_table(uint64_t* out_phys) {
     return 0;
 }
 
+/* Store `desc`, which makes a newly built table reachable, into *entry. The
+ * table's own stores -- its zeroing in alloc_table and any entries written
+ * since -- are ordered before the descriptor: a table walker on any CPU,
+ * including a speculative walk, may follow the descriptor as soon as it is
+ * visible, and without the barrier it could read the frame's previous contents
+ * as translations (ARM ARM D8.2.6; Linux's pmd_populate path orders the same
+ * way). */
+static void table_publish(volatile uint64_t* entry, uint64_t desc) {
+    __asm__ volatile("dmb ishst" ::: "memory");
+    *entry = desc;
+}
+
 /* Make table and descriptor stores visible to the table walker before a
  * translation that depends on them (ARM ARM D8.2.6). */
 static void table_store_barrier(void) {
@@ -273,7 +285,7 @@ static int split_block(volatile uint64_t* entry, uint64_t block_va, uint64_t blo
     }
     *entry = 0;
     tlb_invalidate_all();
-    *entry = table | DESC_VALID | DESC_TABLE;
+    table_publish(entry, table | DESC_VALID | DESC_TABLE);
     table_store_barrier();
     return 0;
 }
@@ -297,7 +309,7 @@ static int ensure_table(volatile uint64_t* entry, uint64_t entry_va, uint64_t en
     if (alloc_table(&phys) != 0) {
         return -1;
     }
-    *entry = phys | DESC_VALID | DESC_TABLE;
+    table_publish(entry, phys | DESC_VALID | DESC_TABLE);
     table_store_barrier();
     *out_phys = phys;
     return 0;
@@ -469,6 +481,9 @@ static int paging_create_address_space_locked(uint64_t* out_root_table) {
         pfa_free_pages(root, 1);
         return -1;
     }
+    /* The root reaches a walker through a TTBR0 write, possibly on another CPU,
+     * not through a descriptor: its zeroing has to be complete first. */
+    table_store_barrier();
     *out_root_table = root;
     return 0;
 }
@@ -547,7 +562,7 @@ int paging_clone_low_slot_in_root(uint64_t root_table) {
     if (!copy) {
         return -1;
     }
-    table_ptr(root_table)[LOW_L0_INDEX] = copy | DESC_VALID | DESC_TABLE;
+    table_publish(&table_ptr(root_table)[LOW_L0_INDEX], copy | DESC_VALID | DESC_TABLE);
     table_store_barrier();
     return 0;
 }

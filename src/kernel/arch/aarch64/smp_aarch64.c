@@ -15,6 +15,7 @@
 
 #if WASMOS_SMP
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "acpi_aarch64.h"
@@ -47,14 +48,14 @@ extern const uint64_t aarch64_secondary_entry_phys; /* entry.S */
 
 /* Boot stack of each secondary, which becomes its scheduler-loop stack.
  * Indexed by cpu_id - 1. */
-#define SMP_AP_STACK_SIZE (32u * 1024u)
+#define SMP_AP_STACK_SIZE ((size_t)32u * 1024u)
 static uint8_t g_ap_stacks[WASMOS_MAX_CPUS - 1][SMP_AP_STACK_SIZE] __attribute__((aligned(16)));
 
 /* What _start_secondary reads with its MMU off (layout fixed by entry.S). One
  * block serves every secondary: smp_cpus_up starts them one at a time and does
  * not rewrite it until the previous one has published `started`, by which time
- * it has read the block. Aligned to a cache line, so cleaning it touches no
- * other data. */
+ * it has read the block -- and stops after one that never does. Aligned to a
+ * cache line, so cleaning it touches no other data. */
 typedef struct {
     uint64_t ttbr0;
     uint64_t ttbr1;
@@ -157,10 +158,12 @@ void smp_ap_c_entry(uint32_t cpu_id) {
 }
 
 /* Start each recorded secondary in turn and wait up to a second for it to
- * publish `started`. A CPU that PSCI refuses, or that never arrives, is
- * reported and left out: it stays counted with started == 0, which the
- * scheduler and kpanic already treat as offline. Boot CPU only, once, after the
- * scheduler is ready. */
+ * publish `started`. A CPU that PSCI refuses is reported and skipped (it never
+ * reads the boot block). A CPU that PSCI accepted but that never arrives ends
+ * the bring-up: it may still read the block later, so the block is not reused.
+ * Either way the CPU stays counted with started == 0, which the scheduler and
+ * kpanic already treat as offline. Boot CPU only, once, after the scheduler is
+ * ready. */
 void smp_cpus_up(void) {
     if (g_cpu_count <= 1u) {
         klog_write("[smp] no secondary CPUs to bring up\n");
@@ -197,7 +200,13 @@ void smp_cpus_up(void) {
                         (unsigned)i,
                         (unsigned long long)ap->arch.mpidr);
         } else {
-            klog_printf("[smp] cpu %u TIMEOUT -- not responding\n", (unsigned)i);
+            /* A timeout does not cancel a CPU_ON that PSCI accepted: the CPU may
+             * still arrive and read the boot block. Rewriting the block for the
+             * next CPU could then hand both the same stack and cpu_local, so no
+             * further CPU is started. */
+            klog_printf("[smp] cpu %u TIMEOUT -- not responding; not starting the rest\n",
+                        (unsigned)i);
+            break;
         }
     }
 }

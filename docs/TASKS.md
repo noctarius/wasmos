@@ -2349,12 +2349,6 @@ and the reason it prints names what is missing. Read
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
   UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
   (`cpu_aarch64.c`).
-- [ ] [TEST][P2] Run the SMP scheduler stress gate on aarch64 in CI: the
-  `defconfig` job builds and boots x86_64 configurations only, so
-  `run-qemu-sched-stress-test` -- the reproducer of the kernel-worker resume
-  fault (`arch_call_on_stack_resumable`) -- runs on aarch64 only locally
-  (`./configure out/s configs/aarch64_wasm3_smp_defconfig --set
-  WASMOS_SCHED_SMP_STRESS=y; ninja -C out/s run-qemu-sched-stress-test`).
 - [ ] [FEATURE][P2] The aarch64-only items of the weak-memory audit, validated
   under `-accel hvf -smp N` (real Apple cores, weak ordering): new page tables
   published before their zeroing is visible, the klog doorbell and ring

@@ -73,11 +73,15 @@ jobs:
 
   defconfig:
     name: ${{ matrix.config }} (build + boot)
-    runs-on: ubuntu-24.04
+    # Every configuration in configs/, built in full and booted on its own
+    # architecture's runner: an aarch64 configuration on an arm64 runner, whose
+    # guest is native to the host's ISA (TCG still, see env below).
+    runs-on: ${{ startsWith(matrix.config, 'aarch64_') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
-        config: [x86_64_warp_single, x86_64_warp_smp, x86_64_wasm3_single, x86_64_wasm3_smp]
+        config: [x86_64_warp_single, x86_64_warp_smp, x86_64_wasm3_single, x86_64_wasm3_smp,
+                 aarch64_wasm3_single, aarch64_wasm3_smp]
     env:
       # Force TCG (software emulation). wasmos is only validated under TCG (the
       # dev environment is macOS QEMU); under KVM the bootloader->kernel handoff
@@ -87,15 +91,23 @@ jobs:
       # recovers. 600 s only made every failure cost ten minutes; 120 s still
       # leaves ~4x headroom over a good boot.
       WASMOS_QEMU_TEST_TIMEOUT: "120"
+      # aarch64 under TCG on the arm64 runner is slower than x86_64 on its own;
+      # the same factor the integration batteries use there.
+      WASMOS_TEST_TIMEOUT_SCALE: ${{ startsWith(matrix.config, 'aarch64_') && '3' || '1' }}
+      ARCH: ${{ startsWith(matrix.config, 'aarch64_') && 'aarch64' || 'x86_64' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build + emulation toolchain
         run: |
+          if [ "$ARCH" = aarch64 ]; then
+            emu="qemu-system-arm qemu-efi-aarch64"
+          else
+            emu="qemu-system-x86 ovmf"
+          fi
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build python3-pip \
-            qemu-system-x86 ovmf curl xz-utils
+            ninja-build python3-pip curl xz-utils $emu
           python3 -m pip install --user kconfiglib
 
       - name: Install LLVM 20
@@ -110,17 +122,18 @@ jobs:
       - name: Install Zig
         # Zig 0.14.1+ uses the zig-<arch>-<os>-<version> tarball naming.
         run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
-            | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          zig="zig-$(uname -m)-linux-${ZIG_VERSION}"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${zig}.tar.xz" | tar -xJ
+          echo "$PWD/${zig}" >> "$GITHUB_PATH"
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Install TinyGo
         run: |
-          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+          deb="tinygo_${TINYGO_VERSION}_$(dpkg --print-architecture).deb"
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/${deb}"
+          sudo dpkg -i "${deb}"
 
       - name: Install AssemblyScript
         run: |
@@ -130,7 +143,9 @@ jobs:
       - name: Stage OVMF (writable vars copy)
         # Ubuntu's ovmf package ships OVMF_CODE_4M.fd / OVMF_VARS_4M.fd, which the
         # firmware autodiscovery list does not know about, and the vars file must be
-        # writable for QEMU. Copy a matched pair to a writable location.
+        # writable for QEMU. Copy a matched pair to a writable location. aarch64
+        # uses QEMU's AAVMF, which configure finds itself.
+        if: env.ARCH != 'aarch64'
         run: |
           mkdir -p "$RUNNER_TEMP/ovmf"
           code=$(ls /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd 2>/dev/null | head -1)
@@ -143,15 +158,19 @@ jobs:
       - name: Tool versions
         run: |
           clang --version | head -1; ld.lld --version | head -1
-          qemu-system-x86_64 --version | head -1
+          "qemu-system-$ARCH" --version | head -1
           zig version; rustc --version; tinygo version || true
           asc --version || true
 
       - name: Configure (${{ matrix.config }})
         run: |
-          ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig" \
-            --ovmf-code="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
-            --ovmf-vars="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          if [ "$ARCH" = aarch64 ]; then
+            ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig"
+          else
+            ./configure "out/${{ matrix.config }}" "configs/${{ matrix.config }}_defconfig" \
+              --ovmf-code="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
+              --ovmf-vars="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          fi
 
       # WASMOS_QEMU_TEST_TIMEOUT (job env) sets the halt test's budget.
       - name: Build + boot test (${{ matrix.config }})

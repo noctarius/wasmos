@@ -501,9 +501,11 @@ qemu-system-x86_64 ... -smp 2
 | `ninja -C out/<dir> run-qemu-test` with a `*_smp_defconfig` tree    | APs come online, scheduler dispatches across CPUs (`-smp 4`)           |
 
 `configs/wasmos_defconfig` leaves `WASMOS_SMP` off, so a tree seeded from it
-does not exercise the AP bring-up path. CI runs `run-qemu-test` for all four
-`{wasm3,warp}_{single,smp}_defconfig` configurations
-(`.github/workflows/ci.yml`, `defconfig` job).
+does not exercise the AP bring-up path. CI's `defconfig` job
+(`.github/workflows/ci.yml`) builds and boots every configuration -- the four
+`x86_64_{wasm3,warp}_{single,smp}` and the two `aarch64_wasm3_{single,smp}`,
+each on its own architecture's runner -- and runs the SMP scheduler stress test
+(`run-qemu-sched-stress-test`) on the `_smp` ones.
 
 ---
 

@@ -24,7 +24,17 @@
 #include "klog.h"
 #include "memory.h"
 #include "physmem.h"
+#include "sync/spinlock.h"
 #include <stdint.h>
+
+/* Serialises every change to the page tables. The kernel half of every root
+ * shares its intermediate tables, so two CPUs mapping into the same absent
+ * range would each allocate a table and install it in the same entry, and the
+ * second install discards the first CPU's mapping (and leaks its frame). Leaf
+ * lock apart from the physical frame allocator, which never calls back into
+ * paging. Lookups (paging_virt_to_phys*) read without it: tables are only ever
+ * installed under it, never freed while shared. */
+static ksync_spinlock_t g_paging_lock;
 
 #define ENTRIES_PER_TABLE 512u
 #define PAGE_SIZE_4K 0x1000ULL
@@ -447,7 +457,7 @@ static int verify_user_root(uint64_t root_table, int log_failures) {
 
 /* A fresh TTBR0 table with the low and user slots empty. The kernel half needs
  * no copy: TTBR1 is shared. */
-int paging_create_address_space(uint64_t* out_root_table) {
+static int paging_create_address_space_locked(uint64_t* out_root_table) {
     if (!out_root_table || !g_kernel_root) {
         return -1;
     }
@@ -461,6 +471,13 @@ int paging_create_address_space(uint64_t* out_root_table) {
     }
     *out_root_table = root;
     return 0;
+}
+
+int paging_create_address_space(uint64_t* out_root_table) {
+    ksync_spinlock_lock(&g_paging_lock);
+    int rc = paging_create_address_space_locked(out_root_table);
+    ksync_spinlock_unlock(&g_paging_lock);
+    return rc;
 }
 
 /* Free the table frames below `entry` down to `levels` further levels; leaf
@@ -555,7 +572,8 @@ int paging_strip_low_slot_in_root(uint64_t root_table) {
     return verify_user_root(root_table, 0);
 }
 
-int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags) {
+static int paging_map_4k_in_root_locked(uint64_t root_table, uint64_t virt, uint64_t phys,
+                                        uint64_t flags) {
     if (!root_table) {
         return -1;
     }
@@ -607,7 +625,14 @@ int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uin
     return 0;
 }
 
-int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
+int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags) {
+    ksync_spinlock_lock(&g_paging_lock);
+    int rc = paging_map_4k_in_root_locked(root_table, virt, phys, flags);
+    ksync_spinlock_unlock(&g_paging_lock);
+    return rc;
+}
+
+static int paging_unmap_4k_in_root_locked(uint64_t root_table, uint64_t virt) {
     if (!root_table) {
         return -1;
     }
@@ -640,6 +665,13 @@ int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
     *pte = 0;
     tlb_invalidate_page(virt);
     return 0;
+}
+
+int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt) {
+    ksync_spinlock_lock(&g_paging_lock);
+    int rc = paging_unmap_4k_in_root_locked(root_table, virt);
+    ksync_spinlock_unlock(&g_paging_lock);
+    return rc;
 }
 
 int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags) {

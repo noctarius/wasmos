@@ -6,6 +6,7 @@
 #include "list.h"
 #include "memory.h"
 #include "string.h"
+#include "sync/spinlock.h"
 
 #define CAP_ALL_MASK ((1u << 12) - 1u)
 #define CAP_PAGE_SIZE 0x1000u
@@ -26,10 +27,13 @@ typedef struct {
     uint32_t mask;
 } capability_context_state_t;
 
-/* TODO: The capability table has no lock, while grants (spawn/app load) and
- * checks (hardware host calls) run on any CPU. A grant that grows the list can
- * race a concurrent lookup. */
+/* One record per context. Grants and releases (spawn and reap) and checks
+ * (every hardware host call) run on any CPU, so every access goes through
+ * g_cap_lock: writers hold it for the whole update, readers take a copy of the
+ * record under it (capability_snapshot) and decide on the copy, so a check
+ * never sees a record half-written or freed under it. */
 static list_t g_cap_ctx;
+static ksync_spinlock_t g_cap_lock;
 
 static uint32_t kind_to_mask(capability_kind_t kind) {
     switch (kind) {
@@ -62,6 +66,7 @@ static uint32_t kind_to_mask(capability_kind_t kind) {
     }
 }
 
+/* Caller holds g_cap_lock. */
 static capability_context_state_t* capability_state_for_context(uint32_t context_id,
                                                                 uint8_t create_if_missing) {
     list_iter_t it;
@@ -84,6 +89,21 @@ static capability_context_state_t* capability_state_for_context(uint32_t context
     return ctx;
 }
 
+/* Copies the record for context_id into *out under g_cap_lock and returns out,
+ * or 0 when the context has no record. */
+static const capability_context_state_t* capability_snapshot(uint32_t context_id,
+                                                             capability_context_state_t* out) {
+    const capability_context_state_t* found = 0;
+    ksync_spinlock_lock(&g_cap_lock);
+    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    if (ctx) {
+        *out = *ctx;
+        found = out;
+    }
+    ksync_spinlock_unlock(&g_cap_lock);
+    return found;
+}
+
 /* Creates the capability table and seeds context 0 with every capability bit.
  * Must run before any grant or check; without it every lookup finds an empty
  * list and therefore denies, which is the safe direction but silently disables
@@ -98,12 +118,13 @@ void capability_init(void) {
         return;
     }
     /* Kernel context has all capabilities by construction. */
+    ksync_spinlock_lock(&g_cap_lock);
     capability_context_state_t* kernel = capability_state_for_context(0, 1);
-    if (!kernel) {
-        return;
+    if (kernel) {
+        kernel->configured = 1;
+        kernel->mask = CAP_ALL_MASK;
     }
-    kernel->configured = 1;
-    kernel->mask = CAP_ALL_MASK;
+    ksync_spinlock_unlock(&g_cap_lock);
 }
 
 /* The manifest name of every capability kind; the match is exact, so a prefix
@@ -160,8 +181,10 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
     }
     uint32_t mask = kind_to_mask(kind);
 
+    ksync_spinlock_lock(&g_cap_lock);
     capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
     if (!ctx) {
+        ksync_spinlock_unlock(&g_cap_lock);
         return -1;
     }
     ctx->configured = 1;
@@ -178,6 +201,7 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
         ctx->dma_windows[0].base = 0;
         ctx->dma_windows[0].length = 0x80000000ull;
     }
+    ksync_spinlock_unlock(&g_cap_lock);
     return 0;
 }
 
@@ -187,7 +211,8 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
  * the capability bit ONLY: the per-resource narrowing lives in the
  * capability_*_allowed calls. */
 int capability_has(uint32_t context_id, capability_kind_t kind) {
-    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx)
         return 0;
     uint32_t mask = kind_to_mask(kind);
@@ -202,7 +227,8 @@ int capability_has(uint32_t context_id, capability_kind_t kind) {
  * capabilities are held, and is independent of
  * capability_spawn_profile_configured. */
 int capability_context_configured(uint32_t context_id) {
-    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     return ctx ? (ctx->configured != 0) : 0;
 }
 
@@ -248,15 +274,13 @@ static int capability_region_valid(const capability_region_t* r, uint32_t cap_fl
  * updated, so the context must not be started.
  *
  * Also returns -1 when no record can be created.  Returns 0 on success. */
-int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t region_count,
-                                 const capability_region_t* regions, uint32_t irq_count,
-                                 const uint32_t* irqs, uint32_t dma_direction_flags,
-                                 uint32_t dma_max_bytes, uint32_t dma_window_count,
-                                 const wasmos_dma_window_t* dma_windows) {
-    capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
-    if (!ctx) {
-        return -1;
-    }
+static int capability_set_spawn_profile_locked(capability_context_state_t* ctx, uint32_t cap_flags,
+                                               uint32_t region_count,
+                                               const capability_region_t* regions,
+                                               uint32_t irq_count, const uint32_t* irqs,
+                                               uint32_t dma_direction_flags, uint32_t dma_max_bytes,
+                                               uint32_t dma_window_count,
+                                               const wasmos_dma_window_t* dma_windows) {
     ctx->spawn_profile_configured = 1;
     ctx->region_count = 0;
     if (region_count > CAPABILITY_REGION_LIMIT || (region_count > 0 && !regions)) {
@@ -301,13 +325,38 @@ int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32
     return 0;
 }
 
+int capability_set_spawn_profile(uint32_t context_id, uint32_t cap_flags, uint32_t region_count,
+                                 const capability_region_t* regions, uint32_t irq_count,
+                                 const uint32_t* irqs, uint32_t dma_direction_flags,
+                                 uint32_t dma_max_bytes, uint32_t dma_window_count,
+                                 const wasmos_dma_window_t* dma_windows) {
+    int rc = -1;
+    ksync_spinlock_lock(&g_cap_lock);
+    capability_context_state_t* ctx = capability_state_for_context(context_id, 1);
+    if (ctx) {
+        rc = capability_set_spawn_profile_locked(ctx,
+                                                 cap_flags,
+                                                 region_count,
+                                                 regions,
+                                                 irq_count,
+                                                 irqs,
+                                                 dma_direction_flags,
+                                                 dma_max_bytes,
+                                                 dma_window_count,
+                                                 dma_windows);
+    }
+    ksync_spinlock_unlock(&g_cap_lock);
+    return rc;
+}
+
 /* 1 once capability_set_spawn_profile has run for this context.  policy.c uses
  * it to decide whether a capability bit alone authorises an action or whether
  * the profile's windows must be consulted, so a context WITHOUT a profile is the
  * more permissive case for port I/O and MMIO, and the less permissive one for
  * IRQ lines and DMA. */
 int capability_spawn_profile_configured(uint32_t context_id) {
-    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     return ctx ? (ctx->spawn_profile_configured != 0) : 0;
 }
 
@@ -317,7 +366,8 @@ int capability_spawn_profile_configured(uint32_t context_id) {
  * not check the CAP_IO_PORT bit.  It covers a single byte; use
  * capability_region_resolve for a wider access. */
 int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx) {
         return 0;
     }
@@ -349,7 +399,8 @@ int capability_io_port_allowed(uint32_t context_id, uint16_t port) {
  * multiple of its width. */
 int capability_region_resolve(uint32_t context_id, uint32_t region, uint32_t offset,
                               uint32_t access_width, capability_region_access_t* out) {
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     const capability_region_t* r = 0;
     if (!out) {
         return WASMOS_ERR_IO_NOT_AUTHORIZED;
@@ -392,7 +443,8 @@ int capability_region_resolve(uint32_t context_id, uint32_t region, uint32_t off
  * spawn profile is denied outright — unlike port I/O and MMIO, an interrupt
  * always needs an explicit profile. */
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx) {
         return 0;
     }
@@ -411,7 +463,8 @@ int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line) {
  * per-address MMIO window in the profile, so this is a whole-capability answer
  * and any permitted context may map any MMIO address. */
 int capability_mmio_allowed(uint32_t context_id) {
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx) {
         return 0;
     }
@@ -429,7 +482,8 @@ int capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_fla
     if (direction_flags == 0) {
         return 0;
     }
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx) {
         return 0;
     }
@@ -451,7 +505,8 @@ int capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t le
     if (length == 0) {
         return 0;
     }
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx) {
         return 0;
     }
@@ -484,7 +539,8 @@ int capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t le
  * CAP_DMA_BUFFER.  0 means no driver-owned DMA region may be created at all, not
  * "unlimited". */
 uint32_t capability_dma_max_bytes(uint32_t context_id) {
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx) {
         return 0;
     }
@@ -500,7 +556,8 @@ uint32_t capability_dma_max_bytes(uint32_t context_id) {
  * nothing serialises the two.  A zero `bytes`, a missing profile or capability,
  * and a zero budget are all denied. */
 int capability_dma_within_budget(uint32_t context_id, uint64_t bytes) {
-    const capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
     if (!ctx || bytes == 0) {
         return 0;
     }
@@ -518,11 +575,12 @@ int capability_dma_within_budget(uint32_t context_id, uint64_t bytes) {
  * budget back, and the counter is neither clamped to dma_max_bytes nor checked
  * for overflow.  An unknown context is ignored. */
 void capability_dma_commit(uint32_t context_id, uint64_t bytes) {
+    ksync_spinlock_lock(&g_cap_lock);
     capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
-    if (!ctx) {
-        return;
+    if (ctx) {
+        ctx->dma_pinned_bytes += bytes;
     }
-    ctx->dma_pinned_bytes += bytes;
+    ksync_spinlock_unlock(&g_cap_lock);
 }
 
 void capability_release_context(uint32_t context_id) {
@@ -530,8 +588,10 @@ void capability_release_context(uint32_t context_id) {
     if (context_id == 0) {
         return; /* the kernel context is never reaped */
     }
+    ksync_spinlock_lock(&g_cap_lock);
     ctx = capability_state_for_context(context_id, 0);
     if (ctx) {
         (void)list_remove(&g_cap_ctx, ctx);
     }
+    ksync_spinlock_unlock(&g_cap_lock);
 }

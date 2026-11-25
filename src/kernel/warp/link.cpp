@@ -2015,7 +2015,7 @@ static uint32_t warp_serial_owner_write(uint32_t buf_offset, uint32_t len, void*
  * Caller owns tracking/retain and the physical backing.  Returns the wasm
  * offset (>= 0) on success, or a packed WASMOS_ERR_LINMEM_* code (negative) on failure. */
 static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, uint64_t map_pages,
-                                      uint32_t window_size) {
+                                      uint32_t window_size, bool take_ref) {
     /* Scan linear memory for a free, page-aligned, non-overlapping window.
      * Start from the current active/committed linear-memory size instead of a
      * fixed 2 MiB floor so the first map stays inside memory WARP has already
@@ -2128,7 +2128,19 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
                 pfa_free_pages(old_phys & ~0xFFFULL, 1);
             }
         }
-        paging_map_4k(page_virt, phys_base + i * 0x1000ULL, 3ULL);
+        /* With take_ref, every frame mapped here holds one reference of its
+         * own, taken as it is mapped: linmem_slot_decommit frees each frame
+         * still mapped in the slot at teardown, so without it the frame's owner
+         * (block slot, DMA region, xfer-buffer object) and the decommit would
+         * both free it. Taken per page, so a placement that fails after mapping
+         * part of the window (the user-window map below) leaves exactly as many
+         * references as mappings. An explicit unmap drops it
+         * (warp_xfer_buffer_unmap). Without take_ref (phys_map: firmware frames
+         * the allocator never handed out, which cannot be pinned) the caller
+         * must unmap the window before the slot is decommitted. */
+        if (paging_map_4k(page_virt, phys_base + i * 0x1000ULL, 3ULL) == 0 && take_ref) {
+            pfa_pin_pages(phys_base + i * 0x1000ULL, 1);
+        }
     }
 #ifdef WASMOS_WASM_RUNTIME_WARP
     if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, map_pages) != 0) {
@@ -2178,16 +2190,14 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
     if (reserve_rc != WASMOS_ERR_NONE) {
         return (uint32_t)reserve_rc;
     }
-    int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, (uint32_t)region_bytes);
+    int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, (uint32_t)region_bytes, true);
     if (placed < 0) {
         pfa_free_pages(phys_base, pages);
         return (uint32_t)WASMOS_ERR_DMA_UNAVAILABLE;
     }
     uint32_t found_off = (uint32_t)placed;
-    /* Pin AFTER the remap so the run is never reused/relocated for the driver's
-     * lifetime.  Single-threaded WARP kernel context: nothing allocates between
-     * alloc and pin. */
-    pfa_pin_pages(phys_base, pages);
+    /* warp_linmem_place_phys took the mapping's own reference on the run, so it
+     * stays allocated for the driver's lifetime. */
     warp_overlay_map_track(
         ctx->pid, WARP_REGION_TRACK_ID(found_off), found_off, (uint32_t)region_bytes);
     __builtin_memcpy(out_ptr, &phys_base, sizeof(uint64_t));
@@ -2197,9 +2207,10 @@ static uint32_t warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_
 
 /* Overlay the caller's own 8 KiB block buffer into its linear-memory window so
  * the owner reads/writes block data in place instead of copying through
- * block_buffer_copy/write.  Idempotent.  Unlike warp_region_alloc the pages are
- * NOT pinned: they are owned by the block slot and freed by warp_release_pid on
- * reap, which also untracks this window. */
+ * block_buffer_copy/write.  Idempotent.  The pages carry two references once
+ * mapped: the block slot's own, dropped by warp_release_pid on reap, and the
+ * mapping's (taken by warp_linmem_place_phys), dropped when the slot's linear
+ * memory is decommitted -- the window is never unmapped before then. */
 static uint32_t warp_block_buffer_map(void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
     if (!ctx)
@@ -2216,7 +2227,7 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
         return slot->map_off;
 
     const uint32_t window = (uint32_t)(WARP_BLOCK_BUF_PAGES * 0x1000ULL);
-    int64_t placed = warp_linmem_place_phys(ctx, slot->phys, WARP_BLOCK_BUF_PAGES, window);
+    int64_t placed = warp_linmem_place_phys(ctx, slot->phys, WARP_BLOCK_BUF_PAGES, window, true);
     if (placed < 0)
         return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
     uint32_t off = (uint32_t)placed;
@@ -2236,8 +2247,8 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
  * resolves the phys backing from the xfer-buffer object; owner-only, so no DMA
  * capability is required. Idempotent per buffer_id.
  *
- * The overlay takes a phys refcount (pfa_pin_pages) for the lifetime of the
- * mapping, released in warp_xfer_buffer_unmap. This mirrors the region overlay
+ * The overlay holds a phys refcount (taken by warp_linmem_place_phys) for the
+ * lifetime of the mapping, released in warp_xfer_buffer_unmap. This mirrors the region overlay
  * path and is required for correctness: linmem_slot_decommit frees the phys of
  * every page still mapped in the slot at teardown, so if the process exits or
  * TRAPS before unmapping, decommit would free these object-owned pages and the
@@ -2267,13 +2278,13 @@ static uint32_t warp_xfer_buffer_map(uint32_t buffer_id, void* ctx_) {
         return existing.offset; /* idempotent */
     uint64_t pages = ((uint64_t)buf.size_bytes + 0xFFFULL) >> 12;
     uint32_t window = (uint32_t)(pages << 12);
-    int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, window);
+    int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, window, true);
     if (placed < 0)
         return (uint32_t)placed;
-    /* Hold a refcount on the object pages while the overlay is mapped so a slot
-     * decommit at teardown (process exit/trap without an unmap) cannot free them
-     * out from under the xfer-buffer owner. Released in warp_xfer_buffer_unmap. */
-    pfa_pin_pages(phys_base, pages);
+    /* warp_linmem_place_phys took the mapping's reference on the object pages,
+     * so a slot decommit at teardown (exit/trap without an unmap) cannot free
+     * them out from under the xfer-buffer owner. Released in
+     * warp_xfer_buffer_unmap. */
     warp_overlay_map_track(ctx->pid, track_id, (uint32_t)placed, window);
     return (uint32_t)placed;
 }
@@ -2408,7 +2419,12 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
         uint8_t* linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
         if (!linmem_base || !linmem_slot_contains(addr_cast(uint64_t, linmem_base)))
             return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
-        int64_t placed = warp_linmem_place_phys(ctx, page, pages, (uint32_t)region_bytes);
+        int64_t placed = warp_linmem_place_phys(ctx, page, pages, (uint32_t)region_bytes, false);
+        /* TODO: a placement that fails after mapping part of the window (the
+         * ring-3 user-window map) returns here with firmware frames still
+         * mapped in the slot and no window record, so warp_release_pid does not
+         * unmap them and the slot decommit frees frames the allocator never
+         * handed out. */
         if (placed < 0)
             return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
         uint32_t off = (uint32_t)placed;

@@ -335,13 +335,24 @@ M3Result  Read_opcode  (m3opcode_t * o_value, bytes_t  * io_bytes, cbytes_t i_en
         m3opcode_t opcode = * ptr++;
 
 #if d_m3CascadedOpcodes == 0
-        if (M3_UNLIKELY(opcode == c_waOp_extended || opcode == 0xFE))
+        if (M3_UNLIKELY(opcode == c_waOp_extended))
         {
             if (ptr < i_end)
             {
                 opcode = (opcode << 8) | (* ptr++);
             }
             else return m3Err_wasmUnderrun;
+        }
+        else if (M3_UNLIKELY(opcode == 0xFE))
+        {
+            /* The threads-proposal subopcode is an unsigned LEB128, which a
+             * producer may pad (FE 90 00 is i32.atomic.load); decode it as
+             * Compile_AtomicOpcode does, and refuse values past one byte. */
+            u32 sub = 0;
+            M3Result result = ReadLEB_u32 (& sub, & ptr, i_end);
+            if (result) return result;
+            if (sub > 0xFF) return m3Err_unknownOpcode;
+            opcode = (opcode << 8) | sub;
         }
 #endif
         * o_value = opcode;

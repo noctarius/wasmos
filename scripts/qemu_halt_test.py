@@ -61,9 +61,10 @@ def main():
         # Wait for CLI
         if not session.expect(b"wamos> "):
             return 1
-        session.send("halt")
-        if not session.wait_for_exit(5):
-            sys.stderr.write("FAIL: halt did not power off QEMU\n")
+        failure = session.halt()
+        if failure:
+            sys.stderr.write(f"FAIL: {failure}\n")
+            sys.stderr.write(session.tail() + "\n")
             return 1
         return 0
 

@@ -1982,6 +1982,25 @@ class QemuSession:
             self.close()
         raise RuntimeError(message)
 
+    def halt(self, timeout_s: float = 30.0) -> Optional[str]:
+        """Type `halt` at the CLI and wait for QEMU to exit; None on success,
+        otherwise why it failed.
+
+        The CLI has to be answering first (settle): a prompt seen during boot is
+        no proof the shell is reading, and a command typed before it is lost
+        without an echo. The power-off follows the shutdown sequence, which
+        waits on each participant, so it gets the same budget a test of that
+        sequence does rather than a fixed few seconds."""
+        if not self.settle():
+            return "the CLI never answered a probe"
+        mark = self.mark()
+        self.send("halt")
+        if self.expect_echo(mark, "halt", timeout_s=20) is None:
+            return "'halt' was never echoed"
+        if not self.wait_for_exit(timeout_s * _TIMEOUT_SCALE):
+            return "halt did not power off QEMU"
+        return None
+
     def wait_for_exit(self, timeout_s: float = 5.0) -> bool:
         if not self.proc:
             return True

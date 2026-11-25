@@ -1559,6 +1559,17 @@ static void warp_overlay_map_untrack(uint32_t pid, uint32_t id) {
     ksync_spinlock_unlock(&g_overlay_lock);
 }
 
+/* Drops every window `pid` holds, whatever its id. Called from the reap path:
+ * pids are never reused and the table is fixed-size, so an entry left behind by a
+ * dead process is a slot lost for the life of the kernel. */
+static void warp_overlay_map_release_pid(uint32_t pid) {
+    ksync_spinlock_lock(&g_overlay_lock);
+    for (uint32_t i = 0; i < WARP_OVERLAY_MAP_SLOTS; ++i)
+        if (g_warp_overlay_maps[i].valid && g_warp_overlay_maps[i].pid == pid)
+            g_warp_overlay_maps[i].valid = 0;
+    ksync_spinlock_unlock(&g_overlay_lock);
+}
+
 static int warp_overlay_map_find(uint32_t pid, uint32_t id, WarpOverlayMap* out) {
     int found = 0;
     ksync_spinlock_lock(&g_overlay_lock);
@@ -3057,14 +3068,13 @@ extern "C" void warp_release_pid(uint32_t pid) {
     /* Reclaim the per-pid block buffer pages before dropping the slot, else the
      * 2 pages leak on every process exit. */
     if (auto* bslot = static_cast<WarpBlockSlot*>(pid_map_get(&g_block_map, pid))) {
-        if (bslot->map_off) {
-            warp_overlay_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
-        }
         if (bslot->phys) {
             pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
         }
     }
     pid_map_remove(&g_block_map, pid);
+    /* Every window record of the process: block buffer, regions, xfer overlays. */
+    warp_overlay_map_release_pid(pid);
     /* phys_map windows map firmware frames into the linear-memory slot; unmap them
      * before warp_heap_release decommits the slot, which frees every frame still
      * mapped there. */

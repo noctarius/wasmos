@@ -76,8 +76,7 @@ _Static_assert(WASMOS_EXEC_APP_HEADER_SIZE == sizeof(wasmos_app_header_t),
 
 static wasmos_app_capability_granter_t g_capability_granter;
 static uint8_t g_subsystems_initialized;
-static ksync_spinlock_t g_subsystem_lock;
-static uint8_t g_subsystem_lock_initialized;
+static ksync_spinlock_t g_subsystem_lock; /* zero storage is unlocked; no init */
 
 #if WASMOS_WASM_RUNTIME == 1
 #define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WARP
@@ -242,13 +241,6 @@ static int check_bounds(uint32_t offset, uint32_t size, uint32_t blob_size) {
     return 0;
 }
 
-static void wasmos_subsystem_lock_init_once(void) {
-    if (!g_subsystem_lock_initialized) {
-        ksync_spinlock_init(&g_subsystem_lock);
-        g_subsystem_lock_initialized = 1u;
-    }
-}
-
 static int wasmos_subsystem_register_locked(const char* request_tag, const char* runtime_tag,
                                             const wasmos_subsystem_ops_t* ops) {
     if (!ops) {
@@ -274,7 +266,6 @@ static int wasmos_subsystem_register_locked(const char* request_tag, const char*
 int wasmos_subsystem_register(const char* request_tag, const char* runtime_tag,
                               const wasmos_subsystem_ops_t* ops) {
     int rc = -1;
-    wasmos_subsystem_lock_init_once();
     ksync_spinlock_lock(&g_subsystem_lock);
     rc = wasmos_subsystem_register_locked(request_tag, runtime_tag, ops);
     ksync_spinlock_unlock(&g_subsystem_lock);
@@ -324,7 +315,6 @@ static int wasmos_register_builtin_subsystems_once_locked(void) {
  * retries from the beginning — over registrations that already succeeded. */
 int wasmos_app_init_subsystems(void) {
     int rc = -1;
-    wasmos_subsystem_lock_init_once();
     ksync_spinlock_lock(&g_subsystem_lock);
     rc = wasmos_register_builtin_subsystems_once_locked();
     ksync_spinlock_unlock(&g_subsystem_lock);

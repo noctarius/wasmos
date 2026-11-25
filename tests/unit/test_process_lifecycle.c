@@ -75,6 +75,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "process.h"
 #include "thread.h"
@@ -1757,31 +1758,55 @@ static process_run_result_t retire_at_once_worker(process_t* process, uint32_t t
 }
 
 static uint32_t g_join_window_victim;
+static uint32_t g_retire_go;           /* start barrier: set by the hook */
+static uint32_t g_join_window_reached; /* the hook ran inside the window */
 
-/* Retires the joined thread on the other CPUs while the joiner sits inside the
- * window. CPU 0 is skipped: the joiner is its current thread. */
-static void retire_inside_the_join_window(uint32_t target_tid) {
-    if (target_tid != g_join_window_victim) {
-        return;
+/* CPU 1, on its own pthread: held at the start barrier until the joiner is
+ * inside its window, then dispatches until the joined thread has retired. CPU 0
+ * is never touched -- the joiner is its current thread. */
+static void* retirer_cpu(void* arg) {
+    uint32_t target_tid = (uint32_t)(uintptr_t)arg;
+    be_cpu(1);
+    while (!__atomic_load_n(&g_retire_go, __ATOMIC_ACQUIRE)) {
     }
-    for (uint32_t round = 0; round < 256u; ++round) {
-        for (uint32_t cpu = 1; cpu < NCPU; ++cpu) {
-            be_cpu(cpu);
-            (void)process_schedule_once();
-        }
+    for (uint32_t round = 0; round < 4096u; ++round) {
         thread_t* t = thread_get(target_tid);
         if (!t || t->state == THREAD_STATE_ZOMBIE) {
             break;
         }
+        (void)process_schedule_once();
     }
-    be_cpu(0);
+    return NULL;
+}
+
+/* Runs inside process_thread_join's window, with its join lock held. Releases
+ * the retirer and gives it ample time (~20 ms) to retire the target: with the
+ * hand-off serialised the retirement waits for the join to register and this
+ * simply times out; without it the target retires right here, before the
+ * joiner is registered. */
+static void let_the_target_retire_inside_the_join(uint32_t target_tid) {
+    const struct timespec tick = {0, 1000}; /* 1 us */
+    if (target_tid != g_join_window_victim) {
+        return;
+    }
+    __atomic_store_n(&g_join_window_reached, 1u, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_retire_go, 1u, __ATOMIC_RELEASE);
+    for (uint32_t spin = 0; spin < 20000u; ++spin) {
+        thread_t* t = thread_get(target_tid);
+        if (!t || t->state == THREAD_STATE_ZOMBIE) {
+            break;
+        }
+        nanosleep(&tick, NULL);
+    }
 }
 
 /* Regression: 2026-11-25-thread-join-lost-wakeup -- process_thread_join tested
  * "has the target exited", then registered itself as the target's joiner and
  * parked. A target that exited between the two found no joiner to wake, and the
  * joiner parked on a zombie for good: a guest thread_join hung forever on SMP.
- * The exit is injected at exactly that point through process_test_join_window. */
+ * Another CPU (a second pthread) retires the target while the joiner is inside
+ * that interval (process_test_join_window); the case fails if the interval is
+ * not protected against a concurrent exit. */
 static void s_a_thread_exiting_inside_the_join_still_wakes_its_joiner(void) {
     uint32_t pid = 0;
     uint32_t caller_tid = 0;
@@ -1804,11 +1829,26 @@ static void s_a_thread_exiting_inside_the_join_still_wakes_its_joiner(void) {
     cpu_sched_remove_thread(caller);
     cpu_local()->current_thread = caller;
 
+    pthread_t retirer;
+    g_retire_go = 0;
+    g_join_window_reached = 0;
     g_join_window_victim = target_tid;
-    process_test_join_window = retire_inside_the_join_window;
+    process_test_join_window = let_the_target_retire_inside_the_join;
+    if (pthread_create(&retirer, NULL, retirer_cpu, (void*)(uintptr_t)target_tid) != 0) {
+        CHECK(0, "started the retiring CPU");
+        process_test_join_window = 0;
+        cpu_local()->current_thread = 0;
+        drop_transition_target(pid);
+        return;
+    }
     int rc = process_thread_join(process_get(pid), target_tid, &status);
     process_test_join_window = 0;
+    /* Released here too, so a join that never reached the window cannot leave
+     * the retirer waiting forever; the check below fails that run. */
+    __atomic_store_n(&g_retire_go, 1u, __ATOMIC_RELEASE);
+    pthread_join(retirer, NULL);
     g_join_window_victim = 0;
+    CHECK(g_join_window_reached, "the join reached its window before the target retired");
 
     /* Either the join saw the exit and collected it at once, or it parked and
      * was woken; what must never happen is a joiner parked on a thread that

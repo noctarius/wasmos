@@ -406,8 +406,9 @@ void wasm3_release_pid(uint32_t pid) {
         }
     }
     ksync_spinlock_unlock(&g_wasm_window_lock);
-    /* Reclaim the per-pid block buffer.  Capture the phys under the side-table
-     * lock and free outside it so the PFA lock never nests under it. */
+    /* Reclaim the per-pid block buffer.  The slot is cleared under the side-table
+     * lock before the owner's reference is dropped, so a concurrent cross-process
+     * copy either finds no slot or holds its own pin (wasm_block_slot_phys_is_live). */
     uint64_t block_phys = 0;
     ksync_spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
@@ -498,8 +499,15 @@ static wasm_block_slot_t* wasm_block_slot_for_pid(uint32_t pid) {
  * buffer by the physical address the client handed over via IPC, so the owning
  * slot is usually not the caller's.  Matching phys against a live slot is what
  * bounds the hostcall to real 8 KiB block buffers instead of arbitrary physical
- * memory.  Returns 1 if a live slot matches, 0 otherwise. */
-static int wasm_block_slot_phys_is_live(uint64_t phys) {
+ * memory.  Returns 1 if a live slot matches, 0 otherwise.
+ *
+ * With `pin` set, a match also takes a frame reference (pfa_pin_pages) under the
+ * same lock wasm3_release_pid clears the slot under, so the owner's reap either
+ * clears the slot first (no match) or frees only its own reference afterwards;
+ * the caller's frames stay allocated until it calls wasm_block_unpin. Lock
+ * order: g_wasm_side_table_lock, then the frame allocator's, which never calls
+ * back here. */
+static int wasm_block_slot_phys_is_live(uint64_t phys, int pin) {
     int found = 0;
     if (phys == 0) {
         return 0;
@@ -507,12 +515,19 @@ static int wasm_block_slot_phys_is_live(uint64_t phys) {
     ksync_spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_block_slots[i].pid != 0 && g_wasm_block_slots[i].buffer_phys == phys) {
+            if (pin) {
+                pfa_pin_pages(phys, WASM_BLOCK_BUFFER_PAGES);
+            }
             found = 1;
             break;
         }
     }
     ksync_spinlock_unlock(&g_wasm_side_table_lock);
     return found;
+}
+
+static void wasm_block_unpin(uint64_t phys) {
+    pfa_free_pages(phys, WASM_BLOCK_BUFFER_PAGES);
 }
 
 /* Contract in wasm3/link_ipc.h. */
@@ -896,7 +911,7 @@ static wasmos_error_code_t wasm_block_buffer_validate_args(int32_t phys, int32_t
     /* phys must name a live block buffer, and the access must stay within that
      * buffer's fixed 8 KiB window.  Without this a guest could pass an arbitrary
      * phys and read/write any physical address below 4 GiB. */
-    if (!wasm_block_slot_phys_is_live((uint64_t)(uint32_t)phys)) {
+    if (!wasm_block_slot_phys_is_live((uint64_t)(uint32_t)phys, 0)) {
         return WASMOS_ERR_BLOCK_NO_SLOT;
     }
     /* The guest's int32 arguments are zero-extended, so a negative length
@@ -973,8 +988,15 @@ m3ApiRawFunction(wasmos_block_buffer_copy) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
+    /* Pinned for the copy: the buffer usually belongs to another process, which
+     * may be reaped meanwhile. */
+    if (!wasm_block_slot_phys_is_live((uint64_t)(uint32_t)phys, 1)) {
+        m3ApiReturn(WASMOS_ERR_BLOCK_NO_SLOT);
+    }
     const uint8_t* src = ptr_cast(uint8_t, ((uint32_t)phys + (uint32_t)offset));
-    if (wasm_copy_to_user_bytes(proc->context_id, ptr_user, src, (uint32_t)len) != 0) {
+    int copy_rc = wasm_copy_to_user_bytes(proc->context_id, ptr_user, src, (uint32_t)len);
+    wasm_block_unpin((uint64_t)(uint32_t)phys);
+    if (copy_rc != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     m3ApiReturn(0);
@@ -1012,9 +1034,14 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
         m3ApiReturn(WASMOS_ERR_KERNEL_BAD_POINTER);
     }
 
+    /* Pinned for the copy, as in wasmos_block_buffer_copy. */
+    if (!wasm_block_slot_phys_is_live((uint64_t)(uint32_t)phys, 1)) {
+        m3ApiReturn(WASMOS_ERR_BLOCK_NO_SLOT);
+    }
     uint8_t* dst = ptr_cast(uint8_t, ((uint32_t)phys + (uint32_t)offset));
     uint32_t copied = 0;
     uint8_t bounce[256];
+    int copy_rc = 0;
     while (copied < (uint32_t)len) {
         uint32_t chunk = (uint32_t)len - copied;
         if (chunk > (uint32_t)sizeof(bounce)) {
@@ -1022,12 +1049,17 @@ m3ApiRawFunction(wasmos_block_buffer_write) {
         }
         if (wasm_copy_from_user_bytes(
                 proc->context_id, ptr_user + (uint64_t)copied, bounce, chunk) != 0) {
-            m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
+            copy_rc = -1;
+            break;
         }
         for (uint32_t i = 0; i < chunk; ++i) {
             dst[copied + i] = bounce[i];
         }
         copied += chunk;
+    }
+    wasm_block_unpin((uint64_t)(uint32_t)phys);
+    if (copy_rc != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_COPY_FAILED);
     }
     m3ApiReturn(0);
 }

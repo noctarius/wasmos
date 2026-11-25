@@ -2302,11 +2302,6 @@ int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_ex
     if (target->owner_pid != process->pid || caller->owner_pid != process->pid) {
         return WASMOS_ERR_THREAD_NOT_OWNER;
     }
-#ifdef WASMOS_PROCESS_TEST_SEAMS
-    if (process_test_join_window) {
-        process_test_join_window(target_tid);
-    }
-#endif
     /* The test of the target's state and the registration as its joiner are one
      * step under g_thread_join_lock, which process_retire_thread also takes to
      * publish ZOMBIE and read the joiner: a target cannot exit between them. */
@@ -2331,6 +2326,11 @@ int process_thread_join(process_t* process, uint32_t target_tid, int32_t* out_ex
         ksync_spinlock_unlock(&g_thread_join_lock);
         return 0;
     }
+#ifdef WASMOS_PROCESS_TEST_SEAMS
+    if (process_test_join_window) {
+        process_test_join_window(target_tid);
+    }
+#endif
     if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
         ksync_spinlock_unlock(&g_thread_join_lock);
         return WASMOS_ERR_THREAD_BUSY;

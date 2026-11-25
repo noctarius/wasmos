@@ -594,7 +594,8 @@ int process_test_set_running(process_t* proc, struct thread* thread);
  * window lies inside one call. */
 extern void (*process_test_wait_window)(uint32_t target_pid);
 /* The same window in process_thread_join: after its "already a zombie?" test,
- * before it registers as the target's joiner and parks. */
+ * before it registers as the target's joiner and parks -- called with
+ * process.c's join lock held, so an exit racing the window must wait for it. */
 extern void (*process_test_join_window)(uint32_t target_tid);
 #endif
 

@@ -43,6 +43,7 @@ extern "C" {
 #include "process_manager.h"
 #include "list.h"
 #include "hashmap.h"
+#include "sync/spinlock.h"
 #include "memory.h"
 #include "physmem.h"
 #include "thread.h"
@@ -107,9 +108,37 @@ static int warp_ring3_sync_linmem_user_window(uint8_t* linmem_base);
 // key's lifetime (chaining + rehash relinks, never moves nodes), so the
 // pointer handed to WasmModule::setContext() stays valid.  Pre-sized so the
 // spawn hot path (which runs under the preempt-guard drain) does not rehash.
-// TODO(smp-warp): lookups/alloc here are unsynchronised; safe under the WARP
-// single-CPU invariant (see warp/shim.cpp), revisit for SMP.
 static hashmap_t g_ctx_map;
+
+/* Guards the bucket arrays of every per-pid map in this file (g_ctx_map,
+ * g_ipc_last_map, g_fs_peer_map, g_block_map). hashmap.h carries no lock, and
+ * processes on different CPUs look up, insert and remove their own keys
+ * concurrently: an insert that rehashes frees the bucket array a concurrent
+ * lookup is walking. The lock covers the map operation only. A returned value
+ * pointer stays valid without it, because nodes never move and a pid's entry is
+ * removed only by that pid's own reap (warp_release_pid). Leaf lock: nothing is
+ * taken while it is held except the kmem allocator inside hashmap_put. */
+static ksync_spinlock_t g_pid_maps_lock;
+
+static void* pid_map_get(hashmap_t* map, uint32_t pid) {
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    void* value = hashmap_get(map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    return value;
+}
+
+static void* pid_map_put(hashmap_t* map, uint32_t pid) {
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    void* value = hashmap_put(map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    return value;
+}
+
+static void pid_map_remove(hashmap_t* map, uint32_t pid) {
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    (void)hashmap_remove(map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+}
 
 /* Look up the WARP call context for `pid` without creating one.  Returns nullptr for
  * pid 0 and for a pid whose module has not been bound (or was already released). */
@@ -117,7 +146,7 @@ static WarpCallContext* ctx_find(uint32_t pid) {
     if (pid == 0) {
         return nullptr;
     }
-    return static_cast<WarpCallContext*>(hashmap_get(&g_ctx_map, pid));
+    return static_cast<WarpCallContext*>(pid_map_get(&g_ctx_map, pid));
 }
 
 /* Kernel-side pointer for the guest linear-memory range [offset, offset+size).
@@ -229,7 +258,7 @@ static void warp_ipc_slots_init(void) {
 WarpIpcLastSlot* warp_ipc_slot_for_pid(uint32_t pid) {
     if (!pid)
         return nullptr;
-    auto* slot = static_cast<WarpIpcLastSlot*>(hashmap_put(&g_ipc_last_map, pid));
+    auto* slot = static_cast<WarpIpcLastSlot*>(pid_map_put(&g_ipc_last_map, pid));
     if (slot)
         slot->pid = pid;
     return slot;
@@ -239,7 +268,7 @@ WarpFsPeerSlot* warp_fs_peer_slot_for_pid(uint32_t pid) {
     if (!pid) {
         return nullptr;
     }
-    auto* slot = static_cast<WarpFsPeerSlot*>(hashmap_put(&g_fs_peer_map, pid));
+    auto* slot = static_cast<WarpFsPeerSlot*>(pid_map_put(&g_fs_peer_map, pid));
     if (slot)
         slot->pid = pid;
     return slot;
@@ -699,7 +728,7 @@ static void warp_block_slots_init(void) {
 static WarpBlockSlot* warp_block_slot(uint32_t pid) {
     if (!pid)
         return nullptr;
-    auto* s = static_cast<WarpBlockSlot*>(hashmap_put(&g_block_map, pid));
+    auto* s = static_cast<WarpBlockSlot*>(pid_map_put(&g_block_map, pid));
     if (s)
         s->pid = pid;
     return s;
@@ -709,12 +738,17 @@ static WarpBlockSlot* warp_block_slot(uint32_t pid) {
 static WarpBlockSlot* warp_block_slot_by_phys(uint64_t phys) {
     hashmap_iter_t it;
     uint32_t key = 0;
+    WarpBlockSlot* found = nullptr;
+    ksync_spinlock_lock(&g_pid_maps_lock);
     for (auto* s = static_cast<WarpBlockSlot*>(hashmap_first(&g_block_map, &it, &key)); s;
          s = static_cast<WarpBlockSlot*>(hashmap_next(&it, &key))) {
-        if (s->phys == phys)
-            return s;
+        if (s->phys == phys) {
+            found = s;
+            break;
+        }
     }
-    return nullptr;
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    return found;
 }
 
 /* hostcalls.yaml `block_buffer_phys`: physical base of this process's private 8 KiB
@@ -2958,7 +2992,7 @@ static WarpCallContext* ctx_acquire(uint32_t pid) {
     if (pid == 0) {
         return nullptr;
     }
-    WarpCallContext* c = static_cast<WarpCallContext*>(hashmap_put(&g_ctx_map, pid));
+    WarpCallContext* c = static_cast<WarpCallContext*>(pid_map_put(&g_ctx_map, pid));
     if (!c) {
         return nullptr; // out of memory — genuine, not a fixed cap
     }
@@ -2985,7 +3019,7 @@ void* warp_context_for_pid(uint32_t pid) {
 }
 
 void warp_ctx_release_pid(uint32_t pid) {
-    (void)hashmap_remove(&g_ctx_map, pid);
+    pid_map_remove(&g_ctx_map, pid);
 }
 
 /* Release ALL per-pid WARP state for an exiting process.  Called once from
@@ -2998,12 +3032,12 @@ extern "C" void warp_release_pid(uint32_t pid) {
     if (pid == 0) {
         return;
     }
-    (void)hashmap_remove(&g_ctx_map, pid);
-    (void)hashmap_remove(&g_ipc_last_map, pid);
-    (void)hashmap_remove(&g_fs_peer_map, pid);
+    pid_map_remove(&g_ctx_map, pid);
+    pid_map_remove(&g_ipc_last_map, pid);
+    pid_map_remove(&g_fs_peer_map, pid);
     /* Reclaim the per-pid block buffer pages before dropping the slot, else the
      * 2 pages leak on every process exit. */
-    if (auto* bslot = static_cast<WarpBlockSlot*>(hashmap_get(&g_block_map, pid))) {
+    if (auto* bslot = static_cast<WarpBlockSlot*>(pid_map_get(&g_block_map, pid))) {
         if (bslot->map_off) {
             warp_overlay_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
         }
@@ -3011,7 +3045,7 @@ extern "C" void warp_release_pid(uint32_t pid) {
             pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
         }
     }
-    (void)hashmap_remove(&g_block_map, pid);
+    pid_map_remove(&g_block_map, pid);
     /* phys_map windows map firmware frames into the linear-memory slot; unmap them
      * before warp_heap_release decommits the slot, which frees every frame still
      * mapped there. */

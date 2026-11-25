@@ -105,6 +105,16 @@ class VtModeRegridTests(unittest.TestCase):
             f"the compositor did not apply {width}x{height}.\n"
             f"--- tail ---\n{self.session.tail()}\n",
         )
+        # gfx_mode's last line follows one more compositor round-trip, after the
+        # shell has already printed its prompt; typed before it, the next
+        # command's echo is split by it and never matches.
+        self.assertTrue(
+            self.session.expect_from(
+                start, f"gfx-mode: display {width}x{height}".encode(), timeout_s=30
+            ),
+            f"gfx_mode did not report the new display size.\n"
+            f"--- tail ---\n{self.session.tail()}\n",
+        )
 
     # Regression: 2026-11-24-vt-keeps-boot-grid-after-mode-change -- the vt asked
     # for the text geometry only when the framebuffer driver was bound, so after a

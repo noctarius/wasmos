@@ -471,11 +471,14 @@ void x86_irq_handler(uint64_t vector) {
 
     /* IRQ0 is special because it drives scheduler accounting before any routed
      * notification endpoints are serviced. */
+    /* Every CPU's LAPIC tick arrives here as line 0; the sharing layer's
+     * per-tick reset runs once per global tick (timer.h). */
+    int global_tick = 0;
     if (irq_line == 0) {
-        timer_handle_irq();
+        global_tick = timer_handle_irq();
     }
     ksync_spinlock_lock(&g_irq_lines_lock);
-    if (irq_line == 0) {
+    if (global_tick) {
         irq_sharing_tick(irq_lines_ptr(), IRQ_COUNT, &g_irq_ops);
     }
     irq_sharing_dispatch(irq_lines_ptr(), irq_line, &g_irq_ops);

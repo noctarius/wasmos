@@ -111,8 +111,14 @@ static uint32_t smp_stress_popcount(uint32_t v) {
 }
 
 /* Scan for the invariant violation this test exists to catch: a thread left in
- * THREAD_STATE_RUNNING that is not the current thread on any CPU (and hence in
- * no ready queue) — i.e. a stranded/orphaned thread. Returns the count. */
+ * THREAD_STATE_RUNNING that no CPU names as current and no dispatch holds (so
+ * it is in no ready queue and nothing will move it on) -- a stranded/orphaned
+ * thread. Returns the count.
+ *
+ * Regression: 2026-11-25-stress-oracle-counted-an-exiting-worker -- the scan
+ * ignored the dispatch claim and reported the last worker of a completed ring
+ * as an orphan while its CPU was still retiring it (claim held, ZOMBIE moments
+ * later), failing about 2 runs in 13 on aarch64 under HVF. */
 static uint32_t smp_stress_count_orphans(void) {
     uint32_t orphans = 0;
     for (uint32_t i = 0; i < SMP_STRESS_WORKERS; ++i) {
@@ -127,7 +133,18 @@ static uint32_t smp_stress_count_orphans(void) {
                 break;
             }
         }
-        if (!current_somewhere) {
+        /* A thread its own dispatch still holds is in transit, not stranded:
+         * the dispatcher clears current_thread before the result handling moves
+         * an exiting worker to ZOMBIE, and releases the claim only after. The
+         * last worker to finish is still in that window when its exit is
+         * counted, so without this test it is reported as an orphan. */
+        /* The state is read again after the claim: the dispatcher moves the
+         * thread out of RUNNING before it releases the claim (release), so a
+         * FREE claim seen with acquire makes that state change visible. The
+         * first read alone can be from before a retirement completed. */
+        if (!current_somewhere &&
+            __atomic_load_n(&t->dispatch_ref, __ATOMIC_ACQUIRE) == THREAD_SLOT_FREE &&
+            __atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED) == THREAD_STATE_RUNNING) {
             orphans++;
             serial_printf("[test] sched smp stress ORPHAN tid=%u iters=%u last_cpu=%u\n",
                           (unsigned)g_sw[i].tid,

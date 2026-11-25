@@ -14,6 +14,7 @@
 #include "ipc.h"
 #include "irq.h"
 #include "klog.h"
+#include "kpanic.h"
 #include "msi.h"
 #include "policy.h"
 #include "process.h"
@@ -230,12 +231,23 @@ void aarch64_irq(irq_frame_t* frame) {
         gic_eoi(intid);
         return;
     }
+    if (intid == GIC_SGI_STOP) {
+        /* kpanic's stop request (arch_stop_other_cpus): capture this CPU's
+         * interrupted state and halt. Ended first, since a panicking capture
+         * does not return. */
+        gic_eoi(intid);
+        kpanic_nmi(frame->elr, frame->sp, frame->x[29], frame->spsr, 0);
+        return;
+    }
     if (aarch64_timer_is_tick(intid)) {
         aarch64_timer_rearm();
-        timer_handle_irq();
-        ksync_spinlock_lock(&g_spi_lock);
-        irq_sharing_tick(g_spi_lines, IRQ_SPI_SLOTS, &g_spi_ops);
-        ksync_spinlock_unlock(&g_spi_lock);
+        /* Every CPU ticks; the sharing layer's per-tick reset runs once per
+         * global tick (timer.h). */
+        if (timer_handle_irq()) {
+            ksync_spinlock_lock(&g_spi_lock);
+            irq_sharing_tick(g_spi_lines, IRQ_SPI_SLOTS, &g_spi_ops);
+            ksync_spinlock_unlock(&g_spi_lock);
+        }
         gic_eoi(intid);
         process_preempt_from_irq(frame);
         return;

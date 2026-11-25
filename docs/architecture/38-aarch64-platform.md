@@ -22,8 +22,8 @@ runner. Bare-metal hardware is out of scope.
 
 | Aspect | aarch64 | x86_64 for comparison |
 |---|---|---|
-| Configuration | `configs/aarch64_wasm3_single_defconfig` | four defconfigs |
-| CPUs | one (PSCI `CPU_ON` bring-up is deferred) | single or SMP |
+| Configuration | `configs/aarch64_wasm3_{single,smp}_defconfig` | four defconfigs |
+| CPUs | single or SMP (PSCI `CPU_ON`) | single or SMP (INIT-SIPI-SIPI) |
 | WASM runtime | wasm3 (WARP's aarch64 backend is deferred) | wasm3 or WARP |
 | Loader | `BOOTAA64.EFI` | `BOOTX64.EFI` |
 | Interrupts | GICv3 + ITS (MSI/MSI-X as LPIs) | LAPIC/IOAPIC (or PIC) |
@@ -105,6 +105,40 @@ MSI-X. The kernel-log console (`char/virtio_serial`) takes none: it disables its
 queue's interrupts, selects `VIRTIO_MSI_NO_VECTOR` and reclaims transmit
 buffers by polling the used ring.
 
+### SMP
+
+With `WASMOS_SMP` the boot CPU starts the others through PSCI `CPU_ON`
+(`smp_aarch64.c`), over the same conduit as `SYSTEM_OFF`; the neutral contract
+is [28-smp.md](28-smp.md).
+
+- **Discovery.** `smp_init` reads every enabled GICC entry of the ACPI MADT
+  into `g_cpus[]`; the boot CPU, matched by MPIDR, keeps slot 0.
+- **Entry.** A secondary starts at `_start_secondary` (`entry.S`) at its
+  physical address with the MMU off, `x0` naming a boot block the boot CPU
+  cleaned to the point of coherency: the kernel's own TTBR0 and TTBR1 (built by
+  `paging_init`, not the bootstrap tables), its stack and its `cpu_id`. It takes
+  the same EL2-to-EL1 path and MAIR/TCR setup as the boot CPU (shared macros),
+  turns the MMU on and calls `smp_ap_c_entry`.
+- **Per-CPU interrupt state.** Each CPU finds its own redistributor among the
+  contiguous frames at QEMU virt's GICR base by matching MPIDR against
+  `GICR_TYPER` (`gic_cpu_init`), records it in `cpu_local()->arch.gicr_base`,
+  and enables its own virtual-timer PPI, so every CPU runs its own scheduler
+  tick. SPIs are routed to the boot CPU and the ITS collection targets its
+  redistributor, as x86_64 keeps device interrupts on the BSP.
+- **Order.** Redistributor, scheduler state (`process_ap_init`), idle thread,
+  timer, then `started` with release ordering, as on x86_64. The boot CPU starts
+  the secondaries one at a time, because they share the boot block, and gives
+  each a second before reporting it absent.
+- **Stopping.** `arch_stop_other_cpus` raises SGI 1 on every other CPU, which
+  hands its frame to `kpanic_nmi`. Unlike x86_64's NMI it is masked with IRQs, so
+  a CPU spinning with interrupts off is reported uncaptured.
+- **TLB.** Every invalidation is already broadcast (`TLBI ...IS`), so mappings
+  need no shootdown IPI.
+
+Under `-accel hvf` the CPUs are real Apple cores with the architecture's weak
+memory ordering (no TSO), so an ordering bug reproduces locally; under CI's TCG
+the vCPUs are host threads (MTTCG), equally unordered.
+
 ### PCI
 
 `pci_cfg_aarch64.c` reaches configuration space through ECAM, with the base
@@ -180,16 +214,18 @@ conduit the firmware's entry level selects (`cpu_aarch64.c`).
 ninja -C out/aarch64_wasm3_single run-qemu-test
 ```
 
-Every QEMU battery runs on aarch64 (`aarch64_wasm3_single` in
-`tests/batteries.json`), in CI on an aarch64-linux runner under TCG. A test
+Every QEMU battery runs on aarch64 (`aarch64_wasm3_smp` in
+`tests/batteries.json`, four CPUs), in CI on an aarch64-linux runner under TCG. A test
 whose subject aarch64 lacks -- ATA drives, the PS/2 controller, a second UART
 -- is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
 whose reason names what is missing.
 
 ### Deferred Work
 
-- SMP: PSCI `CPU_ON` bring-up behind `smp.h` and `arch_stop_other_cpus` through
-  an SGI, followed by a weak-memory audit under `-accel hvf -smp N`.
+- Stopping a CPU that spins with IRQs masked: `arch_stop_other_cpus` would
+  need a GICv3 pseudo-NMI (priority masking through `ICC_PMR_EL1`).
+- The aarch64-only items of the weak-memory audit, validated under
+  `-accel hvf -smp N`.
 - WARP: the aarch64 backend in the kernel (code loading, ring-3 trampolines)
   and per-arch AOT artifacts.
 - Containment of every EL0 exception: only an unresolved instruction or data

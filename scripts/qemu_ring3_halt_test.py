@@ -128,9 +128,10 @@ def main():
                 return 1
         if not session.expect(b"wamos> "):
             return 1
-        session.send("halt")
-        if not session.wait_for_exit(5):
-            print("FAIL: halt did not power off QEMU", flush=True)
+        failure = session.halt()
+        if failure:
+            print(f"FAIL: {failure}", flush=True)
+            print(session.tail(), flush=True)
             return 1
         return 0
 

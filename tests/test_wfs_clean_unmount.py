@@ -48,6 +48,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -74,6 +75,22 @@ def _scratch_image(prefix: str) -> tuple[str, str]:
     path = os.path.join(tmp, "wfs.img")
     shutil.copy(cfg.wfs_image, path)
     return path, tmp
+
+
+def _expect_either(
+    session: QemuSession, mark: int, needle: str, timeout_s: int
+) -> bool:
+    """True once `needle` is on the console after `mark` or in the kernel log.
+    Polling the console in short waits keeps it drained while the kernel log is
+    checked between them."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if session.expect_from(mark, needle.encode(), timeout_s=1):
+            return True
+        if needle in session.syslog_tail(1 << 20):
+            return True
+        if time.monotonic() >= deadline:
+            return False
 
 
 def _boot(image: str, timeout_s: int = 150) -> QemuSession:
@@ -190,11 +207,12 @@ class WfsCleanUnmountTest(WfsShutdownTestBase):
                 ),
                 f"the shutdown order was not logged\n--- tail ---\n{first.tail(4096)}\n",
             )
-            # The COM2 kernel log is printed too: the kernel writes it straight to
-            # the port, so it shows how far the sequence got when COM1 (drained
-            # by the vt) went quiet.
+            # The line counts on either port. The kernel writes its log straight
+            # to the kernel-log port, while COM1 is drained by the vt, which may
+            # stop forwarding while the system goes down. The kernel log of this
+            # boot holds one unmount only: the one the halt performs.
             self.assertTrue(
-                first.expect_from(mark, b"[fs-wfs] unmounted clean", timeout_s=30),
+                _expect_either(first, mark, "[fs-wfs] unmounted clean", 30),
                 f"the volume was not recorded clean\n--- tail ---\n{first.tail(4096)}\n"
                 f"--- COM2 kernel log ---\n{first.syslog_tail(4096)}\n",
             )

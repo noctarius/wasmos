@@ -5,10 +5,11 @@
 > **Documentation status: Implemented reference with deferred CPU hotplug,
 > NUMA, and TLB-shootdown work.**
 
-Implemented on x86_64 (Phases 0–9); aarch64 runs on one core until PSCI
-`CPU_ON` bring-up lands ([38-aarch64-platform.md](38-aarch64-platform.md),
-*Deferred Work*). `WASMOS_SMP=0` is the default; enabling it requires
-`WASMOS_IRQ_IOAPIC=1`. All SMP bring-up code is live: MADT discovery,
+Implemented on x86_64 (Phases 0–9) and on aarch64, where secondaries start
+through PSCI `CPU_ON` ([38-aarch64-platform.md](38-aarch64-platform.md), *SMP*).
+`WASMOS_SMP=0` is the default; on x86_64 enabling it requires
+`WASMOS_IRQ_IOAPIC=1`. The rest of this document describes the x86_64
+bring-up; the per-CPU, scheduler and memory-ordering contracts are shared. All SMP bring-up code is live: MADT discovery,
 LAPIC ICR helpers, AP trampoline, `smp_cpus_up`, AP C entry, per-CPU spinlock
 state, and ready-queue locking. No behavioral change at `WASMOS_SMP=0`.
 
@@ -28,7 +29,7 @@ separate build-time Kconfig option:
 ```
 config WASMOS_SMP
     bool "Enable Symmetric Multi-Processing (SMP)"
-    depends on WASMOS_IRQ_IOAPIC
+    depends on WASMOS_IRQ_IOAPIC || WASMOS_ARCH_AARCH64
     default n
 ```
 
@@ -83,10 +84,11 @@ queues and work stealing.
 
 ## Kconfig / build wiring
 
-`WASMOS_SMP` is a Kconfig bool (`Kconfig`) that `depends on WASMOS_IRQ_IOAPIC`;
-kconfiglib enforces the dependency when it resolves a build directory's
-`.config`. `configs/x86_64_wasm3_smp_defconfig` and `configs/x86_64_warp_smp_defconfig`
-select it.
+`WASMOS_SMP` is a Kconfig bool (`Kconfig`) that depends on `WASMOS_IRQ_IOAPIC`
+on x86_64 and is always available on aarch64; kconfiglib enforces the
+dependency when it resolves a build directory's `.config`.
+`configs/x86_64_wasm3_smp_defconfig`, `configs/x86_64_warp_smp_defconfig` and
+`configs/aarch64_wasm3_smp_defconfig` select it.
 
 The `kernel` toolchain profile (`scripts/buildgen/toolchains.py`) passes it to
 every kernel object as `-DWASMOS_SMP=<0|1>` alongside the other `WASMOS_*`
@@ -499,9 +501,11 @@ qemu-system-x86_64 ... -smp 2
 | `ninja -C out/<dir> run-qemu-test` with a `*_smp_defconfig` tree    | APs come online, scheduler dispatches across CPUs (`-smp 4`)           |
 
 `configs/wasmos_defconfig` leaves `WASMOS_SMP` off, so a tree seeded from it
-does not exercise the AP bring-up path. CI runs `run-qemu-test` for all four
-`{wasm3,warp}_{single,smp}_defconfig` configurations
-(`.github/workflows/ci.yml`, `defconfig` job).
+does not exercise the AP bring-up path. CI's `defconfig` job
+(`.github/workflows/ci.yml`) builds and boots every configuration -- the four
+`x86_64_{wasm3,warp}_{single,smp}` and the two `aarch64_wasm3_{single,smp}`,
+each on its own architecture's runner -- and runs the SMP scheduler stress test
+(`run-qemu-sched-stress-test`) on the `_smp` ones.
 
 ---
 

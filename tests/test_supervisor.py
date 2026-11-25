@@ -583,9 +583,13 @@ class SupervisorTests(unittest.TestCase):
         from the shell it has a tty, so its line is on the console, not in the
         kernel log."""
         start = self.session.send_command(f"sv_probe entropy {tag}", timeout_s=20)
-        needle = f"[sv-probe] {tag} entropy ".encode()
+        # The whole line, up to its end: the console delivers it in pieces, and
+        # a check on a partial line reads "entropy o" as a failure.
+        line = re.compile(
+            rb"\[sv-probe\] " + re.escape(tag.encode()) + rb" entropy [^\r\n]*\r?\n"
+        )
         self.assertTrue(
-            self.session.expect_from(start, needle, timeout_s=30),
+            self.session.expect_from(start, line, timeout_s=30),
             f"sv_probe did not report.\n--- tail ---\n{self.session.tail()}\n",
         )
         out = self.session.buf[start:].decode("utf-8", errors="replace")

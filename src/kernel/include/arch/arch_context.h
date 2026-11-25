@@ -8,6 +8,14 @@
  *       may take up to three integer or pointer arguments; unused ones are
  *       ignored. fn must return on the
  *       new stack (it must not longjmp or context-switch away for good).
+ *   uint64_t arch_call_on_stack_resumable(resume, stack_top, fn, a0, a1, a2)
+ *       arch_call_on_stack, which in addition records the caller's state in
+ *       the process_context_t `resume` as of the call: restoring `resume`
+ *       later (context_switch / context_switch_to) returns from this call, on
+ *       the caller's stack, with the return value and pc the caller planted
+ *       beforehand (arch_context_set_return, arch_context_set_pc =
+ *       context_switch_resume). Neither of those two fields is written here.
+ *       This is how a kernel worker that blocks resumes its CPU's scheduler.
  *   uintptr_t arch_read_sp(void)   the caller's current stack pointer
  *   uintptr_t arch_read_pc(void)   an address inside the caller's code
  *   uintptr_t arch_read_fp(void)   the caller's frame pointer; [fp] is the
@@ -23,7 +31,7 @@
  *                       arch_context_clear, _init_kernel_entry,
  *                       _set_user_entry, _set_kernel_sp, _set_pc, _set_return,
  *                       _pc, _kernel_sp, _fp, _flags, _mode, _is_user,
- *                       _snapshot_callee_saved, _save_irq_frame.
+ *                       _save_irq_frame.
  *   irq_frame_t         register frame an interrupt stub builds; classified by
  *                       arch_irq_frame_origin, logged by arch_irq_frame_log,
  *                       redirected by arch_irq_frame_redirect_kernel.

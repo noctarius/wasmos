@@ -772,13 +772,22 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `filesystem` on `warp_smp` (artifact `qemu-crash-filesystem-warp_smp`, with the
   symbolized core). It recurred as exit -11 before the prompt in run
   45066741384, battery `networking` on `warp_smp`
-  (`test_net_stack_udp_echo_e2e` setUpClass). Both reruns passed. A crash inside
+  (`test_net_stack_udp_echo_e2e` setUpClass), and again in run 45618728964,
+  battery `scheduler-and-ipc` on `x86_64_warp_smp` (`test_ipc_wakeup`
+  setUpClass, exit -11 before the prompt; backtrace `tlb_set_page_full` <-
+  `x86_cpu_tlb_fill` <- `do_interrupt_all` on an MTTCG vCPU thread). The
+  earlier reruns passed. A crash inside
   QEMU's softmmu TLB fill is QEMU's, not the guest's, unless the guest left a
   page table pointing at an unbacked MMIO region; if it recurs, check the
   faulting guest address in the core against the guest's last mappings before
   filing it upstream.
-- [ ] [TEST][P2] `test_wfs_clean_unmount.test_a_clean_halt_leaves_the_volume_clean_and_writable`
-  stalled once in CI (run 45066741384, `filesystem` on `wasm3_smp`, the PR
+- [x] [TEST][P2] `test_wfs_clean_unmount.test_a_clean_halt_leaves_the_volume_clean_and_writable`
+  waited only on COM1 for `[fs-wfs] unmounted clean`. In run 45641713306
+  (`filesystem` on `x86_64_warp_smp`, PR #81) the line was in the kernel log
+  and the machine had powered off, but COM1 -- drained by the vt, which stops
+  forwarding as the system goes down -- never carried it. The test now accepts
+  the line on either port. The earlier reports below fit the same cause.
+  It stalled once in CI (run 45066741384, `filesystem` on `wasm3_smp`, the PR
   that made fs-wfs a supervised unit): the shutdown logged `order 1: fs-wfs`
   and fs-wfs never logged `unmounted clean` within 30 s; nothing was killed or
   restarted. The rerun, two local filesystem batteries and two further local
@@ -2280,9 +2289,10 @@ Other graphics/VT/UI:
 
 The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
 HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
-to the CLI on one core under wasm3, with console input through the PL011
-driver, and passes `run-qemu-test`. Every QEMU battery runs on it in CI
-(`aarch64_wasm3_single` in `tests/batteries.json`); a test whose subject aarch64
+to the CLI under wasm3 on one core or, with `WASMOS_SMP`, on several started
+through PSCI `CPU_ON`, with console input through the PL011 driver, and passes
+`run-qemu-test`. Every QEMU battery runs on it in CI (`aarch64_wasm3_smp` in
+`tests/batteries.json`); a test whose subject aarch64
 lacks is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
 and the reason it prints names what is missing. Read
 `docs/architecture/38-aarch64-platform.md` first, then `04-boot-and-handoff.md`,
@@ -2348,10 +2358,13 @@ and the reason it prints names what is missing. Read
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
   UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
   (`cpu_aarch64.c`).
-- [ ] [FEATURE][P2] SMP: PSCI `CPU_ON` bring-up behind `smp.h` and
-  `arch_stop_other_cpus` through an SGI; then the weak-memory audit under
-  `-accel hvf -smp N` of the plain loads and stores used as synchronisation
-  (IPC, xfer-buffer rings, `ringbuf.h`, futex, run queues).
+- [ ] [FEATURE][P2] The aarch64-only items of the weak-memory audit, validated
+  under `-accel hvf -smp N` (real Apple cores, weak ordering): new page tables
+  published before their zeroing is visible, the klog doorbell and ring
+  registration, `started`/kpanic `captured` read without acquire.
+- [ ] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64:
+  `arch_stop_other_cpus` raises an ordinary SGI (`smp_aarch64.c` TODO); a GICv3
+  pseudo-NMI (priority masking through `ICC_PMR_EL1`) would reach it.
 - [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
   TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
 - [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3

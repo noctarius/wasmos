@@ -137,6 +137,8 @@ TESTS = [
     (RUN, 'test_sched_runqueue_bias_on', []),
     (CC, 'test_sched_runqueue_bias_off', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SCHED_CALLER_CPU_BIAS=0', '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), R('tests/unit/test_sched_runqueue.c'), R('src/kernel/sched_thread.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_sched_runqueue_bias_off', []),
+    (CC, 'test_timer_tick', [*C11, '-DWASMOS_SMP=1', '-DWASMOS_HOST_TEST_SMP=1', '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), R('tests/unit/test_timer_tick.c'), R('src/kernel/timer.c')]),
+    (RUN, 'test_timer_tick', []),
     (CC, 'test_sched_event', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SCHED_EVENT_TEST_SEAMS=1', '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), R('tests/unit/test_sched_event.c'), R('src/kernel/sched_event.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_sched_event', []),
     (CC, 'test_sched_concurrency_smp1', [*C11, '-pthread', '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SCHED_CALLER_CPU_BIAS=1', '-DWASMOS_TEST_NCPU=1', '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), R('tests/unit/test_sched_concurrency.c'), R('src/kernel/sched_thread.c'), R('tests/unit/stubs_spinlock.c')]),

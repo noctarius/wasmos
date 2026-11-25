@@ -23,6 +23,13 @@
  * _start_high installs the exception vectors, switches to the kernel stack,
  * zeroes .bss and calls kmain(boot_info). The identity map stays installed as
  * the boot-time physical alias, as on x86_64.
+ *
+ * _start_secondary is where PSCI CPU_ON starts a secondary CPU (WASMOS_SMP):
+ * MMU off, at its physical address, x0 = the physical address of the
+ * smp_boot_block_t smp_aarch64.c filled and cleaned to the point of coherency.
+ * It takes the same exception-level path, loads the kernel's own TTBR0/TTBR1
+ * (built by paging_init, not the bootstrap tables) with the same MAIR and TCR,
+ * turns the MMU on and calls smp_ap_c_entry(cpu_id) on its own stack.
  */
 .set SCTLR_EL1_RES1, 0x30d00800
 .set SCTLR_M, (1 << 0)
@@ -41,23 +48,9 @@
 .set BLOCK_DEVICE, 0x0060000000000401
 .set BLOCK_NORMAL, 0x0040000000000705
 
-.section .start.low, "ax"
-.global _start
-_start:
-    mov x19, x0
-    msr daifset, #0xf
-    mrs x20, CurrentEL
-    lsr x20, x20, #2
-    and x20, x20, #3
-    cmp x20, #1
-    b.eq el1_entry
-    cmp x20, #2
-    b.eq el2_entry
-park_low:
-    wfe
-    b park_low
-
-el2_entry:
+/* From EL2: EL2 MMU off, EL1 AArch64 with the physical timer and FP/SIMD
+ * untrapped, then ERET to \target at EL1h with DAIF masked. Clobbers x0. */
+.macro drop_el2_to_el1 target
     mrs x0, sctlr_el2
     bic x0, x0, #SCTLR_M
     bic x0, x0, #SCTLR_C
@@ -80,11 +73,14 @@ el2_entry:
     msr sctlr_el1, x0
     mov x0, #0x3c5 /* EL1h, DAIF masked */
     msr spsr_el2, x0
-    adr x0, el1_entry
+    adr x0, \target
     msr elr_el2, x0
     eret
+.endm
 
-el1_entry:
+/* At EL1: the firmware's MMU and caches off, stale instructions dropped, and
+ * FP/SIMD enabled (kernel code uses it). Clobbers x0. */
+.macro el1_mmu_off_fp_on
     mrs x0, sctlr_el1
     bic x0, x0, #SCTLR_M
     bic x0, x0, #SCTLR_C
@@ -94,10 +90,47 @@ el1_entry:
     ic iallu
     dsb nsh
     isb
-
     mov x0, #(3 << 20)
     msr cpacr_el1, x0
     isb
+.endm
+
+/* MAIR_EL1 and TCR_EL1 (IPS from ID_AA64MMFR0_EL1.PARange, capped at 48 bits).
+ * Clobbers x1-x3. */
+.macro set_mair_tcr
+    ldr x1, =MAIR_VALUE
+    msr mair_el1, x1
+    ldr x1, =TCR_VALUE
+    mrs x2, id_aa64mmfr0_el1
+    and x2, x2, #0xf
+    cmp x2, #5 /* IPS 0b110 (52-bit) needs FEAT_LPA; cap at 48 bits */
+    mov x3, #5
+    csel x2, x2, x3, ls
+    orr x1, x1, x2, lsl #32
+    msr tcr_el1, x1
+.endm
+
+.section .start.low, "ax"
+.global _start
+_start:
+    mov x19, x0
+    msr daifset, #0xf
+    mrs x20, CurrentEL
+    lsr x20, x20, #2
+    and x20, x20, #3
+    cmp x20, #1
+    b.eq el1_entry
+    cmp x20, #2
+    b.eq el2_entry
+park_low:
+    wfe
+    b park_low
+
+el2_entry:
+    drop_el2_to_el1 el1_entry
+
+el1_entry:
+    el1_mmu_off_fp_on
 
     /* Fill the three tables (level-0 low, level-0 high, level-1; contiguous).
      * The MMU is off, so these stores reach memory directly; the invalidate
@@ -139,16 +172,7 @@ el1_entry:
     b.lo 3b
     dsb sy
 
-    ldr x1, =MAIR_VALUE
-    msr mair_el1, x1
-    ldr x1, =TCR_VALUE
-    mrs x2, id_aa64mmfr0_el1
-    and x2, x2, #0xf
-    cmp x2, #5 /* IPS 0b110 (52-bit) needs FEAT_LPA; cap at 48 bits */
-    mov x3, #5
-    csel x2, x2, x3, ls
-    orr x1, x1, x2, lsl #32
-    msr tcr_el1, x1
+    set_mair_tcr
     msr ttbr0_el1, x5
     msr ttbr1_el1, x6
     isb
@@ -161,6 +185,47 @@ el1_entry:
     isb
     ldr x0, =_start_high
     br x0
+
+#if WASMOS_SMP
+/* Secondary CPU entry (PSCI CPU_ON). x0 = physical smp_boot_block_t:
+ *   +0 TTBR0 (kernel root, identity map of the low 4 GiB)
+ *   +8 TTBR1 (kernel higher half)
+ *  +16 initial SP (kernel virtual address)
+ *  +24 cpu_id
+ * The block stays reachable after the MMU is on through TTBR0's identity map. */
+.global _start_secondary
+_start_secondary:
+    mov x19, x0
+    msr daifset, #0xf
+    mrs x20, CurrentEL
+    lsr x20, x20, #2
+    and x20, x20, #3
+    cmp x20, #1
+    b.eq secondary_el1
+    cmp x20, #2
+    b.eq secondary_el2
+    b park_low
+
+secondary_el2:
+    drop_el2_to_el1 secondary_el1
+
+secondary_el1:
+    el1_mmu_off_fp_on
+    set_mair_tcr
+    ldr x1, [x19]
+    ldr x2, [x19, #8]
+    msr ttbr0_el1, x1
+    msr ttbr1_el1, x2
+    isb
+    tlbi vmalle1
+    dsb nsh
+    isb
+    ldr x0, =(SCTLR_EL1_RES1 | SCTLR_M | SCTLR_C | SCTLR_I)
+    msr sctlr_el1, x0
+    isb
+    ldr x0, =_secondary_high
+    br x0
+#endif /* WASMOS_SMP */
 
 .section .start.low.bss, "aw", %nobits
 .balign 4096
@@ -200,3 +265,30 @@ _start_high:
     msr daifset, #0xf
     wfi
     b 6b
+
+#if WASMOS_SMP
+/* _start_secondary's physical (link) address as a 64-bit word: higher-half C
+ * cannot form the address of a low symbol with adrp, which reaches +/-4 GiB. */
+.section .rodata
+.balign 8
+.global aarch64_secondary_entry_phys
+aarch64_secondary_entry_phys:
+    .quad _start_secondary
+
+.section .text
+.extern smp_ap_c_entry
+_secondary_high:
+    ldr x0, =aarch64_vectors
+    msr vbar_el1, x0
+    isb
+    ldr x1, [x19, #16]
+    mov sp, x1
+    mov x29, xzr
+    mov x30, xzr
+    ldr x0, [x19, #24]
+    bl smp_ap_c_entry
+7:
+    msr daifset, #0xf
+    wfi
+    b 7b
+#endif /* WASMOS_SMP */

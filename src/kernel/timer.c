@@ -38,23 +38,26 @@ void timer_init(uint32_t hz) {
     arch_timer_start(hz);
 }
 
-void timer_handle_irq(void) {
+int timer_handle_irq(void) {
+    int global_tick = 1;
 #if WASMOS_SMP
     /* On SMP each AP runs its own tick at the same frequency as the BSP.
      * Only the BSP (cpu_id == 0) advances g_timer_ticks so that the global
      * monotonic tick counter increases at the configured hz rate, not N*hz.
      * All CPUs still call process_tick() for their own scheduling quantum. */
-    if (cpu_local()->cpu_id == 0)
+    global_tick = cpu_local()->cpu_id == 0;
 #endif
-
+    if (global_tick) {
         g_timer_ticks++;
-    if (g_timer_ticks == g_timer_log_threshold) {
-        g_timer_log_pending = 1;
-        g_timer_log_threshold += 100;
+        if (g_timer_ticks == g_timer_log_threshold) {
+            g_timer_log_pending = 1;
+            g_timer_log_threshold += 100;
+        }
     }
 
     /* process_tick() owns quantum accounting and reschedule triggering. */
     process_tick();
+    return global_tick;
 }
 
 void timer_poll(void) {

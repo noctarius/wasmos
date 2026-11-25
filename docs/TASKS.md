@@ -781,8 +781,13 @@ Source: `architecture/13-runtime-and-packaging.md`,
   page table pointing at an unbacked MMIO region; if it recurs, check the
   faulting guest address in the core against the guest's last mappings before
   filing it upstream.
-- [ ] [TEST][P2] `test_wfs_clean_unmount.test_a_clean_halt_leaves_the_volume_clean_and_writable`
-  stalled once in CI (run 45066741384, `filesystem` on `wasm3_smp`, the PR
+- [x] [TEST][P2] `test_wfs_clean_unmount.test_a_clean_halt_leaves_the_volume_clean_and_writable`
+  waited only on COM1 for `[fs-wfs] unmounted clean`. In run 45641713306
+  (`filesystem` on `x86_64_warp_smp`, PR #81) the line was in the kernel log
+  and the machine had powered off, but COM1 -- drained by the vt, which stops
+  forwarding as the system goes down -- never carried it. The test now accepts
+  the line on either port. The earlier reports below fit the same cause.
+  It stalled once in CI (run 45066741384, `filesystem` on `wasm3_smp`, the PR
   that made fs-wfs a supervised unit): the shutdown logged `order 1: fs-wfs`
   and fs-wfs never logged `unmounted clean` within 30 s; nothing was killed or
   restarted. The rerun, two local filesystem batteries and two further local

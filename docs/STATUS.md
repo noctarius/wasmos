@@ -795,8 +795,8 @@ linked feature documents for rationale and rollout plans.
   is [architecture/38-aarch64-platform.md](architecture/38-aarch64-platform.md);
   WARP, ASIDs and a framebuffer for firmware without a GOP are open
   (`TASKS.md`, "arm64 Port"). The SMP scheduler stress gate
-  (`run-qemu-sched-stress-test`) passes on aarch64 SMP under HVF except for an
-  occasional orphaned worker (TASKS.md).
+  (`run-qemu-sched-stress-test`) passes on aarch64 SMP under HVF (25 of 25
+  runs), locally only.
 - The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
   (aarch64)"); both serve the `rtc` protocol through the shared core
   (`src/drivers/rtc/core/rtc_core.ts`), as the x86_64 CMOS driver now does. The

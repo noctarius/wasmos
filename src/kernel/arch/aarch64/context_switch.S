@@ -132,9 +132,54 @@ context_switch:
     mov x0, x1
     b restore_context
 
-/* The resume point of a context saved by context_switch: x30 holds the
- * original caller's return address again. Exported because a kernel worker's
- * scheduler context is snapshotted in C and names it (process.c). */
+/* uint64_t arch_call_on_stack_resumable(resume, stack_top, fn, a0, a1, a2)
+ *
+ * Records the caller's state in `resume` exactly as context_switch saves an
+ * `out` context -- x19..x30, d8..d15, sp, DAIF, SP_EL0, TTBR0 -- but as of
+ * this call's entry, where x30 is the return address into the caller. Then
+ * tail-calls arch_call_on_stack(stack_top, fn, a0, a1, a2), which keeps that
+ * x30. Restoring `resume` later (with pc = context_switch_resume, planted by
+ * the caller together with the x0 to return) therefore returns from this call
+ * on the caller's stack, as if fn had returned that value.
+ *
+ * A snapshot taken in C before the call cannot do this: a C function's x30 at
+ * that point is the return address of whatever it called last, and the call
+ * it means to resume from has not happened yet. The pc and x0 fields of
+ * `resume` are not written here. */
+.global arch_call_on_stack_resumable
+arch_call_on_stack_resumable:
+    stp x19, x20, [x0, #152]
+    stp x21, x22, [x0, #168]
+    stp x23, x24, [x0, #184]
+    stp x25, x26, [x0, #200]
+    stp x27, x28, [x0, #216]
+    stp x29, x30, [x0, #232]
+    stp d8, d9, [x0, #(CTX_FP + 0)]
+    stp d10, d11, [x0, #(CTX_FP + 16)]
+    stp d12, d13, [x0, #(CTX_FP + 32)]
+    stp d14, d15, [x0, #(CTX_FP + 48)]
+    mov x9, sp
+    str x9, [x0, #CTX_SP]
+    mrs x9, daif
+    mov x10, #SPSR_EL1H
+    orr x9, x9, x10
+    str x9, [x0, #CTX_PSTATE]
+    mrs x9, sp_el0
+    str x9, [x0, #CTX_USER_SP]
+    mrs x9, ttbr0_el1
+    and x9, x9, #OA_MASK_LO
+    str x9, [x0, #CTX_ROOT]
+    mov x0, x1
+    mov x1, x2
+    mov x2, x3
+    mov x3, x4
+    mov x4, x5
+    b arch_call_on_stack
+
+/* The resume point of a context saved by context_switch or
+ * arch_call_on_stack_resumable: x30 holds the original caller's return address
+ * again. Exported because the caller of arch_call_on_stack_resumable plants it
+ * as the resume pc (process.c). */
 .global context_switch_resume
 context_switch_resume:
     mrs x9, tpidr_el1

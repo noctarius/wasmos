@@ -322,18 +322,22 @@ static process_run_result_t process_run_worker_on_stack(process_t* proc, thread_
     (void)stack_top;
     rc = entry(proc, thread->tid, thread->worker_arg);
 #else
-    rc = (process_run_result_t)(int32_t)arch_call_on_stack(stack_top,
-                                                           (arch_stack_fn_t)entry,
-                                                           addr_cast(uint64_t, proc),
-                                                           thread->tid,
-                                                           addr_cast(uint64_t, thread->worker_arg));
+    /* Resumable: the worker's process_yield returns here through this CPU's
+     * scheduler context (see the kernel-worker dispatch). */
+    rc = (process_run_result_t)(int32_t)arch_call_on_stack_resumable(
+        &cpu_local()->sched_ctx,
+        stack_top,
+        (arch_stack_fn_t)entry,
+        addr_cast(uint64_t, proc),
+        thread->tid,
+        addr_cast(uint64_t, thread->worker_arg));
 #endif
     return rc;
 }
 
 extern void context_switch(process_context_t* out, process_context_t* in);
-/* The ring-0 resume point inside context_switch; see the worker snapshot in
- * process_schedule_once for why the scheduler context needs it by name. */
+/* The ring-0 resume point inside context_switch; the kernel-worker dispatch in
+ * process_schedule_once plants it as the scheduler context's pc. */
 extern uint8_t context_switch_resume;
 extern void context_switch_to(process_context_t* in);
 static void context_switch_high(process_context_t* out, process_context_t* in);
@@ -2852,44 +2856,26 @@ static int process_schedule_once_impl(void) {
         goto dispatch_done;
     }
     if (thread->is_kernel_worker) {
-        /* Snapshot all callee-saved registers into g_sched_ctx so that when
-         * the worker calls process_yield → context_switch_high(ctx, &cpu_local()->sched_ctx),
-         * the scheduler resumes with correct register values and RSP pointing
-         * to the return address of the upcoming call to process_run_worker_on_stack.
-         * Only callee-saved regs + RSP need updating; RIP is always label-1
-         * (set by the last context_switch_high(&cpu_local()->sched_ctx,...) call). */
-
+        /* A kernel worker runs as an ordinary call on its own stack. When it
+         * blocks or yields instead of returning, process_yield switches to this
+         * CPU's scheduler context, which process_run_worker_on_stack records as
+         * of that call (arch_call_on_stack_resumable): restoring it returns from
+         * the call with PROCESS_RUN_BLOCKED, as if the worker had returned that.
+         *
+         * Both fields the resume needs besides the recorded registers are
+         * planted here. The pc in particular: `context_switch` writes out->pc
+         * only when it SAVES a context, and the scheduler context is saved only
+         * by the non-worker dispatch below, so a CPU whose first dispatch is a
+         * kernel worker would otherwise resume at pc 0 (a [BUG][P1] once: SMP
+         * only, worst under the SMP stress test, which spawns eight workers at
+         * once). Written unconditionally, so this context says the same thing a
+         * saved one would. */
         process_context_t* _sctx = &cpu_local()->sched_ctx;
-#ifdef WASMOS_PROCESS_TEST_SEAMS
-        /* Nothing resumes this scheduler context on the host -- the seam above
-         * calls the worker entry directly instead of switching stacks -- so the
-         * snapshot has no consumer and the host's own registers must not be
-         * written into a kernel context. */
         arch_context_set_return(_sctx, (uint64_t)PROCESS_RUN_BLOCKED);
-#else
-        arch_context_snapshot_callee_saved(_sctx);
-        arch_context_set_return(_sctx, (uint64_t)PROCESS_RUN_BLOCKED);
-        /* The resume point, which this snapshot used to leave alone.
-         *
-         * `context_switch` writes out->rip when it SAVES a context, and the
-         * scheduler context is saved only by the non-worker dispatch below. So
-         * a CPU whose first dispatch was a kernel worker reached here with
-         * sched_ctx.rip still 0 -- the snapshot set rsp and the callee-saved
-         * registers and trusted a previous save for the rest -- and the
-         * worker's first process_yield restored that context and returned to
-         * 0. The restore PUSHES ctx->rip and `ret`s to it
-         * (arch/x86_64/context_switch.S), so a zero there is a jump to zero.
-         *
-         * That is [BUG][P1]: SMP only, because a single CPU dispatches
-         * something else first; worst under the SMP stress test, which spawns
-         * eight workers at once; and intermittent, because it depends on which
-         * CPU happens to take a worker as its first dispatch. Written
-         * unconditionally rather than only when zero, so this context says the
-         * same thing a saved one would. */
+#ifndef WASMOS_PROCESS_TEST_SEAMS
         arch_context_set_pc(_sctx,
                             (uint64_t)process_kernel_alias_addr((uintptr_t)&context_switch_resume));
 #endif
-
         arch_context_set_kernel_sp(&thread->ctx, 0);
         cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
     } else {

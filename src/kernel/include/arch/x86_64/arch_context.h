@@ -254,6 +254,18 @@ arch_context_snapshot_callee_saved(process_context_t* ctx) {
     ctx->rsp = sp - 8u;
 }
 
+/* arch_call_on_stack_resumable (contract in arch/arch_context.h). x86_64 records
+ * `resume` with arch_context_snapshot_callee_saved, whose saved rsp is the slot
+ * the call below pushes its return address into; the context switch resumes
+ * with `ret` from that slot. The call must therefore follow the snapshot
+ * directly, in the same frame, which always-inlining both guarantees. */
+static inline __attribute__((always_inline)) uint64_t
+arch_call_on_stack_resumable(process_context_t* resume, uintptr_t stack_top, arch_stack_fn_t fn,
+                             uint64_t a0, uint64_t a1, uint64_t a2) {
+    arch_context_snapshot_callee_saved(resume);
+    return arch_call_on_stack(stack_top, fn, a0, a1, a2);
+}
+
 /* How an interrupt frame was entered. */
 typedef enum {
     ARCH_IRQ_FRAME_INVALID = 0, /* malformed: neither a kernel nor a user frame */

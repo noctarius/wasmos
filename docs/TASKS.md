@@ -2349,16 +2349,15 @@ and the reason it prints names what is missing. Read
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
   UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
   (`cpu_aarch64.c`).
-- [ ] [BUG][P1] The SMP scheduler stress gate (`WASMOS_SCHED_SMP_STRESS`,
-  `run-qemu-sched-stress-test`) panics on `aarch64_wasm3_smp` under HVF, 3 of 3
-  runs: a value just returned by `cpu_local()` is replaced by a small integer
-  on the scheduler's stack between the `mrs tpidr_el1` and its use in
-  `process_schedule_once_impl` (`arch_context_snapshot_callee_saved` of the
-  kernel-worker dispatch), so the snapshot writes near address 0. The register
-  itself is intact; the stack slot is overwritten. This looks like the same
-  race as the intermittent x86_64 MTTCG stress-gate panic (wild rip in
-  `process_schedule_once`), reproducible here on demand. The QEMU batteries
-  pass on the same tree.
+- [ ] [BUG][P1] The SMP scheduler stress gate leaves an ORPHAN on
+  `aarch64_wasm3_smp` under HVF in about 2 of 13 runs: the ring completes
+  (2048 hops, 8/8 workers) but a worker ends RUNNING and current on no CPU,
+  after the tripwire `[sched] enqueue current ... state=2` fired. This is the
+  residual of the scheduler-ready invariant work, probably what the
+  intermittent x86_64 MTTCG stress-gate failure is, here reproducible in a few
+  minutes (`./configure out/s configs/aarch64_wasm3_smp_defconfig --set
+  WASMOS_SCHED_SMP_STRESS=y; ninja -C out/s run-qemu-sched-stress-test`,
+  looped). Until it is fixed, CI does not run the stress gate on aarch64.
 - [ ] [FEATURE][P2] The aarch64-only items of the weak-memory audit, validated
   under `-accel hvf -smp N` (real Apple cores, weak ordering): new page tables
   published before their zeroing is visible, the klog doorbell and ring

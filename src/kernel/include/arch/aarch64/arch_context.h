@@ -67,6 +67,13 @@ typedef struct {
     uint64_t fp_callee[8];
 } process_context_t;
 
+/* context_switch.S. Records x19..x30, d8..d15, sp, DAIF, SP_EL0 and TTBR0 into
+ * `resume` at entry -- x30 is then the return address into the caller, which
+ * is what makes a later restore return from this call -- and tail-calls
+ * arch_call_on_stack. */
+uint64_t arch_call_on_stack_resumable(process_context_t* resume, uintptr_t stack_top,
+                                      arch_stack_fn_t fn, uint64_t a0, uint64_t a1, uint64_t a2);
+
 _Static_assert(offsetof(process_context_t, sp) == 248, "process_context_t sp offset mismatch");
 _Static_assert(offsetof(process_context_t, pc) == 256, "process_context_t pc offset mismatch");
 _Static_assert(offsetof(process_context_t, pstate) == 264,
@@ -143,27 +150,6 @@ static inline uint64_t arch_context_mode(const process_context_t* ctx) {
 
 static inline int arch_context_is_user(const process_context_t* ctx) {
     return (ctx->pstate & AARCH64_SPSR_MODE_MASK) == AARCH64_SPSR_EL0T;
-}
-
-/* Record the caller's callee-saved registers (x19..x29), link register, stack
- * pointer and DAIF into ctx. */
-static inline __attribute__((always_inline)) void
-arch_context_snapshot_callee_saved(process_context_t* ctx) {
-    uint64_t sp;
-    uint64_t daif;
-    __asm__ volatile("stp x19, x20, [%2, #152]\n"
-                     "stp x21, x22, [%2, #168]\n"
-                     "stp x23, x24, [%2, #184]\n"
-                     "stp x25, x26, [%2, #200]\n"
-                     "stp x27, x28, [%2, #216]\n"
-                     "stp x29, x30, [%2, #232]\n"
-                     "mov %0, sp\n"
-                     "mrs %1, daif"
-                     : "=&r"(sp), "=&r"(daif)
-                     : "r"(ctx)
-                     : "memory");
-    ctx->sp = sp;
-    ctx->pstate = AARCH64_SPSR_EL1H | daif;
 }
 
 typedef enum {

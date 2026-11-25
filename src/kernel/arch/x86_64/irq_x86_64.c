@@ -1,4 +1,5 @@
 #include "irq.h"
+#include "kernel_boot_runtime.h"
 #include "msi.h"
 #include "arch/x86_64/irq_x86_64.h"
 #include "ipc.h"
@@ -475,6 +476,7 @@ void x86_irq_handler(uint64_t vector) {
      * per-tick reset runs once per global tick (timer.h). */
     int global_tick = 0;
     if (irq_line == 0) {
+        kernel_boot_kpanic_stop_test_tick();
         global_tick = timer_handle_irq();
     }
     ksync_spinlock_lock(&g_irq_lines_lock);

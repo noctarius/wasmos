@@ -172,6 +172,13 @@ static inline uint8_t* serial_log_port_slot(void) {
     return (uint8_t*)(void*)addr;
 }
 
+/* The registered klog ring's physical base, 0 when none. Acquire pairs with
+ * klog_register_ring's release, so the ring's size, doorbell endpoint and owner
+ * read after a non-zero result are the ones registered with it. */
+static inline uint64_t klog_ring_phys(void) {
+    return __atomic_load_n(serial_klog_ring_phys_slot(), __ATOMIC_ACQUIRE);
+}
+
 static inline volatile uint8_t* serial_klog_doorbell_slot(void) {
     uintptr_t addr = (uintptr_t)&g_klog_doorbell_pending;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
@@ -485,7 +492,8 @@ static void serial_ring_write(const char* s) {
         ring->data[wp % cap] = (uint8_t)*s++;
         wp++;
     }
-    ring->write_pos = wp;
+    /* Release: a reader that sees the new write_pos sees the bytes before it. */
+    __atomic_store_n(&ring->write_pos, wp, __ATOMIC_RELEASE);
 }
 
 /* Publish `s` into the vt's console ring as records for `slot`
@@ -496,7 +504,7 @@ static void serial_ring_write(const char* s) {
  * full ring, reordered ahead of what the vt has yet to drain.  Raises the
  * doorbell when anything was published. */
 static uint32_t console_ring_publish(uint8_t slot, const char* s) {
-    uint64_t phys = *serial_klog_ring_phys_slot();
+    uint64_t phys = klog_ring_phys();
     if (!phys || !s) {
         return 0;
     }
@@ -526,14 +534,16 @@ static uint32_t console_ring_publish(uint8_t slot, const char* s) {
         published += n;
     }
     if (published != 0) {
-        /* Raise the doorbell only; klog_poll() sends it.  See the declaration. */
-        *serial_klog_doorbell_slot() = 1;
+        /* Raise the doorbell only; klog_poll() sends it.  See the declaration.
+         * Release: the records written above are visible to the CPU whose
+         * klog_poll takes the doorbell, and so to the consumer it notifies. */
+        __atomic_store_n(serial_klog_doorbell_slot(), 1u, __ATOMIC_RELEASE);
     }
     return published;
 }
 
 int console_ring_drained(void) {
-    uint64_t phys = *serial_klog_ring_phys_slot();
+    uint64_t phys = klog_ring_phys();
     if (!phys) {
         return 1;
     }
@@ -551,21 +561,25 @@ int console_ring_drained(void) {
  * scheduler loop (kernel_boot_run_scheduler_loop), which is the nearest point to
  * the logging path that holds no serial lock and is not interrupt context.
  *
- * The flag is cleared before the send, so a klog write racing the send re-arms
- * the doorbell rather than being swallowed.  A failed send is dropped silently:
- * the consumer's queue being full means it has messages to process and will
+ * The flag is taken and cleared in one exchange before the send, so a klog
+ * write racing the send re-arms the doorbell rather than being swallowed, and
+ * the acquire makes the records behind the doorbell visible before the notify.
+ *
+ * A failed send is dropped silently: the consumer's queue being full means it
+ * has messages to process and will
  * drain the ring on that wake anyway, and logging the failure here would write
  * klog from inside the klog doorbell path. */
 void klog_poll(void) {
-    if (!*serial_klog_doorbell_slot()) {
+    if (!__atomic_load_n(serial_klog_doorbell_slot(), __ATOMIC_RELAXED)) {
+        return;
+    }
+    if (!__atomic_exchange_n(serial_klog_doorbell_slot(), 0u, __ATOMIC_ACQ_REL)) {
         return;
     }
     uint32_t endpoint = *serial_klog_notify_endpoint_slot();
     if (endpoint == 0) {
-        *serial_klog_doorbell_slot() = 0;
         return;
     }
-    *serial_klog_doorbell_slot() = 0;
     ipc_message_t msg;
     msg.type = (uint32_t)VT_IPC_KLOG_NOTIFY;
     msg.request_id = 0;
@@ -644,9 +658,10 @@ int klog_register_ring(uint32_t owner_context_id, uint32_t id, uint32_t notify_e
     *serial_klog_ring_bytes_slot() = region_bytes;
     *serial_klog_notify_endpoint_slot() = notify_endpoint;
     *serial_klog_ring_owner_slot() = owner_context_id;
-    /* Publish phys last: console_ring_publish reads phys first, so a non-zero phys
-     * always implies a valid bytes value and doorbell endpoint are visible. */
-    *serial_klog_ring_phys_slot() = base;
+    /* Publish phys last, with release: every reader loads phys first with
+     * acquire (klog_ring_phys), so a non-zero phys implies the bytes, doorbell
+     * endpoint and owner stored above are visible on any CPU. */
+    __atomic_store_n(serial_klog_ring_phys_slot(), base, __ATOMIC_RELEASE);
     return 0;
 }
 
@@ -659,7 +674,7 @@ void klog_release_ring(uint32_t owner_context_id) {
      * is what every reader checks. */
     ksync_spinlock_lock(serial_lock_ptr());
     preempt_disable();
-    *serial_klog_ring_phys_slot() = 0;
+    __atomic_store_n(serial_klog_ring_phys_slot(), 0, __ATOMIC_RELAXED);
     *serial_klog_notify_endpoint_slot() = 0;
     *serial_klog_ring_owner_slot() = 0;
     preempt_enable();
@@ -779,8 +794,7 @@ void console_write_tty(uint32_t tty, const char* s) {
  * Returns 0, or WASMOS_ERR_KERNEL_NOT_AUTHORIZED when no console ring is
  * registered or context_id is not the context that registered it. */
 int32_t serial_owner_write(uint32_t context_id, const char* s, uint32_t len) {
-    if (*serial_klog_ring_phys_slot() == 0 || context_id == 0 ||
-        context_id != *serial_klog_ring_owner_slot()) {
+    if (klog_ring_phys() == 0 || context_id == 0 || context_id != *serial_klog_ring_owner_slot()) {
         return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
     ksync_spinlock_lock(serial_lock_ptr());

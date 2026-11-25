@@ -775,7 +775,12 @@ Source: `architecture/13-runtime-and-packaging.md`,
   (`test_net_stack_udp_echo_e2e` setUpClass), and again in run 45618728964,
   battery `scheduler-and-ipc` on `x86_64_warp_smp` (`test_ipc_wakeup`
   setUpClass, exit -11 before the prompt; backtrace `tlb_set_page_full` <-
-  `x86_cpu_tlb_fill` <- `do_interrupt_all` on an MTTCG vCPU thread). The
+  `x86_cpu_tlb_fill` <- `do_interrupt_all` on an MTTCG vCPU thread), and in
+  run 45697704447, battery `filesystem` on `x86_64_wasm3_smp`
+  (`test_virtio_blk` setUpClass during device-manager bring-up, the same
+  backtrace down to `address_space_translate_for_iotlb`, artifact
+  `qemu-crash-filesystem-x86_64_wasm3_smp`). Four occurrences, every one under
+  MTTCG with an interrupt being delivered, on both runtimes. The
   earlier reruns passed. A crash inside
   QEMU's softmmu TLB fill is QEMU's, not the guest's, unless the guest left a
   page table pointing at an unbacked MMIO region; if it recurs, check the
@@ -2358,13 +2363,23 @@ and the reason it prints names what is missing. Read
   MADT (`gic_aarch64.c`, `its_aarch64.c`, `irq_aarch64.c` TODOs), the console
   UART from the SPCR (`platform_aarch64.c`), the PSCI conduit from the FADT
   (`cpu_aarch64.c`).
-- [ ] [FEATURE][P2] The aarch64-only items of the weak-memory audit, validated
-  under `-accel hvf -smp N` (real Apple cores, weak ordering): new page tables
-  published before their zeroing is visible, the klog doorbell and ring
-  registration, `started`/kpanic `captured` read without acquire.
-- [ ] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64:
-  `arch_stop_other_cpus` raises an ordinary SGI (`smp_aarch64.c` TODO); a GICv3
-  pseudo-NMI (priority masking through `ICC_PMR_EL1`) would reach it.
+- [x] [FEATURE][P2] The aarch64-only items of the weak-memory audit: a new
+  page table is ordered (`dmb ishst`) before the descriptor that publishes it
+  and a new root before it can reach a TTBR; the klog ring is registered with a
+  release on `phys` read with acquire, and its doorbell set with release and
+  taken with an exchange; `started` and kpanic's `captured` are read with
+  acquire; the console ring's `write_pos` is a release store. None of these is
+  reproducible on demand -- each needs a table walk or a store reordering no
+  test can force -- so none has a red-first test. Validated under
+  `-accel hvf -smp 4` (real Apple cores, weak ordering): the stress gate 15/15
+  and the full aarch64 suite (337 tests).
+- [x] [FEATURE][P3] Stop a CPU that spins with IRQs masked on aarch64: on a GIC
+  with one security state the stop SGI is Group 0, taken as an FIQ, and FIQs
+  stay unmasked in the kernel (`tests/test_kpanic_stop.py`).
+- [ ] [FEATURE][P3] The same on a GIC with two security states, where Group 0
+  is the secure world's and the stop is still an ordinary SGI
+  (`smp_aarch64.c` TODO): a GICv3 pseudo-NMI (priority masking through
+  `ICC_PMR_EL1`) would reach it.
 - [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
   TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
 - [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3

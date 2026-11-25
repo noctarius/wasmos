@@ -556,7 +556,8 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
             if (i == self) {
                 continue;
             }
-            if (g_cpus[i].started && !g_panic_ctx[i].captured) {
+            if (__atomic_load_n(&g_cpus[i].started, __ATOMIC_ACQUIRE) &&
+                !__atomic_load_n(&g_panic_ctx[i].captured, __ATOMIC_ACQUIRE)) {
                 all = 0;
                 break;
             }
@@ -574,12 +575,15 @@ __attribute__((noreturn)) void kpanic(const char* reason, uint64_t a, uint64_t b
 
     for (uint32_t i = 0; i < g_cpu_count && i < WASMOS_MAX_CPUS; ++i) {
         panic_cpu_ctx_t* c = &g_panic_ctx[i];
+        /* Acquire pairs with the capturing CPU's release: the frame fields read
+         * below are the ones it wrote before setting `captured`. */
+        uint32_t captured = __atomic_load_n(&c->captured, __ATOMIC_ACQUIRE);
         serial_printf_unlocked("--- CPU %u captured=%u pid=%u tid=%u ---\n",
                                (unsigned)i,
-                               (unsigned)c->captured,
+                               (unsigned)captured,
                                (unsigned)c->pid,
                                (unsigned)c->tid);
-        if (!c->captured) {
+        if (!captured) {
             serial_printf_unlocked("    <no NMI capture (offline or stuck with NMIs masked)>\n");
             continue;
         }

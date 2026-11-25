@@ -36,6 +36,10 @@ HOST_ASM = R(
     else "src/libsys/native/coroutine_native_x86_64.S"
 )
 
+# The arch headers matching the host, for a suite whose kernel source reaches an
+# arch inline (arch/arch_context.h selects on WASMOS_ARCH_AARCH64).
+HOST_ARCH_DEFS = ["-DWASMOS_ARCH_AARCH64=1"] if _ARCH in ("arm64", "aarch64") else []
+
 # Linker flag that drops unreferenced sections (ld64 vs GNU/lld spelling).
 DEAD_STRIP = "-Wl,-dead_strip" if platform.system() == "Darwin" else "-Wl,--gc-sections"
 
@@ -192,6 +196,8 @@ TESTS = [
     (RUN, 'test_kenv', []),
     (CC, 'test_kmsg', [*C11, '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_kmsg.c'), R('src/kernel/kmsg.c')]),
     (RUN, 'test_kmsg', []),
+    (CC, 'test_mm_regions', [*C11, '-D_POSIX_C_SOURCE=200809L', '-Wno-unused-parameter', '-pthread', *HOST_ARCH_DEFS, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), R('tests/unit/test_mm_regions.c'), R('src/kernel/memory.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('tests/unit/stubs_spinlock.c'), R('tests/unit/stubs_kpanic.c')]),
+    (RUN, 'test_mm_regions', []),
     (CC, 'test_physmem', [*C11, '-DWASMOS_PHYSMEM_TEST_SEAMS=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_physmem.c'), R('src/kernel/physmem.c'), R('tests/unit/stubs_kpanic.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_physmem', []),
     (CC, 'test_pm_shutdown', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), R('tests/unit/test_pm_shutdown.c'), R('src/kernel/process_manager_shutdown.c'), R('src/kernel/shutdown_order.c')]),

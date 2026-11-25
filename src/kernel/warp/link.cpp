@@ -37,6 +37,7 @@ extern "C" {
 #include "block_buffer.h"
 #include "hostcall_value.h"
 #include "kenv.h"
+#include "kpanic.h"
 #include "hostcall_buffer.h"
 #include "ipc.h"
 #include "process.h"
@@ -2013,7 +2014,8 @@ static uint32_t warp_serial_owner_write(uint32_t buf_offset, uint32_t len, void*
  * (peer-granted shared phys) and warp_region_alloc (driver-owned pinned phys) —
  * one code path so the pinned-linmem-base invariants only live in one place.
  * Caller owns tracking/retain and the physical backing.  Returns the wasm
- * offset (>= 0) on success, or a packed WASMOS_ERR_LINMEM_* code (negative) on failure. */
+ * offset (>= 0) on success, or a packed WASMOS_ERR_LINMEM_* code (negative) on
+ * failure, after which the slot and the ring-3 view are as they were. */
 static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, uint64_t map_pages,
                                       uint32_t window_size, bool take_ref) {
     /* Scan linear memory for a free, page-aligned, non-overlapping window.
@@ -2115,6 +2117,21 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
     }
 
     uint64_t virt = addr_cast(uint64_t, lmem);
+#ifdef WASMOS_WASM_RUNTIME_WARP
+    /* The ring-3 view first, while the slot still maps its own frames: the
+     * only step that can fail then comes before anything is freed or pinned.
+     * Nothing records the window yet, so a remap left behind by a failure
+     * would never be unmapped. On failure the pages the user map reached are
+     * re-mirrored from the untouched slot. Their page tables exist now, so the
+     * re-mirror allocates nothing; if it still fails, ring 3 keeps frames the
+     * caller is about to free, and the guest must not run on. */
+    if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, map_pages) != 0) {
+        klog_write("[warp] linmem place: user-window map failed\n");
+        if (warp_ring3_sync_user_range(ctx, found_off, (uint32_t)(map_pages * 0x1000ULL)) != 0)
+            kpanic("warp: ring-3 window not restored after a failed map", found_off, phys_base);
+        return (int64_t)WASMOS_ERR_LINMEM_USER_WINDOW;
+    }
+#endif
     for (uint64_t i = 0; i < map_pages; ++i) {
         uint64_t page_virt = virt + i * 0x1000ULL;
         /* Slot-backed linmem: the frame this VA currently maps belongs to the
@@ -2132,9 +2149,8 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
          * own, taken as it is mapped: linmem_slot_decommit frees each frame
          * still mapped in the slot at teardown, so without it the frame's owner
          * (block slot, DMA region, xfer-buffer object) and the decommit would
-         * both free it. Taken per page, so a placement that fails after mapping
-         * part of the window (the user-window map below) leaves exactly as many
-         * references as mappings. An explicit unmap drops it
+         * both free it. Taken only for a page that did map. An explicit unmap
+         * drops it
          * (warp_xfer_buffer_unmap). Without take_ref (phys_map: firmware frames
          * the allocator never handed out, which cannot be pinned) the caller
          * must unmap the window before the slot is decommitted. */
@@ -2142,12 +2158,6 @@ static int64_t warp_linmem_place_phys(WarpCallContext* ctx, uint64_t phys_base, 
             pfa_pin_pages(phys_base + i * 0x1000ULL, 1);
         }
     }
-#ifdef WASMOS_WASM_RUNTIME_WARP
-    if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, map_pages) != 0) {
-        klog_write("[warp] linmem place: user-window map failed\n");
-        return (int64_t)WASMOS_ERR_LINMEM_USER_WINDOW;
-    }
-#endif
     return (int64_t)found_off;
 }
 
@@ -2420,11 +2430,6 @@ static uint32_t warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size,
         if (!linmem_base || !linmem_slot_contains(addr_cast(uint64_t, linmem_base)))
             return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
         int64_t placed = warp_linmem_place_phys(ctx, page, pages, (uint32_t)region_bytes, false);
-        /* TODO: a placement that fails after mapping part of the window (the
-         * ring-3 user-window map) returns here with firmware frames still
-         * mapped in the slot and no window record, so warp_release_pid does not
-         * unmap them and the slot decommit frees frames the allocator never
-         * handed out. */
         if (placed < 0)
             return (uint32_t)WASMOS_ERR_KERNEL_NO_WINDOW;
         uint32_t off = (uint32_t)placed;

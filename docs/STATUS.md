@@ -796,7 +796,9 @@ linked feature documents for rationale and rollout plans.
   WARP, ASIDs and a framebuffer for firmware without a GOP are open
   (`TASKS.md`, "arm64 Port"). The SMP scheduler stress gate
   (`run-qemu-sched-stress-test`) passes on aarch64 SMP under HVF (25 of 25
-  runs) and runs in CI's `defconfig` job on the arm64 runner.
+  runs) and runs in CI's `defconfig` job on the arm64 runner. A panic stops
+  the other CPUs with a Group 0 SGI taken as an FIQ, so a CPU spinning with IRQs
+  masked is captured as on x86_64 (`test_kpanic_stop`).
 - The aarch64 clock is a Kconfig choice (`WASMOS_RTC_*`, "Real-time clock
   (aarch64)"); both serve the `rtc` protocol through the shared core
   (`src/drivers/rtc/core/rtc_core.ts`), as the x86_64 CMOS driver now does. The

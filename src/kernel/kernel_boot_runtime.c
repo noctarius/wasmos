@@ -7,7 +7,10 @@
  *   - kernel_boot_run_low_slot_sweep_diagnostic: strips and verifies the low
  *     slot of every live process root, logging (not panicking) on failure.
  *   - kernel_boot_run_scheduler_loop: the BSP's terminal scheduler loop, which
- *     panics only when not even the idle thread is dispatchable. */
+ *     panics only when not even the idle thread is dispatchable.
+ *   - kernel_boot_kpanic_stop_test: the debug.kpanic_stop_test boot option,
+ *     which panics with a CPU spinning where it takes no ordinary interrupt,
+ *     so a test can see whether kpanic's stop reached it. */
 #include "kernel_boot_runtime.h"
 
 #include "arch/arch_cpu.h"
@@ -21,6 +24,81 @@
 #include "string.h"
 #include "timer.h"
 #include "sched.h"
+#include "cpu_local.h"
+#include "kenv.h"
+#include "wasmos_status.h"
+
+/* debug.kpanic_stop_test: the boot CPU arms the test with a mode, CPU 1 starts
+ * spinning and announces it, and the boot CPU then panics. kpanic's stop has
+ * to reach a CPU that takes no ordinary interrupt for its frame to appear in
+ * the dump:
+ *   1  CPU 1 spins with interrupts masked, from its scheduler loop;
+ *   2  CPU 1 spins inside its timer interrupt, before ending it, so the
+ *      interrupt controller holds it at that interrupt's priority. */
+#define KPANIC_STOP_TEST_MASKED 1u
+#define KPANIC_STOP_TEST_IN_IRQ 2u
+
+#if WASMOS_SMP
+static uint32_t g_kpanic_stop_test_armed;
+static uint32_t g_kpanic_stop_test_spinning;
+
+static __attribute__((noreturn)) void kpanic_stop_test_spin(void) {
+    arch_irq_disable();
+    __atomic_store_n(&g_kpanic_stop_test_spinning, 1u, __ATOMIC_RELEASE);
+    for (;;) {
+        arch_cpu_relax();
+    }
+}
+#endif
+
+void kernel_boot_kpanic_stop_test_tick(void) {
+#if WASMOS_SMP
+    if (__atomic_load_n(&g_kpanic_stop_test_armed, __ATOMIC_RELAXED) == KPANIC_STOP_TEST_IN_IRQ &&
+        cpu_local()->cpu_id == 1u) {
+        kpanic_stop_test_spin();
+    }
+#endif
+}
+
+void kernel_boot_kpanic_stop_test(void) {
+    char value[4];
+    uint32_t written = 0;
+    if (kenv_get("debug.kpanic_stop_test", value, sizeof(value), &written) != WASMOS_OK) {
+        return;
+    }
+    uint32_t mode = 0;
+    if (strcmp(value, "1") == 0) {
+        mode = KPANIC_STOP_TEST_MASKED;
+    } else if (strcmp(value, "2") == 0) {
+        mode = KPANIC_STOP_TEST_IN_IRQ;
+    } else {
+        klog_printf("[kpanic-stop-test] mode %s unknown; not run\n", value);
+        return;
+    }
+#if WASMOS_SMP
+    if (g_cpu_count < 2u || !__atomic_load_n(&g_cpus[1].started, __ATOMIC_ACQUIRE)) {
+        klog_write("[kpanic-stop-test] needs a second online CPU; not run\n");
+        return;
+    }
+    __atomic_store_n(&g_kpanic_stop_test_armed, mode, __ATOMIC_RELEASE);
+    /* CPU 1 reaches its scheduler loop within a tick; the bound only keeps a
+     * CPU that never does from hanging the boot, and the panic then reports it
+     * as it is. */
+    for (uint64_t spin = 0; spin < 2000000000ULL; ++spin) {
+        if (__atomic_load_n(&g_kpanic_stop_test_spinning, __ATOMIC_ACQUIRE)) {
+            break;
+        }
+        arch_cpu_relax();
+    }
+    klog_printf("[kpanic-stop-test] cpu 1 spinning (mode %u): %u\n",
+                (unsigned)mode,
+                (unsigned)__atomic_load_n(&g_kpanic_stop_test_spinning, __ATOMIC_ACQUIRE));
+    kpanic("kpanic stop test", 1, 0);
+#else
+    (void)mode;
+    klog_write("[kpanic-stop-test] needs an SMP kernel; not run\n");
+#endif
+}
 
 /* Allocate zeroed frames inside the bootstrap window (KERNEL_BOOTSTRAP_WINDOW_BYTES,
  * arch/vm_layout.h: 64 MiB on x86_64, the whole direct map on aarch64, whose RAM
@@ -218,6 +296,13 @@ void kernel_boot_run_low_slot_sweep_diagnostic(void) {
 void kernel_boot_run_scheduler_loop(void) {
     for (;;) {
         arch_irq_disable();
+#if WASMOS_SMP
+        if (__atomic_load_n(&g_kpanic_stop_test_armed, __ATOMIC_RELAXED) ==
+                KPANIC_STOP_TEST_MASKED &&
+            cpu_local()->cpu_id == 1u) {
+            kpanic_stop_test_spin();
+        }
+#endif
         int rc = process_schedule_once();
         /* SCHED_OK, or a thread that just blocked/exited/zombied/raced
          * (including SCHED_R_STALE, a thread reaped out from under the picker),

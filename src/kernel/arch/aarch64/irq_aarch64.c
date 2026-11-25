@@ -13,6 +13,7 @@
 #include "gic_aarch64.h"
 #include "ipc.h"
 #include "irq.h"
+#include "kernel_boot_runtime.h"
 #include "klog.h"
 #include "kpanic.h"
 #include "msi.h"
@@ -240,6 +241,7 @@ void aarch64_irq(irq_frame_t* frame) {
         return;
     }
     if (aarch64_timer_is_tick(intid)) {
+        kernel_boot_kpanic_stop_test_tick();
         aarch64_timer_rearm();
         /* Every CPU ticks; the sharing layer's per-tick reset runs once per
          * global tick (timer.h). */

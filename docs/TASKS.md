@@ -772,7 +772,11 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `filesystem` on `warp_smp` (artifact `qemu-crash-filesystem-warp_smp`, with the
   symbolized core). It recurred as exit -11 before the prompt in run
   45066741384, battery `networking` on `warp_smp`
-  (`test_net_stack_udp_echo_e2e` setUpClass). Both reruns passed. A crash inside
+  (`test_net_stack_udp_echo_e2e` setUpClass), and again in run 45618728964,
+  battery `scheduler-and-ipc` on `x86_64_warp_smp` (`test_ipc_wakeup`
+  setUpClass, exit -11 before the prompt; backtrace `tlb_set_page_full` <-
+  `x86_cpu_tlb_fill` <- `do_interrupt_all` on an MTTCG vCPU thread). The
+  earlier reruns passed. A crash inside
   QEMU's softmmu TLB fill is QEMU's, not the guest's, unless the guest left a
   page table pointing at an unbacked MMIO region; if it recurs, check the
   faulting guest address in the core against the guest's last mappings before

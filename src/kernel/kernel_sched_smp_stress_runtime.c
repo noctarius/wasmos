@@ -138,8 +138,13 @@ static uint32_t smp_stress_count_orphans(void) {
          * an exiting worker to ZOMBIE, and releases the claim only after. The
          * last worker to finish is still in that window when its exit is
          * counted, so without this test it is reported as an orphan. */
+        /* The state is read again after the claim: the dispatcher moves the
+         * thread out of RUNNING before it releases the claim (release), so a
+         * FREE claim seen with acquire makes that state change visible. The
+         * first read alone can be from before a retirement completed. */
         if (!current_somewhere &&
-            __atomic_load_n(&t->dispatch_ref, __ATOMIC_ACQUIRE) == THREAD_SLOT_FREE) {
+            __atomic_load_n(&t->dispatch_ref, __ATOMIC_ACQUIRE) == THREAD_SLOT_FREE &&
+            __atomic_load_n((uint32_t*)&t->state, __ATOMIC_RELAXED) == THREAD_STATE_RUNNING) {
             orphans++;
             serial_printf("[test] sched smp stress ORPHAN tid=%u iters=%u last_cpu=%u\n",
                           (unsigned)g_sw[i].tid,

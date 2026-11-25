@@ -115,9 +115,11 @@ static hashmap_t g_ctx_map;
  * processes on different CPUs look up, insert and remove their own keys
  * concurrently: an insert that rehashes frees the bucket array a concurrent
  * lookup is walking. The lock covers the map operation only. A returned value
- * pointer stays valid without it, because nodes never move and a pid's entry is
- * removed only by that pid's own reap (warp_release_pid). Leaf lock: nothing is
- * taken while it is held except the kmem allocator inside hashmap_put. */
+ * pointer stays valid without it for the pid's OWN use, because nodes never move
+ * and a pid's entry is removed only by that pid's own reap (warp_release_pid). A
+ * lookup on behalf of another process (warp_block_pin_by_phys) must finish its
+ * use under the lock or pin what it needs. Taken before the kmem allocator
+ * (hashmap_put) and the frame allocator (pin/free), neither of which calls back. */
 static ksync_spinlock_t g_pid_maps_lock;
 
 static void* pid_map_get(hashmap_t* map, uint32_t pid) {
@@ -733,22 +735,32 @@ static WarpBlockSlot* warp_block_slot(uint32_t pid) {
         s->pid = pid;
     return s;
 }
-/* Find a block slot by physical address (used by block_buffer_write/copy,
- * which may be called by a different process than the one that called phys). */
-static WarpBlockSlot* warp_block_slot_by_phys(uint64_t phys) {
+/* Pins the block buffer at `phys` -- which may belong to another process, since
+ * block_buffer_copy/write are called by whichever process holds the address --
+ * and returns 1, or 0 when no live slot has that buffer. The lookup and the pin
+ * happen under g_pid_maps_lock, which warp_release_pid also holds to remove the
+ * slot, so the owner's reap either removes the slot first (no pin, NO_SLOT) or
+ * drops only its own reference afterwards; the frames then stay allocated until
+ * the caller's warp_block_unpin. The caller uses `phys` only, never the slot. */
+static int warp_block_pin_by_phys(uint64_t phys) {
     hashmap_iter_t it;
     uint32_t key = 0;
-    WarpBlockSlot* found = nullptr;
+    int found = 0;
     ksync_spinlock_lock(&g_pid_maps_lock);
     for (auto* s = static_cast<WarpBlockSlot*>(hashmap_first(&g_block_map, &it, &key)); s;
          s = static_cast<WarpBlockSlot*>(hashmap_next(&it, &key))) {
-        if (s->phys == phys) {
-            found = s;
+        if (s->phys != 0 && s->phys == phys) {
+            pfa_pin_pages(phys, WARP_BLOCK_BUF_PAGES);
+            found = 1;
             break;
         }
     }
     ksync_spinlock_unlock(&g_pid_maps_lock);
     return found;
+}
+
+static void warp_block_unpin(uint64_t phys) {
+    pfa_free_pages(phys, WARP_BLOCK_BUF_PAGES);
 }
 
 /* hostcalls.yaml `block_buffer_phys`: physical base of this process's private 8 KiB
@@ -789,9 +801,6 @@ static uint32_t warp_block_buffer_phys(void* ctx_) {
 static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t len,
                                        uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    auto* slot = warp_block_slot_by_phys((uint64_t)phys);
-    if (!slot)
-        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
     /* 64-bit, via the shared check: `offset + len` in 32 bits wraps, and a
      * wrapped sum passed the old bound while naming a byte outside the buffer. */
     wasmos_error_code_t range_rc =
@@ -801,8 +810,11 @@ static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t
     uint8_t* wasm_ptr = warp_mem(ctx, ptr_off, len);
     if (!wasm_ptr)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    uint8_t* buf = reinterpret_cast<uint8_t*>(slot->phys | 0xFFFFFFFF80000000ULL);
+    if (!warp_block_pin_by_phys((uint64_t)phys))
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
+    uint8_t* buf = reinterpret_cast<uint8_t*>((uint64_t)phys | 0xFFFFFFFF80000000ULL);
     __builtin_memcpy(wasm_ptr, buf + offset, len);
+    warp_block_unpin((uint64_t)phys);
     return 0;
 }
 
@@ -811,9 +823,6 @@ static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t
 static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_t len,
                                         uint32_t offset, void* ctx_) {
     auto* ctx = warp_call_ctx(ctx_);
-    auto* slot = warp_block_slot_by_phys((uint64_t)phys);
-    if (!slot)
-        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
     /* 64-bit, via the shared check: `offset + len` in 32 bits wraps, and a
      * wrapped sum passed the old bound while naming a byte outside the buffer. */
     wasmos_error_code_t range_rc =
@@ -823,8 +832,11 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
     uint8_t* wasm_ptr = warp_mem(ctx, ptr_off, len);
     if (!wasm_ptr)
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
-    uint8_t* buf = reinterpret_cast<uint8_t*>(slot->phys | 0xFFFFFFFF80000000ULL);
+    if (!warp_block_pin_by_phys((uint64_t)phys))
+        return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
+    uint8_t* buf = reinterpret_cast<uint8_t*>((uint64_t)phys | 0xFFFFFFFF80000000ULL);
     __builtin_memcpy(buf + offset, wasm_ptr, len);
+    warp_block_unpin((uint64_t)phys);
     return 0;
 }
 
@@ -3067,12 +3079,19 @@ extern "C" void warp_release_pid(uint32_t pid) {
     pid_map_remove(&g_fs_peer_map, pid);
     /* Reclaim the per-pid block buffer pages before dropping the slot, else the
      * 2 pages leak on every process exit. */
-    if (auto* bslot = static_cast<WarpBlockSlot*>(pid_map_get(&g_block_map, pid))) {
-        if (bslot->phys) {
-            pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
-        }
+    /* Removed under g_pid_maps_lock before the owner's reference is dropped, so a
+     * concurrent block_buffer_copy/write on another process either finds no slot
+     * or has already pinned the frames (warp_block_pin_by_phys). */
+    uint64_t block_phys = 0;
+    ksync_spinlock_lock(&g_pid_maps_lock);
+    if (auto* bslot = static_cast<WarpBlockSlot*>(hashmap_get(&g_block_map, pid))) {
+        block_phys = bslot->phys;
     }
-    pid_map_remove(&g_block_map, pid);
+    (void)hashmap_remove(&g_block_map, pid);
+    ksync_spinlock_unlock(&g_pid_maps_lock);
+    if (block_phys) {
+        pfa_free_pages(block_phys, WARP_BLOCK_BUF_PAGES);
+    }
     /* Every window record of the process: block buffer, regions, xfer overlays. */
     warp_overlay_map_release_pid(pid);
     /* phys_map windows map firmware frames into the linear-memory slot; unmap them

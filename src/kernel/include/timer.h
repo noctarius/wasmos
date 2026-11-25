@@ -11,9 +11,14 @@
  * counter to 0. hz == 0 falls back to 250. */
 void timer_init(uint32_t hz);
 
-/* Called from the timer IRQ handler to advance the tick counter and trigger
- * scheduler preemption. */
-void timer_handle_irq(void);
+/* Called from the timer IRQ handler on every CPU's tick: runs the calling CPU's
+ * quantum accounting (process_tick) and, on the boot CPU only, advances the
+ * global tick counter. Returns 1 when this call advanced the counter -- the boot
+ * CPU's tick, or every tick in a non-SMP kernel -- and 0 for a secondary CPU's.
+ * Per-tick work shared by the whole machine, such as the interrupt-sharing
+ * layer's throttle and budget reset (irq_sharing_tick), runs only on a 1: on
+ * every CPU's tick it would run N times per global tick. */
+int timer_handle_irq(void);
 
 /* Drain the pending periodic tick marker to the trace log. Does NOT advance the
  * tick counter -- only timer_handle_irq does -- and is a no-op unless the kernel

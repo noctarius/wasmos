@@ -28,3 +28,8 @@ needs = ["devmgr.inv"]
 [[capabilities]]
 name = "mmio.map"
 flags = 0
+
+# Publishes every ACPI device it finds to device-manager's inventory.
+[[capabilities]]
+name = "inventory.device"
+flags = 0

@@ -41,3 +41,8 @@ flags = 0
 [[capabilities]]
 name = "svc.class"
 flags = 0
+
+# Publishes and retires volumes in device-manager's inventory.
+[[capabilities]]
+name = "inventory.storage"
+flags = 0

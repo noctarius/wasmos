@@ -48,6 +48,8 @@ typedef enum {
     CAP_SVC_CONTROL       = 9,   // mask bit 9: submit, kill, declare the boot set (supervisor)
     CAP_PCI_CONFIG        = 10,  // mask bit 10: PCI config space (pci_config_read/write)
     CAP_RTC_EFI           = 11,  // mask bit 11: the UEFI clock (rtc_efi_get/rtc_efi_set)
+    CAP_INVENTORY_DEVICE  = 12,  // mask bit 12: publish PCI/ACPI records to device-manager
+    CAP_INVENTORY_STORAGE = 13,  // mask bit 13: publish/retire block and volume records
 } capability_kind_t;
 
 #define CAPABILITY_KIND_COUNT 12u
@@ -72,6 +74,8 @@ these kinds via `capability_grant_name`:
 | `"svc.control"`        | `CAP_SVC_CONTROL`        |
 | `"pci.config"`         | `CAP_PCI_CONFIG`         |
 | `"rtc.efi"`            | `CAP_RTC_EFI`            |
+| `"inventory.device"`   | `CAP_INVENTORY_DEVICE`   |
+| `"inventory.storage"`  | `CAP_INVENTORY_STORAGE`  |
 
 The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
 and `capability.h` asserts that the enum matches. Any unrecognized name returns
@@ -93,6 +97,15 @@ pci-bus-only (`pci_config_guest_read`, `src/kernel/pci_config.c`).
 the firmware's GetTime and SetTime (`src/kernel/efi_rtc.c`); only the rtc_efi
 driver declares it. It is its own kind, not `system.control`, so the clock
 driver cannot also halt or reboot the machine.
+`CAP_INVENTORY_DEVICE` and `CAP_INVENTORY_STORAGE` gate what device-manager
+accepts on its inventory endpoint (`devmgr.inv`), which it checks with
+`ipc_endpoint_has_cap` on each record's sender: PCI and ACPI device records and
+the end of a bus scan need `inventory.device` (pci-bus, acpi-bus); block-device
+and volume records, published or retired, need `inventory.storage` (ata,
+virtio-blk, the partition manager, the volume manager). The inventory decides
+which drivers device-manager spawns and what it grants them, so a record from
+anyone else would be a request for hardware
+([Device Manager](16-device-manager-and-bus-enumeration.md)).
 
 ---
 
@@ -218,14 +231,52 @@ source endpoint: the transport refuses a source the sender does not own, so its
 owner is the sender. The answer is about the owner when asked; a sender that
 has exited answers `WASMOS_NOENT`.
 
-A capability is held because the module's manifest declares it, and nothing
-checks that the image is entitled to declare it: any `.wap` on any path --
-`/boot`, `/user` and `/wfs` are writable -- can declare `spawn.grant`,
-`svc.control` or `system.control` and be spawned with them by any process. So
-the requester checks keep a process from exercising an authority it does not
-hold, but not from spawning an image that does: a privileged utility such as
-`svc` is a deputy any process can start with arguments of its choosing. Closing
-that needs a capability policy over images (`docs/TASKS.md`).
+### Signed Packages
+
+A capability is held because the module's manifest declares it, and the
+requester checks above keep a process from exercising an authority it does not
+hold. Two rules keep a process from acquiring one through an image instead
+(`capability_manifest_grant_check`, applied to every manifest capability but
+`ipc.basic` when the process manager starts a package):
+
+1. **The image must be signed with the build's key.** `/boot`, `/user` and
+   `/wfs` are writable, so a manifest alone proves nothing: any process could
+   write a `.wap` declaring `spawn.grant` and spawn it. Every package the
+   build packs ends in an Ed25519 signature
+   ([Runtime and Packaging](13-runtime-and-packaging.md), "Signature"), and the
+   kernel checks it against the public key it was built with. An unsigned or
+   altered package is granted no capability beyond `ipc.basic`.
+2. **A kind that acts on requests follows the requester.** `system.control`,
+   `subsystem.register`, `svc.class`, `console.owner`, `spawn.grant`,
+   `svc.control`, `pci.config`, `rtc.efi`, `inventory.device` and
+   `inventory.storage` are granted only when the process that asked for the
+   spawn holds the same kind, or holds `spawn.grant`. Otherwise any process
+   could start a signed privileged utility -- `svc kill vt` -- as a deputy and
+   steer it with arguments. What the requester holds is taken when the
+   process manager receives the request, before it reads the package
+   (`pm_requester_cap_mask`), since the requester may be gone by the time the
+   child starts. A process the manager created from a package is marked so at
+   creation (`process_t.from_image`) and holds what its manifest was granted
+   while it runs and nothing once it is exiting; any other process is one the
+   kernel runs itself (the init process that spawns the supervisor) and holds
+   every kind. The hardware kinds
+   (`io.port`, `mmio.map`, `irq.route`, `dma.buffer`) reach only what the
+   signed manifest bounds, or what a spawn profile -- which only a
+   `spawn.grant` holder can attach -- names, so the signature is their whole
+   test.
+
+A refusal fails the start and is logged:
+`[pm] refused <capability> to <package>: <reason>`.
+
+Consequences for who holds what: the shell (`cli`) holds `svc.control` so the
+console user can run `svc`; the vt, which spawns the shell for each console
+slot past the first, holds the shell's `system.control` and `svc.control`;
+device-manager and the supervisor hold
+`spawn.grant`, so the drivers and services they start get what their signed
+manifests declare. Submitting to the supervisor needs `svc.control`, which
+makes every `svc.control` holder able to have any signed package started with
+its declared capabilities; `svc.control` is therefore the console user's
+authority, and only the shell, the vt, sysinit, device-manager and `svc` hold it.
 
 ---
 

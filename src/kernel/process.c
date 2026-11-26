@@ -934,6 +934,7 @@ static void process_reset_slot(process_t* proc) {
     proc->in_hostcall = 0;
     proc->auto_reap = 0;
     proc->reap_requested = 0;
+    proc->from_image = 0;
     proc->needs_runtime_lock = 0;
     proc->ready = 0;
     proc->require_explicit_ready = 0;
@@ -1572,6 +1573,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->watch_ready = 0;
     slot->watch_exit = 0;
     slot->critical = 0;
+    slot->from_image = 0;
     slot->live_endpoint = IPC_ENDPOINT_NONE;
     /* Set again only by the ready-gated spawn: a slot must not pass its last
      * occupant's gate to an app, which latches READY on its first receive. */
@@ -1784,6 +1786,7 @@ int process_spawn_idle(const char* name, process_entry_t entry, void* arg, uint3
     slot->watch_ready = 0;
     slot->watch_exit = 0;
     slot->critical = 0;
+    slot->from_image = 0;
     slot->live_endpoint = IPC_ENDPOINT_NONE;
     /* Set again only by the ready-gated spawn: a slot must not pass its last
      * occupant's gate to an app, which latches READY on its first receive. */

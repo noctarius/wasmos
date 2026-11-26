@@ -433,6 +433,7 @@ domains:
       - { name: UNSUPPORTED_QUERY, description: "unknown or unsupported device-manager query type" }
       - { name: NO_SUCH_RECORD,    description: "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something" }
       - { name: BAD_RECORD_ID,     description: "the id named for retirement was empty, unterminated, or longer than the inventory's id field" }
+      - { name: NOT_PUBLISHER,     description: "the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes)" }
 
   virtio_blk:
     id: 24

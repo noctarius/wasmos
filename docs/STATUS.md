@@ -513,6 +513,21 @@ linked feature documents for rationale and rollout plans.
   the request's source endpoint; capability kinds are ABI as `WASMOS_CAP_*`
   (`abi/constants.yaml`). Host-tested in `test_pm_caps`,
   `test_supervisor_unit` and, on both runtimes, `test_hostcall_ipc`.
+- Packages are signed and a manifest's privilege is checked
+  (`architecture/10`, "Signed Packages"). The build signs every `.wap` with
+  Ed25519 (`libs/monocypher` 4.0.3; `.wap` v11 ends in the signature) using
+  `WASMOS_SIGNING_KEY` or a development seed it creates once in the build
+  directory, and compiles the public key into the kernel. A manifest
+  capability beyond `ipc.basic` is granted only to a package that verifies;
+  a kind that acts on requests also needs the requester to hold it or
+  `spawn.grant` (`capability_manifest_grant_check`), so the shell holds
+  `svc.control` for `svc`. Refusals are logged `[pm] refused <cap> to
+  <package>: <reason>`. Device-manager accepts inventory records only from
+  `inventory.device` (pci-bus, acpi-bus) and `inventory.storage` (block
+  drivers, partition and volume managers) holders. Tested in
+  `test_signed_packages.py`, `test_devmgr_inventory_auth.py`,
+  `test_capability`, `test_wasmos_app_deps`. The SDK ships Monocypher as
+  `libmonocypher.a` for apps (`test_sdk_monocypher.py`).
 - Boot milestone: when sysinit.rc has run to its end, sysinit sends
   `SUPERVISOR_IPC_BOOT_SUBMITTED_REQ` (finding the supervisor by name if no
   `service` line did), and the units the supervisor then holds are the boot

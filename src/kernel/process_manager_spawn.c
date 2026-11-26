@@ -393,8 +393,12 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         /* TODO: a native module runs its whole entry inside the start hook, so
          * a native driver that returns a non-zero status after running is
          * reported as START_FAILED here instead of EXITED with its status. */
-        if (wasmos_app_start(
-                &state->app, &desc, process->context_id, init_args, state->entry_argc) != 0) {
+        if (wasmos_app_start(&state->app,
+                             &desc,
+                             process->context_id,
+                             state->requester_cap_mask,
+                             init_args,
+                             state->entry_argc) != 0) {
             klog_write("[pm] app start failed\n");
             process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
@@ -425,7 +429,48 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
     return PROCESS_RUN_EXITED;
 }
 
-static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t* out_pid) {
+/* Marks a process this manager just created, still parked, as started from a
+ * package image (see pm_requester_cap_mask). */
+static void pm_mark_from_image(uint32_t pid) {
+    process_t* created = process_get(pid);
+    if (created) {
+        created->from_image = 1;
+    }
+}
+
+/* What the process asking for a spawn holds. Each spawn handler captures it on
+ * entry, before any filesystem read, and the child's manifest capabilities are
+ * decided against that value (capability_manifest_grant_check) when the child
+ * starts, by which time the requester may have exited.
+ *
+ * A process this manager created from an image (process_t.from_image, set at
+ * creation and kept until the slot is reused) holds what its manifest was
+ * granted while it runs, and nothing once it is exiting, a zombie or reaped.
+ * Any other live process is the kernel's own -- pid 0, the init process that
+ * spawns the supervisor, a self-test -- and holds every capability, as context
+ * 0 does. The creation mark, not the runtime tag, is the test, because only
+ * this manager sets it while a subsystem broker could register a tag of its
+ * choosing. A requester without a process holds nothing. */
+static uint32_t pm_requester_cap_mask(uint32_t parent_pid) {
+    if (parent_pid == 0u) {
+        return capability_mask_of(IPC_CONTEXT_KERNEL);
+    }
+    process_t* requester = process_get(parent_pid);
+    if (!requester) {
+        return 0u;
+    }
+    if (!requester->from_image) {
+        return capability_mask_of(IPC_CONTEXT_KERNEL);
+    }
+    if (__atomic_load_n(&requester->exiting, __ATOMIC_ACQUIRE) != 0u ||
+        requester->context_id == IPC_CONTEXT_KERNEL) {
+        return 0u;
+    }
+    return capability_mask_of(requester->context_id);
+}
+
+static int pm_spawn_module(uint32_t parent_pid, uint32_t requester_cap_mask, uint32_t module_index,
+                           uint32_t* out_pid) {
     const boot_module_t* mod = pm_module_at(module_index);
     if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
         mod->size > 0xFFFFFFFFULL) {
@@ -467,6 +512,7 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
     slot->blob = ptr_cast(uint8_t, mod->base);
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
+    slot->requester_cap_mask = requester_cap_mask;
     slot->in_use = 1;
     if (pm_apply_entry_bindings(slot, &desc) != 0) {
         klog_write("[pm] spawn_module bindings failed: ");
@@ -490,6 +536,7 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
     }
 
     slot->pid = *out_pid;
+    pm_mark_from_image(*out_pid);
     if (process_set_runtime_lock_required(*out_pid, subsystem.needs_runtime_lock) != 0 ||
         process_set_runtime_tag(*out_pid, subsystem.runtime_tag) != 0) {
         klog_write("[pm] spawn_module runtime flag failed: ");
@@ -561,9 +608,10 @@ static int pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t* caps) {
 
 /* requested_tty is the PROC_SPAWN_PATH_TTY encoding: 0 leaves the controlling tty
  * to pm_alloc_cli_tty's round-robin, non-zero pins it to (requested_tty - 1). */
-static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32_t blob_size,
-                                const char* spawn_cli_args, uint32_t spawn_cli_args_len,
-                                uint32_t requested_tty, uint32_t* out_pid) {
+static int pm_spawn_from_buffer(uint32_t parent_pid, uint32_t requester_cap_mask,
+                                const uint8_t* blob, uint32_t blob_size, const char* spawn_cli_args,
+                                uint32_t spawn_cli_args_len, uint32_t requested_tty,
+                                uint32_t* out_pid) {
     if (!blob || blob_size == 0 || !out_pid) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
@@ -606,6 +654,7 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
     }
 
     slot->started = 0;
+    slot->requester_cap_mask = requester_cap_mask;
     slot->in_use = 1;
     slot->requested_tty = requested_tty;
     slot->spawn_cli_args_len = 0;
@@ -633,6 +682,7 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
         return PM_SPAWN_INTERNAL_ERR_ALLOC;
     }
     slot->pid = *out_pid;
+    pm_mark_from_image(*out_pid);
     if (process_set_runtime_lock_required(*out_pid, subsystem.needs_runtime_lock) != 0 ||
         process_set_runtime_tag(*out_pid, subsystem.runtime_tag) != 0) {
         pm_slot_reset(slot);
@@ -1186,8 +1236,9 @@ int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
+    uint32_t requester_cap_mask = pm_requester_cap_mask(parent_pid);
 
-    int spawn_rc = pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid);
+    int spawn_rc = pm_spawn_module(parent_pid, requester_cap_mask, (uint32_t)msg->arg0, &child_pid);
     if (spawn_rc != 0) {
         klog_printf("[pm] spawn_module failed rc=%d\n", spawn_rc);
         return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
@@ -1248,6 +1299,7 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
+    uint32_t requester_cap_mask = pm_requester_cap_mask(parent_pid);
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path) ||
         args_len >= sizeof(args)) {
         return WASMOS_ERR_PROC_PM_BAD_PATH;
@@ -1280,6 +1332,7 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
         return WASMOS_ERR_PROC_PM_PATH_RESOLVE;
     }
     int spawn_rc = pm_spawn_from_buffer(parent_pid,
+                                        requester_cap_mask,
                                         (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                                         resolved.blob_size,
                                         resolved.args_len > 0u ? resolved.args : 0,
@@ -1581,8 +1634,9 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
+    uint32_t requester_cap_mask = pm_requester_cap_mask(parent_pid);
 
-    if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
+    if (pm_spawn_module(parent_pid, requester_cap_mask, msg->arg0, &pid) != 0) {
         return WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
@@ -1648,6 +1702,7 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_NO_CALLER;
     }
     parent_pid = caller->pid;
+    uint32_t requester_cap_mask = pm_requester_cap_mask(parent_pid);
     /* arg1 names a transfer buffer, not a raw user pointer, and must be resolved
      * as one.  A user-VA resolve cannot see WARP's linear memory: it looks for a
      * MEM_REGION_WASM_LINEAR region, which reserved-VA linmem slots are not, and
@@ -1670,7 +1725,7 @@ int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_GRANT_NOT_AUTHORIZED;
     }
 
-    if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
+    if (pm_spawn_module(parent_pid, requester_cap_mask, msg->arg0, &pid) != 0) {
         return WASMOS_ERR_PROC_PM_INVALID_MODULE;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
@@ -1742,6 +1797,7 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_SPAWN_NO_CALLER;
     }
     parent_pid = caller->pid;
+    uint32_t requester_cap_mask = pm_requester_cap_mask(parent_pid);
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return WASMOS_ERR_PROC_SPAWN_BAD_PATH;
     }
@@ -1806,6 +1862,7 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
         return WASMOS_ERR_PROC_PM_BUSY;
     }
     int sfb_rc = pm_spawn_from_buffer(parent_pid,
+                                      requester_cap_mask,
                                       (const uint8_t*)pm_xfer_owner_ptr(&pmbuf),
                                       resolved.blob_size,
                                       resolved.args_len > 0u ? resolved.args : 0,
@@ -1940,6 +1997,7 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
     if (!caller) {
         return WASMOS_ERR_PROC_SPAWN_NO_CALLER;
     }
+    uint32_t requester_cap_mask = pm_requester_cap_mask(caller->pid);
     region =
         (uint8_t*)(uintptr_t)pm_foreign_xfer_ptr((uint32_t)msg->arg0, owner_context, &buffer_size);
     if (!region || region_size < sizeof(req) ||
@@ -2005,7 +2063,7 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
         /* desc points into the module image, which lives as long as the kernel. */
         if (wasmos_app_parse((const uint8_t*)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) !=
                 0 ||
-            pm_spawn_module(caller->pid, index, &pid) != 0) {
+            pm_spawn_module(caller->pid, requester_cap_mask, index, &pid) != 0) {
             ipc_owed_cancel(on_ready);
             ipc_owed_cancel(on_exit);
             return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
@@ -2034,6 +2092,7 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
         const uint8_t* blob = (const uint8_t*)pm_xfer_owner_ptr(&pmbuf);
         if (wasmos_app_parse(blob, resolved.blob_size, &desc) != 0 ||
             pm_spawn_from_buffer(caller->pid,
+                                 requester_cap_mask,
                                  blob,
                                  resolved.blob_size,
                                  resolved.args_len > 0u ? resolved.args : 0,

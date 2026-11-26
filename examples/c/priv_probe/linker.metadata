@@ -1,0 +1,21 @@
+version = 1
+
+[package]
+name = "priv-probe"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+# Privileged: the reason this package exists. Never used.
+[[capabilities]]
+name = "svc.control"
+flags = 0

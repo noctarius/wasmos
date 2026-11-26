@@ -20,3 +20,13 @@ def build(b):
     b.exports["sdk.archives"].append(
         wasm32.archive(f"{b.exports['sdk.libdir']}/libsys.a", objs)
     )
+
+    # Monocypher (libs/monocypher) for guests: Ed25519, X25519, BLAKE2b,
+    # ChaCha20-Poly1305, Argon2 and SHA-512 as libmonocypher.a, which an app
+    # links with -lmonocypher. The kernel compiles the same sources for package
+    # signatures; nothing here crosses into it.
+    mono = b.exports["monocypher"]
+    mono_objs = wasm32.compile(mono["sources"], flags=mono["include"])
+    b.exports["sdk.archives"].append(
+        wasm32.archive(f"{b.exports['sdk.libdir']}/libmonocypher.a", mono_objs)
+    )

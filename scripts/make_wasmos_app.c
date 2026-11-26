@@ -4,11 +4,18 @@
 #include <string.h>
 #include <ctype.h>
 
-/* Container identity. MAGIC is the 8-byte signature, compared byte-for-byte and
+#include "monocypher.h"
+#include "monocypher-ed25519.h"
+
+/* Container identity. MAGIC is the 8-byte magic, compared byte-for-byte and
  * NOT NUL-terminated in the file. VERSION selects which header layout the parser
- * applies; this packer emits 10, and src/kernel/wasmos_app.c accepts only 10. */
+ * applies; this packer emits 11, and src/kernel/wasmos_app.c accepts only 11. */
 #define MAGIC "WASMOSAP"
-#define VERSION 10u
+#define VERSION 11u
+/* An Ed25519 signature (RFC 8032), and the seed and public key it is made from. */
+#define SIGNATURE_LEN 64u
+#define SEED_LEN 32u
+#define PUBKEY_LEN 32u
 
 /* Header flags, mirroring WASMOS_APP_FLAG_* in src/kernel/include/wasmos_app.h.
  * DRIVER/SERVICE/APP are the package kind and exactly one is set, derived from
@@ -61,13 +68,14 @@
  *   cap_count x (wasmos_cap_request_t + name bytes),
  *   region_count x wasmos_region_entry_t,
  *   mem_hint_count x wasmos_mem_hint_t (stack then heap),
- *   wasm_size raw payload bytes, then compiled_size WARP AOT bytes if non-zero.
+ *   wasm_size raw payload bytes, then compiled_size WARP AOT bytes if non-zero,
+ *   then signature_size signature bytes if non-zero.
  * Nothing is padded or aligned between sections; the parser advances by the
  * counts in this header alone.
  *
  * Fields, all little-endian (the format is not byte-order portable):
  *   magic[8]                 "WASMOSAP", not NUL-terminated.
- *   version                  Always 10 from this packer.
+ *   version                  Always 11 from this packer.
  *   header_size              sizeof(this struct); the parser compares it against
  *                            its own and also uses it as the offset of the first
  *                            section, so name bytes start exactly here.
@@ -89,6 +97,9 @@
  *                            defaults to "NATIVE" or "WASM".
  *   region_count             Number of wasmos_region_entry_t records, written
  *                            after the capability table and before the mem hints.
+ *   signature_size           0 for an unsigned package, else SIGNATURE_LEN: an
+ *                            Ed25519 signature over every byte before it (this
+ *                            header included), which ends the package.
  */
 typedef struct __attribute__((packed)) {
     char magic[8];
@@ -103,7 +114,8 @@ typedef struct __attribute__((packed)) {
     uint32_t mem_hint_count;
     uint32_t compiled_size; /* size of the WARP AOT binary appended after WASM; 0 if absent */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
-    uint32_t region_count; /* declared register windows */
+    uint32_t region_count;   /* declared register windows */
+    uint32_t signature_size; /* 0, or SIGNATURE_LEN: the signature that ends the package */
 } wasmos_app_header_t;
 
 /* One declared register window, carrying no trailing name. Its position in the
@@ -156,7 +168,8 @@ static int capability_name_supported(const char* name) {
            strcmp(name, "subsystem.register") == 0 || strcmp(name, "svc.class") == 0 ||
            strcmp(name, "console.owner") == 0 || strcmp(name, "spawn.grant") == 0 ||
            strcmp(name, "svc.control") == 0 || strcmp(name, "pci.config") == 0 ||
-           strcmp(name, "rtc.efi") == 0;
+           strcmp(name, "rtc.efi") == 0 || strcmp(name, "inventory.device") == 0 ||
+           strcmp(name, "inventory.storage") == 0;
 }
 
 static int subsystem_tag_has_valid_char(char c) {
@@ -764,7 +777,124 @@ static int check_deps(int count, char** paths) {
  * non-zero capability flags value, an unreadable input, an empty --compiled
  * file, or a short write. A failed run may leave a truncated output file behind,
  * because errors after fopen do not remove it. */
+/* Read a signing seed: SEED_LEN bytes written as hex, whitespace ignored. */
+static int read_seed(const char* path, uint8_t seed[SEED_LEN]) {
+    FILE* f = fopen(path, "r");
+    if (!f) {
+        perror(path);
+        return -1;
+    }
+    uint32_t n = 0;
+    int hi = -1;
+    int c;
+    while ((c = fgetc(f)) != EOF) {
+        if (isspace(c)) {
+            continue;
+        }
+        int v = isdigit(c) ? c - '0' : (isxdigit(c) ? (tolower(c) - 'a' + 10) : -1);
+        if (v < 0 || n >= SEED_LEN) {
+            fclose(f);
+            fprintf(stderr, "%s: not a %u-byte hex seed\n", path, SEED_LEN);
+            return -1;
+        }
+        if (hi < 0) {
+            hi = v;
+        } else {
+            seed[n++] = (uint8_t)((hi << 4) | v);
+            hi = -1;
+        }
+    }
+    fclose(f);
+    if (n != SEED_LEN || hi >= 0) {
+        fprintf(stderr, "%s: not a %u-byte hex seed\n", path, SEED_LEN);
+        return -1;
+    }
+    return 0;
+}
+
+/* The Ed25519 key pair a seed file names. The seed is wiped once used. */
+static int load_key_pair(const char* seed_path, uint8_t secret[64], uint8_t pub[PUBKEY_LEN]) {
+    uint8_t seed[SEED_LEN];
+    if (read_seed(seed_path, seed) != 0) {
+        return -1;
+    }
+    crypto_ed25519_key_pair(secret, pub, seed); /* wipes seed */
+    return 0;
+}
+
+/* Sign the package just written at `path`, whose header already says
+ * signature_size = SIGNATURE_LEN: sign every byte of the file and append the
+ * signature. */
+static int sign_package(const char* path, const char* seed_path) {
+    uint8_t secret[64];
+    uint8_t pub[PUBKEY_LEN];
+    if (load_key_pair(seed_path, secret, pub) != 0) {
+        return -1;
+    }
+    FILE* f = fopen(path, "rb");
+    if (!f || fseek(f, 0, SEEK_END) != 0) {
+        perror(path);
+        if (f) {
+            fclose(f);
+        }
+        return -1;
+    }
+    long size = ftell(f);
+    uint8_t* data = size > 0 ? (uint8_t*)malloc((size_t)size) : NULL;
+    int ok = data && fseek(f, 0, SEEK_SET) == 0 && fread(data, 1, (size_t)size, f) == (size_t)size;
+    fclose(f);
+    if (!ok) {
+        free(data);
+        fprintf(stderr, "%s: cannot read back for signing\n", path);
+        return -1;
+    }
+    uint8_t sig[SIGNATURE_LEN];
+    crypto_ed25519_sign(sig, secret, data, (size_t)size);
+    crypto_wipe(secret, sizeof(secret));
+    free(data);
+    f = fopen(path, "ab");
+    ok = f && fwrite(sig, 1, sizeof(sig), f) == sizeof(sig);
+    if (f) {
+        ok &= fclose(f) == 0;
+    }
+    if (!ok) {
+        fprintf(stderr, "%s: cannot append the signature\n", path);
+        return -1;
+    }
+    return 0;
+}
+
+/* Write the public key of a seed as the C definition the kernel compiles in:
+ * the key a package's signature is checked against. */
+static int emit_pubkey_c(const char* seed_path, const char* out_path) {
+    uint8_t secret[64];
+    uint8_t pub[PUBKEY_LEN];
+    if (load_key_pair(seed_path, secret, pub) != 0) {
+        return 1;
+    }
+    crypto_wipe(secret, sizeof(secret));
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        perror(out_path);
+        return 1;
+    }
+    fprintf(f,
+            "/* GENERATED by make_wasmos_app --pubkey-c from the build's signing seed.\n"
+            " * The Ed25519 key a package must be signed with to be granted a\n"
+            " * privileged capability (src/kernel/capability.c). */\n"
+            "#include <stdint.h>\n\n"
+            "const uint8_t wasmos_image_signing_pubkey[32] = {");
+    for (uint32_t i = 0; i < PUBKEY_LEN; ++i) {
+        fprintf(f, "%s0x%02x", i ? ", " : "", pub[i]);
+    }
+    fprintf(f, "};\n");
+    return fclose(f) == 0 ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
+    if (argc == 4 && strcmp(argv[1], "--pubkey-c") == 0) {
+        return emit_pubkey_c(argv[2], argv[3]);
+    }
     if (argc >= 2 && strcmp(argv[1], "--check-deps") == 0) {
         return check_deps(argc - 2, argv + 2);
     }
@@ -773,6 +903,7 @@ int main(int argc, char** argv) {
         const char* in_path = NULL;
         const char* out_path = NULL;
         const char* compiled_path = NULL;
+        const char* sign_seed_path = NULL;
         for (int i = 3; i + 1 < argc; i += 2) {
             if (strcmp(argv[i], "--in") == 0) {
                 in_path = argv[i + 1];
@@ -780,6 +911,8 @@ int main(int argc, char** argv) {
                 out_path = argv[i + 1];
             } else if (strcmp(argv[i], "--compiled") == 0) {
                 compiled_path = argv[i + 1];
+            } else if (strcmp(argv[i], "--sign") == 0) {
+                sign_seed_path = argv[i + 1];
             } else {
                 fprintf(stderr, "unknown flag '%s'\n", argv[i]);
                 return 1;
@@ -788,7 +921,7 @@ int main(int argc, char** argv) {
         if (!in_path || !out_path) {
             fprintf(stderr,
                     "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
-                    "<in.warpbin>]\n",
+                    "<in.warpbin>] [--sign <seed.hex>]\n",
                     argv[0]);
             return 1;
         }
@@ -923,6 +1056,7 @@ int main(int argc, char** argv) {
         hdr.compiled_size = (uint32_t)compiled_data_size;
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
         hdr.region_count = lm.region_count;
+        hdr.signature_size = sign_seed_path ? SIGNATURE_LEN : 0u;
 
         wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, lm.stack_pages, 0};
         wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, lm.heap_pages, 0};
@@ -960,7 +1094,13 @@ int main(int argc, char** argv) {
 
         free(compiled_data);
         free(wasm);
-        fclose(outf);
+        ok &= fclose(outf) == 0;
+        if (ok && sign_seed_path && sign_package(out_path, sign_seed_path) != 0) {
+            ok = 0;
+        }
+        if (!ok) {
+            (void)remove(out_path);
+        }
         return ok ? 0 : 1;
     }
     if (argc < 9) {
@@ -968,8 +1108,10 @@ int main(int argc, char** argv) {
                 "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
                 "<cap_count> [<cap_name> <cap_flags>]...\n"
                 "       %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
-                "<in.warpbin>]\n"
+                "<in.warpbin>] [--sign <seed.hex>]\n"
+                "       %s --pubkey-c <seed.hex> <out.c>\n"
                 "       %s --check-deps <manifest>...\n",
+                argv[0],
                 argv[0],
                 argv[0],
                 argv[0]);

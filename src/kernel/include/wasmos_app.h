@@ -25,7 +25,7 @@
 /* Container version the packer (scripts/make_wasmos_app.c) emits, and the only one
  * the parser accepts.  The version is bound to an exact header_size, so a blob whose
  * header_size disagrees is rejected rather than reinterpreted. */
-#define WASMOS_APP_VERSION 10u
+#define WASMOS_APP_VERSION 11u
 /* On-wire width of the subsystem tag field (v5+).  Struct fields that hold a parsed tag
  * are this + 1 so the tag is always NUL-terminated in memory. */
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
@@ -57,6 +57,10 @@
 #define WASMOS_APP_MEM_HINT_HEAP 2u
 #define WASMOS_APP_MEM_HINT_IPC 3u
 #define WASMOS_APP_MEM_HINT_DEVICE 4u
+
+/* Byte length of a package signature: Ed25519 (RFC 8032), over every byte of the
+ * package before it. */
+#define WASMOS_APP_SIGNATURE_LEN 64u
 
 /* Capacities of the fixed-size tables in wasmos_app_desc_t.  A header count above any of
  * these makes wasmos_app_parse reject the whole package rather than truncate — a
@@ -136,6 +140,12 @@ typedef struct {
     uint32_t wasm_size;
     const uint8_t* compiled_bytes; /* pre-compiled WARP AOT binary; NULL if absent */
     uint32_t compiled_size;
+    /* The package's Ed25519 signature (WASMOS_APP_SIGNATURE_LEN bytes, the last in
+     * the blob) and the length of what it signs: every byte before it.  NULL and 0
+     * for an unsigned package.  Parsing locates the signature; whether it is valid
+     * is wasmos_app_signature_valid's question. */
+    const uint8_t* signature;
+    uint32_t signed_size;
     const uint8_t* name;
     uint32_t name_len;
     const uint8_t* entry;
@@ -237,12 +247,33 @@ struct wasmos_subsystem_ops {
     void (*stop)(wasmos_app_runtime_state_t* state);
 };
 
+/* What decides a manifest capability beyond its name, passed to the granter with
+ * each one: whether the package is signed with the build's key
+ * (wasmos_app_signature_valid), and what the process that requested the spawn
+ * held when it asked (capability_mask_of; every bit for a spawn the kernel made
+ * itself).  `image_name` is the package's name, borrowed and not NUL-terminated,
+ * for the granter's log line. */
+typedef struct {
+    uint8_t image_signed;
+    uint32_t requester_cap_mask;
+    const uint8_t* image_name;
+    uint32_t image_name_len;
+} wasmos_app_grant_ctx_t;
+
 /* Policy hook wasmos_app_start calls once per capability-table entry, installed by the
  * process manager via wasmos_app_set_policy_hooks.  `name` is borrowed and not
  * NUL-terminated; `name_len` bounds it.  Returns 0 when the capability was granted; a
  * non-zero return aborts the start with the process partially set up. */
 typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const uint8_t* name,
-                                               uint32_t name_len, uint32_t flags);
+                                               uint32_t name_len, uint32_t flags,
+                                               const wasmos_app_grant_ctx_t* ctx);
+
+/* 1 when the package carries a signature (wasmos_app_desc_t.signature) that is a valid
+ * Ed25519 signature, by the key compiled into this kernel
+ * (wasmos_image_signing_pubkey), over every byte before it; 0 otherwise, including for
+ * an unsigned package.  Hashes the whole package, so it costs time proportional to
+ * its size. */
+int wasmos_app_signature_valid(const wasmos_app_desc_t* desc);
 
 /* A started package.  Unlike wasmos_app_desc_t this owns its data: name and entry are
  * NUL-terminated copies, so the instance outliving the package blob is fine.  `active`
@@ -318,9 +349,15 @@ int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t* desc);
  * the instance's 64-byte fields, a missing policy hook, a refused capability grant, an
  * unresolved or broker-backed subsystem, or a failing start hook.  The dependency table
  * is not consulted.  On failure the instance is left inactive, but capabilities already
- * granted are not rolled back. */
+ * granted are not rolled back.
+ *
+ * requester_cap_mask is what the process that asked for this spawn held when it asked
+ * (see wasmos_app_grant_ctx_t); the policy hook decides each capability with it and
+ * with whether the package's signature is valid, which is checked here only when the
+ * package asks for a capability other than ipc.basic. */
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
-                     uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc);
+                     uint32_t owner_context_id, uint32_t requester_cap_mask,
+                     const uint32_t* init_argv, uint32_t init_argc);
 
 /* Invoke the started instance's entry export through its subsystem's call_entry hook,
  * with the arguments captured at start.  Returns the hook's status (0 = success), or -1

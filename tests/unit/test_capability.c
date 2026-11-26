@@ -195,8 +195,82 @@ static int test_concurrent_grants_keep_their_own_records(void) {
     return 0;
 }
 
+/* Regression: 2026-11-26-manifest-grants-itself-privilege -- a package was granted
+ * whatever its manifest named. Any process could write a .wap declaring
+ * spawn.grant or svc.control to a writable volume and spawn it, or spawn a
+ * privileged utility (svc) as a deputy and steer it with arguments.
+ *
+ * The image policy: an unsigned package gets no capability at all, and a kind
+ * that acts on requests follows the requester -- it holds the kind or holds
+ * spawn.grant -- while a hardware kind is bounded by the signed manifest and a
+ * spawn profile and needs only the signature. */
+static int test_the_image_policy_decides_each_kind(void) {
+    const uint32_t none = 0u;
+    const uint32_t svc_control = 1u << CAP_SVC_CONTROL;
+    const uint32_t spawn_grant = 1u << CAP_SPAWN_GRANT;
+    if (capability_manifest_grant_check(CAP_SVC_CONTROL, 0, ~0u) != CAPABILITY_GRANT_UNSIGNED ||
+        capability_manifest_grant_check(CAP_DMA_BUFFER, 0, ~0u) != CAPABILITY_GRANT_UNSIGNED) {
+        return __LINE__; /* no signature, no capability, whoever asks */
+    }
+    if (capability_manifest_grant_check(CAP_SVC_CONTROL, 1, none) != CAPABILITY_GRANT_REQUESTER) {
+        return __LINE__; /* a requester without it cannot hand it out */
+    }
+    if (capability_manifest_grant_check(CAP_SVC_CONTROL, 1, svc_control) != CAPABILITY_GRANT_OK ||
+        capability_manifest_grant_check(CAP_SVC_CONTROL, 1, spawn_grant) != CAPABILITY_GRANT_OK) {
+        return __LINE__; /* a holder, or a spawn.grant holder, can */
+    }
+    if (capability_manifest_grant_check(CAP_SYSTEM_CONTROL, 1, svc_control) !=
+        CAPABILITY_GRANT_REQUESTER) {
+        return __LINE__; /* holding one kind does not hand out another */
+    }
+    const capability_kind_t acting[] = {CAP_SYSTEM_CONTROL,
+                                        CAP_SUBSYSTEM_REGISTER,
+                                        CAP_SVC_CLASS_REGISTER,
+                                        CAP_CONSOLE_OWNER,
+                                        CAP_SPAWN_GRANT,
+                                        CAP_SVC_CONTROL,
+                                        CAP_PCI_CONFIG,
+                                        CAP_RTC_EFI,
+                                        CAP_INVENTORY_DEVICE,
+                                        CAP_INVENTORY_STORAGE};
+    for (uint32_t i = 0; i < sizeof(acting) / sizeof(acting[0]); ++i) {
+        if (capability_manifest_grant_check(acting[i], 1, none) != CAPABILITY_GRANT_REQUESTER) {
+            printf("  kind %u is handed out by a requester without it\n", (unsigned)acting[i]);
+            return __LINE__;
+        }
+    }
+    const capability_kind_t hardware[] = {CAP_IO_PORT, CAP_IRQ_ROUTE, CAP_MMIO_MAP, CAP_DMA_BUFFER};
+    for (uint32_t i = 0; i < sizeof(hardware) / sizeof(hardware[0]); ++i) {
+        if (capability_manifest_grant_check(hardware[i], 1, none) != CAPABILITY_GRANT_OK) {
+            printf("  hardware kind %u needs more than a signature\n", (unsigned)hardware[i]);
+            return __LINE__;
+        }
+    }
+    return 0;
+}
+
+/* What a requester is taken to hold: its grants, every kind for the kernel's
+ * context, nothing for a context never granted anything. */
+static int test_the_requester_mask_is_what_the_context_holds(void) {
+    capability_init();
+    if (capability_mask_of(0u) != (1u << CAPABILITY_KIND_COUNT) - 1u) {
+        return __LINE__;
+    }
+    if (capability_mask_of(0x4242u) != 0u) {
+        return __LINE__;
+    }
+    if (grant(0x4243u, "svc.control") != 0 ||
+        capability_mask_of(0x4243u) != (1u << CAP_SVC_CONTROL)) {
+        return __LINE__;
+    }
+    capability_release_context(0x4243u);
+    return 0;
+}
+
 int main(void) {
     static const wasmos_test_case_t cases[] = {
+        WASMOS_TEST_CASE(test_the_image_policy_decides_each_kind),
+        WASMOS_TEST_CASE(test_the_requester_mask_is_what_the_context_holds),
         WASMOS_TEST_CASE(test_a_released_context_holds_nothing),
         WASMOS_TEST_CASE(test_releasing_one_context_leaves_the_others),
         WASMOS_TEST_CASE(test_regions_resolve_by_position_and_kind),

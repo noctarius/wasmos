@@ -1,6 +1,6 @@
 """C example guest modules, each staged on the ESP under apps/."""
 
-from wasmos_rules import guest, install, kernel_blob
+from wasmos_rules import guest, install, kernel_blob, pack
 
 # Examples laid out as <name>/<name>.c with <name>/linker.metadata.
 SIMPLE = [
@@ -12,6 +12,7 @@ SIMPLE = [
     "gfx_mode",
     "gfx_smoke",
     "init_smoke",
+    "inv_forge",
     "irq_route_allow",
     "irq_route_deny",
     "linmem_hold",
@@ -25,6 +26,8 @@ SIMPLE = [
     "phys_map_acpi",
     "phys_map_denied",
     "phys_map_refused",
+    "priv_deputy",
+    "priv_probe",
     "surface_attach",
     "sv_probe",
     "wfs_write_smoke",
@@ -75,6 +78,43 @@ def build(b):
         flags=["-matomics"],
     )
     install(b, "apps/atomics_smoke.wap", wap)
+
+    # An app using the SDK's Monocypher library.
+    wap = guest(
+        b,
+        "crypto_smoke",
+        [b.src("crypto_smoke/crypto_smoke.c")],
+        manifest=b.src("crypto_smoke/linker.metadata"),
+        flags=b.exports["monocypher"]["include"],
+        libs=["-lmonocypher"],
+    )
+    install(b, "apps/crypto_smoke.wap", wap)
+
+    # priv_probe's bytecode packed two more ways for the signature policy
+    # (tests/test_signed_packages.py): without a signature, and signed and then
+    # altered by one byte in its payload, so the signature no longer matches.
+    probe_wasm = "priv_probe.wasm"
+    unsigned = pack(
+        b,
+        "priv_unsigned",
+        probe_wasm,
+        b.src("priv_probe/linker.metadata"),
+        aot=False,
+        sign=False,
+    )
+    install(b, "apps/priv_unsigned.wap", unsigned)
+    signed = pack(
+        b, "priv_resigned", probe_wasm, b.src("priv_probe/linker.metadata"), aot=False
+    )
+    tamper = b.root / "scripts/tamper_byte.py"
+    b.command(
+        ["priv_tampered.wap"],
+        [b.tools["python"], tamper, signed, "priv_tampered.wap"],
+        inputs=[signed],
+        implicit=[tamper],
+        description="TAMPER priv_tampered.wap",
+    )
+    install(b, "apps/priv_tampered.wap", "priv_tampered.wap")
 
     for name in SIMPLE:
         wap = guest(

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "monocypher-ed25519.h"
 #include "test_shuffle.h"
 
 /* Mirrors wasmos_app_header_t in wasmos_app.c and scripts/make_wasmos_app.c. */
@@ -33,6 +34,7 @@ typedef struct __attribute__((packed)) {
     uint32_t compiled_size;
     char subsystem_tag[8];
     uint32_t region_count;
+    uint32_t signature_size;
 } test_header_t;
 
 typedef struct {
@@ -49,7 +51,7 @@ static uint32_t put(uint32_t off, const void* bytes, uint32_t len) {
     return off + len;
 }
 
-/* Build a v10 app package: name "t", entry "m", the given dependency records,
+/* Build an app package: name "t", entry "m", the given dependency records,
  * one "ipc.basic" capability, no regions, a stack and a heap hint, then a
  * 4-byte payload "\0asm". Returns the blob length. */
 static uint32_t build(uint16_t version, uint32_t dep_count_field, const test_dep_t* deps,
@@ -240,6 +242,83 @@ static int test_v9_is_refused(void) {
     return 0;
 }
 
+/* The seed whose public key tests/unit/stubs_signing_pubkey.c defines. */
+static void test_signing_secret(uint8_t secret[64]) {
+    uint8_t seed[32];
+    uint8_t pub[32];
+    for (uint32_t i = 0; i < 32; ++i) {
+        seed[i] = (uint8_t)i;
+    }
+    crypto_ed25519_key_pair(secret, pub, seed);
+}
+
+/* Turn the package build() left in g_blob into a signed one, as the packer does:
+ * declare the signature in the header, sign every byte, append it. Returns the
+ * new length. */
+static uint32_t sign_blob(uint32_t len) {
+    uint8_t secret[64];
+    test_header_t hdr;
+    memcpy(&hdr, g_blob, sizeof(hdr));
+    hdr.signature_size = WASMOS_APP_SIGNATURE_LEN;
+    memcpy(g_blob, &hdr, sizeof(hdr));
+    test_signing_secret(secret);
+    crypto_ed25519_sign(&g_blob[len], secret, g_blob, len);
+    return len + WASMOS_APP_SIGNATURE_LEN;
+}
+
+/* Regression: 2026-11-26-manifest-grants-itself-privilege -- nothing tied a
+ * package to the build that made it, so the kernel granted any package's
+ * manifest. A package now ends in an Ed25519 signature over everything before
+ * it, and only a valid one by the compiled-in key counts. */
+static int test_a_signed_package_verifies_and_an_unsigned_one_does_not(void) {
+    wasmos_app_desc_t desc;
+    uint32_t len = build(WASMOS_APP_VERSION, 0, 0, 0);
+    if (wasmos_app_parse(g_blob, len, &desc) != 0 || desc.signature != 0 ||
+        wasmos_app_signature_valid(&desc) != 0) {
+        return __LINE__;
+    }
+    uint32_t signed_len = sign_blob(len);
+    if (wasmos_app_parse(g_blob, signed_len, &desc) != 0) {
+        return __LINE__;
+    }
+    if (desc.signature != &g_blob[len] || desc.signed_size != len) {
+        return __LINE__;
+    }
+    if (wasmos_app_signature_valid(&desc) != 1) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_an_altered_package_does_not_verify(void) {
+    wasmos_app_desc_t desc;
+    uint32_t len = sign_blob(build(WASMOS_APP_VERSION, 0, 0, 0));
+    g_blob[len - WASMOS_APP_SIGNATURE_LEN - 1u] ^= 0x01u; /* the payload's last byte */
+    if (wasmos_app_parse(g_blob, len, &desc) != 0 || wasmos_app_signature_valid(&desc) != 0) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+/* The signature must end the package and be exactly one signature long, so a
+ * signed package carries no byte the signature does not cover. */
+static int test_a_signature_that_does_not_end_the_package_is_refused(void) {
+    wasmos_app_desc_t desc;
+    uint32_t len = sign_blob(build(WASMOS_APP_VERSION, 0, 0, 0));
+    g_blob[len] = 0xAAu;
+    if (wasmos_app_parse(g_blob, len + 1u, &desc) == 0) {
+        return __LINE__;
+    }
+    test_header_t hdr;
+    memcpy(&hdr, g_blob, sizeof(hdr));
+    hdr.signature_size = 32u;
+    memcpy(g_blob, &hdr, sizeof(hdr));
+    if (wasmos_app_parse(g_blob, len, &desc) == 0) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 /* The boot-module lookup the supervisor's boot chain is spawned through: by
  * the app name the package embeds, skipping modules that are not apps or do
  * not parse, and naming nothing when the table is absent. */
@@ -290,6 +369,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_name_limits_follow_the_kind),
         WASMOS_TEST_CASE(test_unknown_strength_or_kind_is_refused),
         WASMOS_TEST_CASE(test_v9_is_refused),
+        WASMOS_TEST_CASE(test_a_signed_package_verifies_and_an_unsigned_one_does_not),
+        WASMOS_TEST_CASE(test_an_altered_package_does_not_verify),
+        WASMOS_TEST_CASE(test_a_signature_that_does_not_end_the_package_is_refused),
         WASMOS_TEST_CASE(test_a_boot_module_is_found_by_its_app_name),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));

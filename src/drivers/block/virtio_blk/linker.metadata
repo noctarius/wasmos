@@ -51,6 +51,11 @@ flags = 4
 name = "svc.class"
 flags = 0
 
+# Publishes its disk to device-manager's block inventory.
+[[capabilities]]
+name = "inventory.storage"
+flags = 0
+
 # Region 0: BAR 4, where the device places its virtio-modern structures (common
 # config, notify, ISR, device config). device-manager resolves it to a
 # memory-mapped window of the BAR's measured size.

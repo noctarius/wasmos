@@ -3,14 +3,50 @@
 Exports flow downward: a manifest may read what an earlier one published in
 b.exports, so the subdir order below is the dependency order."""
 
+import os
+from pathlib import Path
+
 
 def build(b):
     host = b.toolchain("host")
+    # Monocypher (libs/monocypher, a subtree): Ed25519 for signing packages.
+    mono = b.root / "libs/monocypher/src"
+    b.exports["monocypher"] = {
+        "sources": [mono / "monocypher.c", mono / "optional/monocypher-ed25519.c"],
+        "include": [f"-I{mono}", f"-I{mono / 'optional'}"],
+    }
     packer = host.link(
-        "make_wasmos_app", host.compile([b.src("scripts/make_wasmos_app.c")])
+        "make_wasmos_app",
+        host.compile(
+            [b.src("scripts/make_wasmos_app.c"), *b.exports["monocypher"]["sources"]],
+            flags=b.exports["monocypher"]["include"],
+        ),
     )
     b.exports["packer"] = packer
     b.alias("make_wasmos_app", packer)
+
+    # The seed every package is signed with, and the public key the kernel
+    # checks signatures against (docs/architecture/10-capability-and-policy.md).
+    # Without a configured seed, a development one is created once in the build
+    # directory and kept, so rebuilds stay signed with the same key.
+    seed = b.cfg.WASMOS_SIGNING_KEY or ""
+    if seed:
+        seed = Path(seed).expanduser().resolve()
+    else:
+        seed = b.out / "signing" / "dev-seed.hex"
+        if not seed.exists():
+            seed.parent.mkdir(parents=True, exist_ok=True)
+            seed.write_text(os.urandom(32).hex() + "\n")
+            seed.chmod(0o600)
+    b.exports["signing.seed"] = seed
+    b.command(
+        ["wasmos_signing_pubkey.c"],
+        [f"./{packer}", "--pubkey-c", seed, "wasmos_signing_pubkey.c"],
+        inputs=[seed],
+        implicit=[packer],
+        description="KEY wasmos_signing_pubkey.c",
+    )
+    b.exports["signing.pubkey_c"] = b.out / "wasmos_signing_pubkey.c"
 
     # Every linker.metadata's [deps] needs-edges must be acyclic: the packer
     # checks the whole set at once.

@@ -94,20 +94,15 @@ Source: `architecture/06-memory-management.md`,
   `kernel_boot_build_bootinfo_shadow`, reading boot data the firmware placed
   outside the 512 MiB higher-half window (`KERNEL_HIGHER_HALF_WINDOW_BYTES`).
   The harness boots 512 MiB, so no suite sees it.
-- [ ] [BUG][P1] Authenticate device-inventory publishers. `devmgr.inv` is a
-  discoverable service endpoint, and device-manager adds every
-  `DEVMGR_PUBLISH_DEVICE_DESC`, `DEVMGR_PUBLISH_ACPI_DEVICE_DESC`,
-  `DEVMGR_PUBLISH_BLOCK_DEVICE` and `DEVMGR_PUBLISH_VOLUME` it receives to its
-  inventory without checking who sent it. Any process can therefore publish a
-  forged PCI function or ACPI device and have device-manager spawn a driver
-  granted the register windows, interrupt and DMA it names (a PL011 instance
-  over an attacker-chosen MMIO window, or a second instance over the console's
-  window without its interrupt that masks the real console's receive
-  interrupts). Device-manager spawned pci-bus and acpi-bus and knows their
-  identities; a descriptor must come from the bus service that owns that kind
-  of record (for example by checking the descriptor buffer's owner context
-  against the spawned bus service's), and block/volume records from the
-  managers entitled to them. Raised on PR #69.
+- [x] [BUG][P1] Authenticate device-inventory publishers. Device-manager checks
+  every record on `devmgr.inv` against its sender: `inventory.device` for PCI
+  and ACPI records and scan completion (pci-bus, acpi-bus), `inventory.storage`
+  for block and volume records (ata, virtio-blk, partition manager, volume
+  manager). A refused publication is dropped and logged, a refused retirement
+  answered with `WASMOS_ERR_DEVMGR_NOT_PUBLISHER`
+  (`tests/test_devmgr_inventory_auth.py`). The capabilities are only as strong
+  as the rule over which images may declare them -- see the signed-package
+  entry below.
 - [ ] [ENHANCEMENT][P2] Cross-CPU TLB invalidation. `paging_invalidate` acts on
   the calling CPU only (`paging.h`, `arch/x86_64/paging.c`), so a mapping
   removed or changed on one CPU stays live on every other CPU that cached it,
@@ -728,17 +723,17 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
-- [ ] [BUG][P1] Stop a manifest from granting itself privileged capabilities.
-  `capability_grant_name` grants whatever a `.wap`'s `[[capabilities]]` names,
-  and `PROC_IPC_SPAWN_PATH` spawns an image from any path, writable volumes
-  included, for any requester. So any process can write and spawn an image that
-  declares `spawn.grant`, `svc.control`, `system.control` or `io.port`, and any
-  process can spawn a privileged utility as a deputy (`svc kill vt`,
-  `svc submit ...`). The requester checks of `architecture/10` ("Requester
-  Checks") hold only for processes that cannot do that. Needs a policy over
-  images -- signed or allow-listed packages, or privileged capabilities granted
-  only to images from the initfs or a read-only system volume -- and, for
-  deputies like `svc`, authentication of the invoking process.
+- [x] [BUG][P1] Stop a manifest from granting itself privileged capabilities.
+  Packages are signed: every `.wap` the build packs ends in an Ed25519
+  signature (`libs/monocypher`), and the kernel grants a manifest capability
+  beyond `ipc.basic` only to a package that verifies against the key it was
+  built with. A kind that acts on requests (`system.control`, `svc.control`,
+  `spawn.grant`, `console.owner`, `subsystem.register`, `svc.class`,
+  `pci.config`, `rtc.efi`, `inventory.*`) is granted only when the requester
+  holds it or holds `spawn.grant`, which closes the deputy case (`svc` started
+  by anyone); the shell holds `svc.control` to run `svc`. Hardware kinds need
+  only the signature. `tests/test_signed_packages.py`, `test_capability`,
+  `test_wasmos_app_deps`; architecture/10 "Signed Packages".
 - [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
   REBIND to a restarted driver where they can, so a restart costs a delay, not
   the open files or sockets above it; `parent=` (the supervisor's restart
@@ -2470,6 +2465,15 @@ Source: `architecture/25-diagnostics-status.md`,
   prompted this is gone: `examples/rust/hello` builds through `wasmos-rustc` now, so
   it takes the same small-stack layout as an SDK-built module and passes the check
   where it used to fail it.)
+- [ ] [BUG][P2] `wasmos-rustc`, `wasmos-zig` and `wasmos-tinygo` drop every argument
+  that is not a source file of their language or a `.c` file, without a diagnostic,
+  so `-lmonocypher` (or any `-l`/`-L`/`.a`) never reaches the link and the app fails
+  later with undefined symbols. The SDK's `libmonocypher.a` is therefore usable from
+  C and C++ only. Pass library arguments through (`-C link-arg=` for Rust, the
+  `zig build-exe` command line for Zig, the generated target file's `ldflags` for
+  TinyGo), reject anything else by name, and ship a Rust `extern "C"` module for
+  Monocypher. AssemblyScript has no link step and is out of reach of a static
+  library.
 - [ ] [TEST][P3] Run the SDK's *compilers* on Linux. The wrappers themselves are
   covered: all eight parse and run their argument handling, manifest reading and
   path resolution under busybox `ash`/`awk` on Linux (harsher than CI's `dash`),

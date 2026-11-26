@@ -225,13 +225,17 @@ jobs:
       # reaches this tool -- and installing LLVM to compile one self-contained
       # host program would cost more than the battery saves.
       #
-      # This holds only because scripts/make_wasmos_app.c includes nothing but
-      # libc. If it ever gains a project header, build it through ./configure
-      # and ninja here and install the toolchain to match.
+      # This holds only because scripts/make_wasmos_app.c needs nothing beyond
+      # libc and the vendored Monocypher (package signatures), both plain C. If
+      # it ever gains a project header, build it through ./configure and ninja
+      # here and install the toolchain to match.
       - name: Build the packer
         run: |
           mkdir -p out/default
-          cc -O2 -o out/default/make_wasmos_app scripts/make_wasmos_app.c
+          cc -O2 -Ilibs/monocypher/src -Ilibs/monocypher/src/optional \
+            -o out/default/make_wasmos_app scripts/make_wasmos_app.c \
+            libs/monocypher/src/monocypher.c \
+            libs/monocypher/src/optional/monocypher-ed25519.c
       - name: Run battery (${{ matrix.battery }})
         run: python3 scripts/run_unittest_suite.py --battery "${{ matrix.battery }}"
 

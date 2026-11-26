@@ -370,6 +370,15 @@ without blocking either path.
    scanners use `"devmgr.inv"` (not `"devmgr"`), so high-volume inventory
    floods cannot starve other service command traffic.
 
+   **Only entitled senders publish.** `devmgr.inv` is discoverable by name, so
+   every record is checked against its sender (`ipc_endpoint_has_cap` on the
+   message's source): PCI and ACPI device records and `DEVMGR_*_SCAN_DONE`
+   need `inventory.device`, block-device and volume records -- published or
+   retired -- need `inventory.storage`. A refused publication is dropped and
+   logged ("refused inventory message ... without <capability>"); a refused
+   retirement is answered with `WASMOS_ERR_DEVMGR_NOT_PUBLISHER`. Mount queries
+   (`DEVMGR_QUERY_MOUNT_REQ`) stay open.
+
 6. **Rule tables are bounded and say so.** The PCI and ACPI rule tables hold
    32 rules each (always-spawn and block rules, 8). A rule set larger than its
    table loads up to the table, and the device manager logs how many rules were

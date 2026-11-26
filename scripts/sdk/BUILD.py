@@ -57,6 +57,8 @@ def build(b):
         "abi/generated/c/*.h",
         "src/libc/zig/*.zig",
         "src/libc/zig/compat/*.h",
+        "libs/monocypher/src/monocypher.h",
+        "libs/monocypher/src/optional/monocypher-ed25519.h",
     ):
         inputs += b.glob(pattern, root=root)
     inputs += b.glob("wasmos-*") + b.glob("Platform/*.cmake")

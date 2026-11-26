@@ -306,6 +306,7 @@ const (
 	WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY int32 = -0x000A0002 // unknown or unsupported device-manager query type
 	WASMOS_ERR_DEVMGR_NO_SUCH_RECORD int32 = -0x000A0003 // the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something
 	WASMOS_ERR_DEVMGR_BAD_RECORD_ID int32 = -0x000A0004 // the id named for retirement was empty, unterminated, or longer than the inventory's id field
+	WASMOS_ERR_DEVMGR_NOT_PUBLISHER int32 = -0x000A0005 // the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes)
 	WASMOS_ERR_VIRTIO_BLK_NOT_READY int32 = -0x00180001 // no virtio-blk device was probed, or bring-up did not complete
 	WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST int32 = -0x00180002 // the request's lba, sector count, or buffer argument is unusable
 	WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST int32 = -0x00180003 // unknown or unsupported block opcode
@@ -950,6 +951,8 @@ func WasmosStrerror(c int32) string {
 		return "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something"
 	case WASMOS_ERR_DEVMGR_BAD_RECORD_ID:
 		return "the id named for retirement was empty, unterminated, or longer than the inventory's id field"
+	case WASMOS_ERR_DEVMGR_NOT_PUBLISHER:
+		return "the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes)"
 	case WASMOS_ERR_VIRTIO_BLK_NOT_READY:
 		return "no virtio-blk device was probed, or bring-up did not complete"
 	case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST:

@@ -27,3 +27,11 @@ wants = ["vt", "devmgr.query"]
 [[capabilities]]
 name = "system.control"
 flags = 0
+
+# The console user runs `svc`, which holds svc.control. A process may start a
+# package holding svc.control only if it holds svc.control itself (or
+# spawn.grant), so the shell holds it to run the utility for the user
+# (docs/architecture/10-capability-and-policy.md, "Signed Packages").
+[[capabilities]]
+name = "svc.control"
+flags = 0

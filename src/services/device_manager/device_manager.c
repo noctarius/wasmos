@@ -2362,9 +2362,69 @@ static void dm_handle_unpublish(const wasmos_ipc_message_t* msg, int volume) {
                           0);
 }
 
+/* The inventory capability a record of this type needs from its sender, or -1
+ * for a message anyone may send (a mount query).
+ *
+ * The inventory decides which drivers this service spawns and what hardware it
+ * grants them, and devmgr.inv is discoverable by name, so a record is accepted
+ * only from a sender that holds the capability for its kind: the bus services
+ * (inventory.device) for PCI and ACPI devices and the end of a scan, the block
+ * drivers and storage managers (inventory.storage) for block devices and
+ * volumes. The sender is the owner of msg->source, which the kernel verified
+ * at send. */
+static int32_t dm_inventory_cap_for(uint32_t type, const char** out_name) {
+    switch (type) {
+    case DEVMGR_PUBLISH_DEVICE_DESC:
+    case DEVMGR_PUBLISH_ACPI_DEVICE_DESC:
+    case DEVMGR_PCI_SCAN_DONE:
+    case DEVMGR_ACPI_SCAN_DONE:
+        *out_name = "inventory.device";
+        return WASMOS_CAP_INVENTORY_DEVICE;
+    case DEVMGR_PUBLISH_BLOCK_DEVICE:
+    case DEVMGR_PUBLISH_VOLUME:
+    case DEVMGR_UNPUBLISH_BLOCK_DEVICE:
+    case DEVMGR_UNPUBLISH_VOLUME:
+        *out_name = "inventory.storage";
+        return WASMOS_CAP_INVENTORY_STORAGE;
+    default:
+        *out_name = 0;
+        return -1;
+    }
+}
+
+/* 1 when msg's sender may send it, 0 after refusing it: a retirement is
+ * answered with WASMOS_ERR_DEVMGR_NOT_PUBLISHER, a publication (which has no
+ * reply) is dropped, and either is logged. */
+static int dm_inventory_sender_authorized(const wasmos_ipc_message_t* msg) {
+    const char* cap_name = 0;
+    int32_t cap = dm_inventory_cap_for(msg->type, &cap_name);
+    if (cap < 0 || wasmos_ipc_endpoint_has_cap(msg->source, cap) == 1) {
+        return 1;
+    }
+    char line[128];
+    (void)snprintf(line,
+                   sizeof(line),
+                   "[device-manager] refused inventory message type=0x%x from a sender "
+                   "without %s\n",
+                   (unsigned)msg->type,
+                   cap_name);
+    console_write(line);
+    if (msg->type == DEVMGR_UNPUBLISH_BLOCK_DEVICE || msg->type == DEVMGR_UNPUBLISH_VOLUME) {
+        (void)wasmos_ipc_send(msg->source,
+                              g_dm.inventory_endpoint,
+                              DEVMGR_UNPUBLISH_RESP,
+                              msg->request_id,
+                              (int32_t)WASMOS_ERR_DEVMGR_NOT_PUBLISHER,
+                              0,
+                              0,
+                              0);
+    }
+    return 0;
+}
+
 static void dm_handle_inventory_message(void* user, const wasmos_ipc_message_t* msg) {
     (void)user;
-    if (!msg) {
+    if (!msg || !dm_inventory_sender_authorized(msg)) {
         return;
     }
     if (msg->type == DEVMGR_PUBLISH_BLOCK_DEVICE) {

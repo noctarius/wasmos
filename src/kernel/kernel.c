@@ -185,15 +185,36 @@ static const uint8_t g_ring3_fault_churn_rounds = 6;
 
 static init_state_t g_init_state;
 
+/* The process manager's granter for a package's manifest capabilities.
+ * ipc.basic is everyone's; every other capability passes the image policy
+ * (capability_manifest_grant_check) first, and a refusal is logged with the
+ * package, the capability and the reason, since the spawn itself reports only
+ * that the start failed. */
 static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* name,
-                                   uint32_t name_len, uint32_t flags) {
+                                   uint32_t name_len, uint32_t flags,
+                                   const wasmos_app_grant_ctx_t* ctx) {
     if (str_eq_bytes(name, name_len, "ipc.basic")) {
         return 0;
     }
-    if (capability_grant_name(owner_context_id, name, name_len, flags) == 0) {
-        return 0;
+    capability_kind_t kind;
+    if (!ctx || capability_kind_from_name(name, name_len, &kind) != 0) {
+        return -1;
     }
-    return -1;
+    int check = capability_manifest_grant_check(kind, ctx->image_signed, ctx->requester_cap_mask);
+    if (check != CAPABILITY_GRANT_OK) {
+        char cap[32] = "?";
+        char image[64] = "?";
+        (void)str_copy_bytes(cap, sizeof(cap), name, name_len);
+        (void)str_copy_bytes(image, sizeof(image), ctx->image_name, ctx->image_name_len);
+        klog_printf("[pm] refused %s to %s: %s\n",
+                    cap,
+                    image,
+                    check == CAPABILITY_GRANT_UNSIGNED
+                        ? "the image is not signed with this build's key"
+                        : "the requester holds neither it nor spawn.grant");
+        return -1;
+    }
+    return capability_grant_name(owner_context_id, name, name_len, flags) == 0 ? 0 : -1;
 }
 
 static process_run_result_t idle_entry(process_t* process, void* arg) {

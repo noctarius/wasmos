@@ -77,6 +77,8 @@
         "test_teardown_leaks.py",
         "test_device_manager.py",
         "test_devmgr_declined_spawn.py",
+        "test_devmgr_inventory_auth.py",
+        "test_signed_packages.py",
         "test_init_smoke.py",
         "test_syslog_port.py",
         "test_mmio_mappings.py",
@@ -188,7 +190,8 @@
         "test_sdk_headers.py",
         "test_sdk_abi.py",
         "test_sdk_arithmetic.py",
-        "test_wasm_atomics.py"
+        "test_wasm_atomics.py",
+        "test_sdk_monocypher.py"
       ]
     },
     {

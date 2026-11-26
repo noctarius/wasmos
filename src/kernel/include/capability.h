@@ -32,12 +32,14 @@ typedef enum {
     CAP_SPAWN_GRANT = 8,        /* put hardware grants (a spawn profile) on a spawned child */
     CAP_SVC_CONTROL = 9,        /* submit, kill and declare the boot set at the supervisor */
     CAP_PCI_CONFIG = 10,        /* read and write PCI configuration space */
-    CAP_RTC_EFI = 11            /* read and set the clock through UEFI runtime services */
+    CAP_RTC_EFI = 11,           /* read and set the clock through UEFI runtime services */
+    CAP_INVENTORY_DEVICE = 12,  /* publish PCI/ACPI device records to device-manager */
+    CAP_INVENTORY_STORAGE = 13  /* publish/retire block and volume records to device-manager */
 } capability_kind_t;
 
 /* Kinds are numbered 0..CAPABILITY_KIND_COUNT-1. Their values are ABI: a guest
  * names one to ipc_endpoint_has_cap as WASMOS_CAP_* (abi/constants.yaml). */
-#define CAPABILITY_KIND_COUNT 12u
+#define CAPABILITY_KIND_COUNT 14u
 _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_IRQ_ROUTE &&
                    CAP_MMIO_MAP == WASMOS_CAP_MMIO_MAP && CAP_DMA_BUFFER == WASMOS_CAP_DMA_BUFFER &&
                    CAP_SYSTEM_CONTROL == WASMOS_CAP_SYSTEM_CONTROL &&
@@ -46,7 +48,9 @@ _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_
                    CAP_CONSOLE_OWNER == WASMOS_CAP_CONSOLE_OWNER &&
                    CAP_SPAWN_GRANT == WASMOS_CAP_SPAWN_GRANT &&
                    CAP_SVC_CONTROL == WASMOS_CAP_SVC_CONTROL &&
-                   CAP_PCI_CONFIG == WASMOS_CAP_PCI_CONFIG && CAP_RTC_EFI == WASMOS_CAP_RTC_EFI,
+                   CAP_PCI_CONFIG == WASMOS_CAP_PCI_CONFIG && CAP_RTC_EFI == WASMOS_CAP_RTC_EFI &&
+                   CAP_INVENTORY_DEVICE == WASMOS_CAP_INVENTORY_DEVICE &&
+                   CAP_INVENTORY_STORAGE == WASMOS_CAP_INVENTORY_STORAGE,
                "capability_kind_t is the WASMOS_CAP_* ABI");
 
 /* Initialize the capability table; called once during kernel startup.
@@ -76,6 +80,36 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
  * predicates below additionally require a spawn profile and check the
  * allowlist. Returns 0 for an unknown context. */
 int capability_has(uint32_t context_id, capability_kind_t kind);
+
+/* Every capability the context holds, one bit per kind (bit k for kind k); 0 for
+ * a context with no record.  The kernel context (0) holds every bit.  A snapshot:
+ * grants only accumulate, so it can only have grown since. */
+uint32_t capability_mask_of(uint32_t context_id);
+
+/* Whether a package's manifest may be granted `kind`, which is the image policy
+ * of docs/architecture/10-capability-and-policy.md ("Signed Packages"):
+ *   - the package must carry a valid signature by the build's key, or any
+ *     process could write an image declaring the capability and spawn it;
+ *   - for a kind that acts on requests (system.control, subsystem.register,
+ *     svc.class, console.owner, spawn.grant, svc.control, pci.config, rtc.efi,
+ *     inventory.device, inventory.storage), the process that requested the
+ *     spawn must hold `kind` itself, or hold spawn.grant, whose holders
+ *     (device-manager, the supervisor) spawn what others need; otherwise a
+ *     process could spawn a privileged image as a deputy and steer it with
+ *     arguments.  The hardware kinds (io.port, mmio.map, irq.route,
+ *     dma.buffer) reach only what the signed manifest or a spawn profile --
+ *     which only a spawn.grant holder can attach -- bounds, so the signature
+ *     is their whole test.
+ * requester_mask is capability_mask_of the requester when it asked (every bit for
+ * a spawn the kernel made).  ipc.basic is not a kind and is not asked about. */
+typedef enum {
+    CAPABILITY_GRANT_OK = 0,
+    CAPABILITY_GRANT_UNKNOWN = 1,   /* not a capability kind */
+    CAPABILITY_GRANT_UNSIGNED = 2,  /* the package is not signed with the build's key */
+    CAPABILITY_GRANT_REQUESTER = 3, /* the requester holds neither the kind nor spawn.grant */
+} capability_grant_check_t;
+int capability_manifest_grant_check(capability_kind_t kind, int image_signed,
+                                    uint32_t requester_mask);
 
 /* Drops context_id's record -- grants and spawn profile -- when its process is
  * reaped, so records do not outlive their processes and every later lookup

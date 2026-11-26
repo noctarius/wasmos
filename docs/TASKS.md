@@ -381,11 +381,9 @@ Source: `architecture/06-memory-management.md`,
   fields before copying.
 
 
-- [ ] [BUG][P1] Pass `MEM_REGION_FLAG_*` to `paging_map_4k`, not raw `PT_FLAG_*`. The
-  callee rebuilds the PTE from its own flag space, so `PT_FLAG_PCD` is dropped
-  and device scratch pages lose cache-disable, leaving their memory type to the
-  MTRRs alone. Same pattern in `arch/x86_64/lapic.c` and `ioapic.c`
-  (`src/kernel/mmio.c:17` `FIXME`).
+- [x] [BUG][P1] Pass `MEM_REGION_FLAG_*` to `paging_map_4k`, not raw `PT_FLAG_*`.
+  Already done in 8df20d7f: `mmio.c`, `lapic.c` and `ioapic.c` map with
+  `MEM_REGION_FLAG_DEVICE`, which `paging_map_4k` turns into PCD|PWT.
 - [ ] [BUG][P1] Apply the buffer/WARP physical-zone floor in `linmem_slot_commit`. It
   calls `pfa_alloc_pages` with no floor, so slot-backed linear memory falls
   outside the guarded zone that `memory.h` and `physmem.h` still describe as an
@@ -453,19 +451,24 @@ Source: `architecture/06-memory-management.md`,
   `paging_clone_low_slot_in_root` copies PML4[511]; it deep-copies PML4[0], the
   low identity slot. PML4[511] is copied by `paging_create_address_space`.
 
-- [ ] [BUG][P1] Refuse a fault against a region with `phys_base == 0` instead of
-  mapping physical page 0. `mm_handle_page_fault` computes
-  `phys_base + (page_base - region->base)`, so a region whose backing was never
-  assigned resolves to low physical memory and maps it into the faulting process
-  (`src/kernel/memory.c`).
-- [ ] [BUG][P1] Balance `mm_shared_map`'s pin in `mm_shared_unmap`. Unmap drops the
-  logical reference but neither undoes the `pfa_pin_pages` that map installed nor
-  tears down the PTEs; only `mm_context_release_regions` balances it, so a map/unmap
-  pair leaks the pin for the life of the context (`src/kernel/memory.c`).
-- [ ] [BUG][P2] Reclaim a shared region that is created and never used.
-  `mm_shared_create` publishes with `refcount == 0` while reclamation happens only
-  on the release/unmap paths, so a region nobody retains or maps holds its frames
-  until the kernel exits (`src/kernel/memory.c`).
+- [x] [BUG][P1] Refuse a fault against a region with `phys_base == 0` instead of
+  mapping physical page 0. The fault path and `mm_ensure_user_range_mapped` take
+  the page from `mm_region_backing_page`, which answers 0 for a region without
+  backing, and both refuse it (`test_mm_regions`).
+- [x] [BUG][P1] Balance `mm_shared_map`'s pin in `mm_shared_unmap`. Obsolete: the
+  `mm_shared_*` registry was removed with the shmem subsystem in a66ede51.
+- [x] [BUG][P2] Reclaim a shared region that is created and never used.
+  Obsolete: `mm_shared_create` was removed with the shmem subsystem in a66ede51.
+- [ ] [DOCS][P2] Remove the shmem subsystem from the documents that still
+  describe it (removed in a66ede51): `architecture/06-memory-management.md`
+  §"Shared Memory" (the whole `mm_shared_*` API and its pin rules),
+  `architecture/11-ring3-isolation-and-separation.md` (the `mm_shared_grant`
+  isolation rule and invariant 6), `architecture/25-diagnostics-status.md`
+  (the console ring "allocated as a shared-memory region"),
+  `LOCK_HIERARCHY.md` (`g_shared_lock`), and the comments in
+  `src/kernel/include/serial.h` and `src/kernel/physmem.c` that name
+  `mm_shared_create`. Each needs what replaced it, mostly the transfer-buffer
+  registry (`architecture/12-dma-transfers.md`).
 - [x] [BUG][P2] Give `capability_dma_commit` a matching release, a clamp to
   `dma_max_bytes`, and an overflow check. Replaced by `capability_dma_charge`,
   which refuses a charge past the budget (no wrap: it compares against the
@@ -558,10 +561,10 @@ and `architecture/33-completion-ports.md`.
   the threads of one process and leaked an endpoint per loss).
   `test_syscall_ipc` K18-K20 were red first: duplicate ids, lost slot claims,
   and a torn pending count that hung the ring scan.
-- [ ] [BUG][P1] Bounds-check `line` in `irq_sharing_register/ack/unregister/dispatch/
-  has_sharers`. `WASMOS_ERR_IRQ_BAD_LINE` exists but is returned only for a
-  NULL table; an out-of-range line is an out-of-bounds access
-  (`src/kernel/irq_sharing.c:71`, `:102`, `:144`).
+- [x] [BUG][P1] Bounds-check `line` in `irq_sharing_register/ack/unregister/dispatch/
+  has_sharers`. Each now takes the table's `line_count` and refuses a line at
+  or past it (`test_irq_sharing`). Today's callers already bounded the line;
+  the module no longer relies on it.
 - [x] [BUG][P1] Serialize `kenv_set`/`kenv_unset`. Done in c8ae1df3: every
   lookup and change of the store holds `g_kenv_lock`.
 - [x] [BUG][P1] Release the process slot on every `process_spawn_as_internal`

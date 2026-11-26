@@ -111,10 +111,15 @@ isr_nmi:
 # x86_exception_panic_frame(vector, frame), which reads the error-code form
 # (+120 = err). DECL_EXC_ERR is for the vectors whose CPU frame carries an error
 # code (8, 10, 11, 21, 29, 30; Intel SDM Vol. 3A, Table 6-1); DECL_EXC pushes a
-# zero in its place for every other vector. The two frame shapes leave %rsp at
-# different alignments, so both call through CALL_C_ALIGNED. Neither returns or
-# re-enables interrupts; the cli/hlt loop only catches an unexpected return from
-# the panic path.
+# zero in its place for every other vector. Neither returns or re-enables
+# interrupts; the cli/hlt loop only catches an unexpected return from the panic
+# path.
+#
+# Every stub, these and the hand-written ones below, calls
+# x86_exception_panic_frame through CALL_C_ALIGNED: the CPU frame (with or
+# without an error code, plus any zero slot) and PUSH_REGS leave %rsp at an
+# alignment that depends on the stub, and the SysV ABI wants it 16-byte aligned
+# at the call.
 .macro DECL_EXC num
 .global isr_exception_\num
 isr_exception_\num:
@@ -165,7 +170,7 @@ isr_exception_0:
     PUSH_REGS
     mov %rsp, %rsi
     mov $0, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -185,7 +190,7 @@ isr_exception_1:
     PUSH_REGS
     mov %rsp, %rsi
     mov $1, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -204,7 +209,7 @@ isr_exception_3:
     PUSH_REGS
     mov %rsp, %rsi
     mov $3, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -221,7 +226,7 @@ isr_exception_4:
     PUSH_REGS
     mov %rsp, %rsi
     mov $4, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -242,7 +247,7 @@ isr_exception_6:
     PUSH_REGS
     mov %rsp, %rsi
     mov $6, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -262,7 +267,7 @@ isr_exception_7:
     PUSH_REGS
     mov %rsp, %rsi
     mov $7, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -284,7 +289,7 @@ isr_exception_12:
     PUSH_REGS
     mov %rsp, %rsi
     mov $12, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -303,7 +308,7 @@ isr_exception_13:
     PUSH_REGS
     mov %rsp, %rsi
     mov $13, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -328,7 +333,7 @@ isr_exception_14:
     jz 2f
     movq %rsp, %rsi
     mov $14, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 2:
     POP_REGS
     add $8, %rsp
@@ -346,7 +351,7 @@ isr_exception_17:
     PUSH_REGS
     mov %rsp, %rsi
     mov $17, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt

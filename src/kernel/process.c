@@ -1482,11 +1482,26 @@ int process_spawn(const char* name, process_entry_t entry, void* arg, uint32_t* 
  * schedulable state and no path other than this one moves a NEW slot, so the
  * lock is only needed to make find-then-claim atomic against a concurrent spawn.
  *
- * FIXME(spawn-slot-leak): every failure AFTER the ->NEW claim returns without
- * putting the slot back. process_find_slot only reclaims UNUSED/DEAD and
- * process_transition_legal has no NEW -> DEAD edge, so a failed spawn strands
- * that g_processes[] entry permanently, along with its mm context on the paths
- * that create one first. */
+ * Every failure after the claim goes through process_spawn_abandon, which
+ * reaps the half-built slot like any dead process.  For that to release exactly
+ * what was built, the slot carries its pid from the claim on and its context id
+ * from the moment the mm context exists. */
+/* Give back a slot whose spawn failed after claiming it.  NEW -> ZOMBIE is the
+ * edge process_transition_legal keeps for this, and ZOMBIE -> REAPING claims the
+ * slot for process_reap, which frees whatever the spawn had built -- the mm
+ * context, the main thread, the stacks -- and publishes DEAD, where
+ * process_find_slot can claim it again.  Both transitions must succeed: the slot
+ * was never published, so nothing else can have moved it.  Returns -1, the
+ * spawn's failure result. */
+static int process_spawn_abandon(process_t* slot) {
+    if (!process_transit(slot, PROCESS_STATE_NEW, PROCESS_STATE_ZOMBIE) ||
+        !process_transit(slot, PROCESS_STATE_ZOMBIE, PROCESS_STATE_REAPING)) {
+        process_sched_invariant_fail("spawn abandon failed", slot->pid, (uint64_t)slot->state);
+    }
+    process_reap(slot);
+    return -1;
+}
+
 static int process_spawn_as_internal(uint32_t parent_pid, const char* name, process_entry_t entry,
                                      void* arg, uint32_t* out_pid,
                                      thread_state_t initial_thread_state,
@@ -1512,19 +1527,19 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     }
 
     uint32_t pid = g_next_pid++;
+    slot->pid = pid;
+    slot->context_id = 0;
     ksync_spinlock_unlock(&g_process_table_lock);
     mm_context_t* ctx = mm_context_create(pid);
     if (!ctx) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
+    slot->context_id = ctx->id;
     if (paging_clone_low_slot_in_root(ctx->root_table) != 0) {
-        mm_context_destroy(ctx->id);
-        return -1;
+        return process_spawn_abandon(slot);
     }
 
-    slot->pid = pid;
     slot->parent_pid = parent_pid;
-    slot->context_id = ctx->id;
     slot->main_tid = 0;
     __atomic_store_n(&slot->thread_count, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&slot->live_thread_count, 0u, __ATOMIC_RELAXED);
@@ -1560,17 +1575,17 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
     if (thread_spawn_in_owner(
             pid, name ? name : "", initial_thread_state, initial_thread_reason, &slot->main_tid) !=
         0) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
 
     thread_t* main_thread = process_main_thread(slot);
     if (!main_thread) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
     main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     main_thread->ticks_remaining = main_thread->time_slice_ticks;
@@ -1580,7 +1595,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     __atomic_store_n(&slot->live_thread_count, 1u, __ATOMIC_RELAXED);
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
     arch_context_init_kernel_entry(
         &slot->ctx,

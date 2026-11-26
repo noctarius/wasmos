@@ -1904,6 +1904,57 @@ static void s_an_unwatched_process_owes_nothing(void) {
     CHECK(g_stub_owed_count == 0, "an unwatched process owes no message");
 }
 
+/* Regression: 2026-11-26-spawn-slot-leak -- a spawn that failed after claiming
+ * its process slot returned without putting the slot back. The claim moves the
+ * slot to NEW, find_slot reclaims only UNUSED and DEAD, and nothing moved a
+ * failed NEW slot on, so each failure stranded one slot for the life of the
+ * kernel -- with its mm context on the paths that had created one. Enough
+ * failures, from a spawner retrying under memory pressure, left no slot for
+ * any later spawn.
+ *
+ * Fails a spawn at each point after the claim, more times than the table has
+ * slots, then expects a spawn to succeed and every context it created to have
+ * been destroyed. */
+static void s_a_failed_spawn_gives_its_slot_back(void) {
+    struct {
+        const char* where;
+        uint32_t* knob;
+    } points[] = {
+        {"creating the mm context", &g_stub_fail_mm_create},
+        {"cloning the low slot", &g_stub_fail_clone_low_slot},
+        {"allocating the stack", &g_stub_fail_pfa_alloc},
+    };
+    be_cpu(0);
+    for (uint32_t p = 0; p < sizeof(points) / sizeof(points[0]); ++p) {
+        uint32_t failed = 0;
+        uint32_t created = g_stub_mm_created;
+        uint32_t destroyed = g_stub_mm_destroyed;
+        *points[p].knob = 1;
+        for (uint32_t i = 0; i < PROCESS_MAX_COUNT + 1u; ++i) {
+            uint32_t pid = 0;
+            if (process_spawn("spawn-fails", idle_main, 0, &pid) != 0) {
+                failed++;
+            }
+        }
+        *points[p].knob = 0;
+        uint32_t pid = 0;
+        int rc = process_spawn("spawn-after", idle_main, 0, &pid);
+        printf("  spawn failing at %s: %u failed, then rc=%d, contexts %u created %u destroyed\n",
+               points[p].where,
+               failed,
+               rc,
+               g_stub_mm_created - created,
+               g_stub_mm_destroyed - destroyed);
+        CHECK(failed == PROCESS_MAX_COUNT + 1u, "every injected failure failed the spawn");
+        CHECK(rc == 0, "a spawn after the failures still finds a slot");
+        CHECK(g_stub_mm_created - created == g_stub_mm_destroyed - destroyed + (rc == 0 ? 1u : 0u),
+              "every context a failed spawn created was destroyed");
+        if (rc == 0) {
+            drop_transition_target(pid);
+        }
+    }
+}
+
 int main(void) {
     harness_init();
 
@@ -1932,6 +1983,7 @@ int main(void) {
     s_a_child_ending_inside_the_wait_still_wakes_its_parent();
     s_a_thread_exiting_inside_the_join_still_wakes_its_joiner();
     s_an_unwatched_process_owes_nothing();
+    s_a_failed_spawn_gives_its_slot_back();
 
     s_healthy_owner_still_runs_and_requeues();
     s_kill_races_the_lifecycle_transitions();

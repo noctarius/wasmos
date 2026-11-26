@@ -10,6 +10,11 @@
  *   - the owed-message log: every ipc_owed_post / ipc_owed_cancel process.c
  *     makes, in order. A record is an opaque token the test made up; the stub
  *     never dereferences or frees it.
+ *   - spawn failure injection: while g_stub_fail_mm_create,
+ *     g_stub_fail_clone_low_slot or g_stub_fail_pfa_alloc is non-zero, that
+ *     call reports failure, so a case can fail a spawn at each point after it
+ *     claims a slot. g_stub_mm_created / g_stub_mm_destroyed count the
+ *     contexts mm_context_create handed out and mm_context_destroy took back.
  */
 #ifndef WASMOS_TEST_STUBS_PROCESS_PLATFORM_H
 #define WASMOS_TEST_STUBS_PROCESS_PLATFORM_H
@@ -29,5 +34,11 @@ typedef struct {
 extern uint32_t g_stub_exit_on_dispatch_pid;
 extern stub_owed_event_t g_stub_owed_log[STUB_OWED_LOG_MAX];
 extern uint32_t g_stub_owed_count;
+
+extern uint32_t g_stub_fail_mm_create;
+extern uint32_t g_stub_fail_clone_low_slot;
+extern uint32_t g_stub_fail_pfa_alloc;
+extern uint32_t g_stub_mm_created;
+extern uint32_t g_stub_mm_destroyed;
 
 #endif

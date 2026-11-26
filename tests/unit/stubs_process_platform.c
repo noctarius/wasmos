@@ -70,9 +70,15 @@ int paging_unmap_4k(uint64_t virt) {
     (void)virt;
     return 0;
 }
+uint32_t g_stub_fail_mm_create;
+uint32_t g_stub_fail_clone_low_slot;
+uint32_t g_stub_fail_pfa_alloc;
+uint32_t g_stub_mm_created;
+uint32_t g_stub_mm_destroyed;
+
 int paging_clone_low_slot_in_root(uint64_t root_table) {
     (void)root_table;
-    return 0;
+    return g_stub_fail_clone_low_slot ? -1 : 0;
 }
 int paging_strip_low_slot_in_root(uint64_t root_table) {
     (void)root_table;
@@ -91,7 +97,7 @@ int paging_verify_user_root_no_low_slot(uint64_t root_table, int log_failures) {
  * the alternative is a real allocator, which is a different test's subject. */
 uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     (void)max_addr;
-    if (pages == 0) {
+    if (pages == 0 || g_stub_fail_pfa_alloc) {
         return 0;
     }
     /* aligned_alloc, not posix_memalign: the latter is POSIX and glibc hides it
@@ -116,7 +122,13 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
 static mm_context_t g_stub_ctx;
 
 mm_context_t* mm_context_create(uint32_t id) {
-    (void)id;
+    if (g_stub_fail_mm_create) {
+        return 0;
+    }
+    g_stub_mm_created++;
+    /* The real allocator returns a context whose id is the one asked for; a
+     * zero id would make the reap skip mm_context_destroy. */
+    g_stub_ctx.id = id;
     return &g_stub_ctx;
 }
 mm_context_t* mm_context_get(uint32_t id) {
@@ -125,6 +137,7 @@ mm_context_t* mm_context_get(uint32_t id) {
 }
 int mm_context_destroy(uint32_t id) {
     (void)id;
+    g_stub_mm_destroyed++;
     return 0;
 }
 int mm_context_region_at(mm_context_t* ctx, uint32_t index, mem_region_t* out_region) {

@@ -101,28 +101,46 @@ isr_nmi:
     POP_REGS
     iretq
 
-# Catch-all exception stub: no recovery, straight to the panic dump. Only the
+# Catch-all exception stubs: no recovery, straight to the panic dump. Only the
 # vectors with a dedicated kernel-side handler (#PF and the user-fault vectors)
 # get their own stub below.
 #
-# FIXME: this stub passes the post-PUSH_REGS %rsp, which x86_exception_panic_frame
-# reads as the error-code form (+120 = err). That is correct only for the vectors
-# declared here that push an error code (8, 10, 11, 21, 29, 30); for the rest
-# the dump reports rip as "err", cs as "rip" and so on. The stub would need a
-# `pushq $0` for the no-error-code vectors, as isr_exception_3 already does.
+# DECL_EXC / DECL_EXC_ERR define isr_exception_<num> for one vector: entered by
+# the CPU with the architectural frame on whichever stack the IDT gate selects,
+# the stub saves the register block and calls
+# x86_exception_panic_frame(vector, frame), which reads the error-code form
+# (+120 = err). DECL_EXC_ERR is for the vectors whose CPU frame carries an error
+# code (8, 10, 11, 21, 29, 30; Intel SDM Vol. 3A, Table 6-1); DECL_EXC pushes a
+# zero in its place for every other vector. Neither returns or re-enables
+# interrupts; the cli/hlt loop only catches an unexpected return from the panic
+# path.
 #
-# DECL_EXC defines isr_exception_<num> for one vector: entered by the CPU with
-# the architectural frame on whichever stack the IDT gate selects, it saves the
-# register block and tail-calls x86_exception_panic_frame(vector, frame). It
-# never returns and never re-enables interrupts; the cli/hlt loop only catches an
-# unexpected return from the panic path.
+# Every stub, these and the hand-written ones below, calls
+# x86_exception_panic_frame through CALL_C_ALIGNED: the CPU frame (with or
+# without an error code, plus any zero slot) and PUSH_REGS leave %rsp at an
+# alignment that depends on the stub, and the SysV ABI wants it 16-byte aligned
+# at the call.
 .macro DECL_EXC num
+.global isr_exception_\num
+isr_exception_\num:
+    pushq $0
+    PUSH_REGS
+    movq %rsp, %rsi
+    mov $\num, %rdi
+    CALL_C_ALIGNED x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+.endm
+
+.macro DECL_EXC_ERR num
 .global isr_exception_\num
 isr_exception_\num:
     PUSH_REGS
     movq %rsp, %rsi
     mov $\num, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -152,7 +170,7 @@ isr_exception_0:
     PUSH_REGS
     mov %rsp, %rsi
     mov $0, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -161,10 +179,6 @@ isr_exception_0:
     add $8, %rsp
     iretq
 
-# FIXME: the panic path here omits the PUSH_REGS that every other user-fault
-# stub performs, so x86_exception_panic_frame is handed the CPU frame itself
-# instead of the register block that precedes it and dumps garbage for a #DB
-# the user handler declined.
 .global isr_exception_1
 isr_exception_1:
     pushq $0
@@ -173,9 +187,10 @@ isr_exception_1:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $1, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -194,7 +209,7 @@ isr_exception_3:
     PUSH_REGS
     mov %rsp, %rsi
     mov $3, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -211,7 +226,7 @@ isr_exception_4:
     PUSH_REGS
     mov %rsp, %rsi
     mov $4, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -232,7 +247,7 @@ isr_exception_6:
     PUSH_REGS
     mov %rsp, %rsi
     mov $6, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -252,7 +267,7 @@ isr_exception_7:
     PUSH_REGS
     mov %rsp, %rsi
     mov $7, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -260,10 +275,10 @@ isr_exception_7:
 2:
     add $8, %rsp
     iretq
-DECL_EXC 8
+DECL_EXC_ERR 8
 DECL_EXC 9
-DECL_EXC 10
-DECL_EXC 11
+DECL_EXC_ERR 10
+DECL_EXC_ERR 11
  .global isr_exception_12
 isr_exception_12:
     mov %rsp, %rsi
@@ -274,7 +289,7 @@ isr_exception_12:
     PUSH_REGS
     mov %rsp, %rsi
     mov $12, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -293,7 +308,7 @@ isr_exception_13:
     PUSH_REGS
     mov %rsp, %rsi
     mov $13, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -318,7 +333,7 @@ isr_exception_14:
     jz 2f
     movq %rsp, %rsi
     mov $14, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 2:
     POP_REGS
     add $8, %rsp
@@ -336,7 +351,7 @@ isr_exception_17:
     PUSH_REGS
     mov %rsp, %rsi
     mov $17, %rdi
-    call x86_exception_panic_frame
+    CALL_C_ALIGNED x86_exception_panic_frame
 1:
     cli
     hlt
@@ -347,7 +362,7 @@ isr_exception_17:
 DECL_EXC 18
 DECL_EXC 19
 DECL_EXC 20
-DECL_EXC 21
+DECL_EXC_ERR 21
 DECL_EXC 22
 DECL_EXC 23
 DECL_EXC 24
@@ -355,8 +370,8 @@ DECL_EXC 25
 DECL_EXC 26
 DECL_EXC 27
 DECL_EXC 28
-DECL_EXC 29
-DECL_EXC 30
+DECL_EXC_ERR 29
+DECL_EXC_ERR 30
 DECL_EXC 31
 
 # IRQ0 drives timer preemption, so its C handler is allowed to rewrite the IRET

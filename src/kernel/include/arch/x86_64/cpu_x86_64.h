@@ -62,6 +62,15 @@ int x86_user_exception_handler(uint64_t vector, const uint64_t* frame);
  * caller must panic. Called from the cpu_isr.S #PF stub. */
 int x86_page_fault_handler(uint64_t error_code, const uint64_t* frame);
 
+/* The x86_64 half of the debug.exception_test boot option
+ * (kernel_boot_exception_test): raise `vector` in ring 0 on a dedicated stack,
+ * with rbp zero, after logging the rip and rsp the exception dump must report.
+ * Vector 1 is a real single-step #DB, from setting TF; any other supported
+ * vector is raised with `int`, whose frame matches a hardware exception of a
+ * vector that pushes no error code. Returns only for an unsupported vector,
+ * having logged that; otherwise the kernel panics. */
+void x86_exception_test_raise(uint32_t vector);
+
 /* C side of the NMI vector (isr_nmi in cpu_isr.S): decodes the pushed register
  * frame (PUSH_REGS order, then the CPU iret frame) and hands it to kpanic_nmi. */
 void x86_nmi_handler(uint64_t* regs);

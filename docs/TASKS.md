@@ -400,20 +400,18 @@ Source: `architecture/06-memory-management.md`,
 - [ ] [ENHANCEMENT][P2] Validate the initfs higher-half alias. The pointer fixup assumes initfs
   lies inside the 512 MiB shared window; a higher firmware placement yields an
   unmapped pointer with no diagnostic (`src/kernel/kernel_boot_runtime.c:69`).
-- [ ] [BUG][P1] Give `isr_exception_1` (#DB) the `PUSH_REGS` every other user-fault stub
-  performs. Without it `x86_exception_panic_frame` reads the CPU frame where it
-  expects the register block, so the #DB dump is garbage and reads past the
-  frame (`src/kernel/arch/x86_64/cpu_isr.S:140` `FIXME`).
-- [ ] [BUG][P1] Push a zero error code in `DECL_EXC` for the vectors that do not supply
-  one. The macro passes the post-`PUSH_REGS` `%rsp` unconditionally, which the
-  panic decoder reads as the error-code layout; for vectors 5, 9, 15, 16, 18-20,
-  22-28 and 31 the dump prints rip as "err" and cs as "rip"
-  (`src/kernel/arch/x86_64/cpu_isr.S:102` `FIXME`).
-- [ ] [BUG][P1] Read the interrupted RSP from `frame[4]` for kernel faults too. In long
-  mode the IRET frame always carries SS:RSP, so the current
-  `(cs & 3) == 3` branch reports the IST/exception-stack address instead of the
-  interrupted stack (`src/kernel/arch/x86_64/cpu_x86_64.c`,
-  `x86_exception_panic_frame`).
+- [x] [BUG][P1] Give `isr_exception_1` (#DB) the `PUSH_REGS` every other user-fault stub
+  performs. Without it `x86_exception_panic_frame` read the CPU frame where it
+  expects the register block, so the #DB dump was garbage. Fixed; covered by
+  `test_exception_dump` (`debug.exception_test=1`, a real single-step trap).
+- [x] [BUG][P1] Push a zero error code in `DECL_EXC` for the vectors that do not supply
+  one. `DECL_EXC` now pushes the zero slot and `DECL_EXC_ERR` serves the six
+  vectors with an architectural error code (8, 10, 11, 21, 29, 30); both call
+  through `CALL_C_ALIGNED`, since the two frame shapes differ in alignment.
+  Covered by `test_exception_dump` (`debug.exception_test=5`, raised with `int`).
+- [x] [BUG][P1] Read the interrupted RSP from `frame[4]` for kernel faults too. The
+  dump now always takes the saved RSP. Covered by `test_exception_dump`, which
+  raises from a stack whose top it logs and compares with kpanic's rsp.
 - [ ] [BUG][P1] Correct both PCI protocol GUIDs in the bootloader. Neither matches the
   UEFI spec value, so both `ConnectController` passes are silent no-ops
   (`src/boot/boot.c:213` `FIXME`, `src/boot/uefi.h`).

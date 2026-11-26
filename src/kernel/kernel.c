@@ -351,6 +351,7 @@ void kmain(boot_info_t* boot_info) {
     arch_irq_enable();
     smp_cpus_up();
     kernel_boot_kpanic_stop_test();
+    kernel_boot_exception_test();
 
     /* Each AP installs its own per-CPU idle thread in smp_ap_c_entry BEFORE it
      * joins the scheduler loop; the BSP must not take that on after

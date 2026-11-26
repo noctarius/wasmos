@@ -30,6 +30,12 @@ void kernel_boot_run_scheduler_loop(void);
  * CPU only, after smp_cpus_up. */
 void kernel_boot_kpanic_stop_test(void);
 
+/* With the boot option debug.exception_test=<vector>, raise that CPU exception
+ * in ring 0 from a rip and rsp logged beforehand, so a test can check the
+ * exception dump against them. x86_64 only, vectors 1 (#DB) and 5; for any
+ * other vector or architecture it logs that and returns. Boot CPU only. */
+void kernel_boot_exception_test(void);
+
 /* Mode 2's spin: called from each architecture's timer interrupt before the
  * interrupt is ended. Returns at once unless the test is armed in mode 2 and
  * this is CPU 1. */

@@ -238,9 +238,17 @@ via inline assembly. Reports to serial and renders the framebuffer panic screen.
 Used when the IDT stub provides the saved GPR block plus the exception frame.
 The register block is laid out as `PUSH_REGS` (`rax..r15`, with `rbp` at slot
 10 from the saved-stack base), followed by the exception frame
-`[err, rip, cs, rflags, ...]`. The panic path snapshots the fault-time `rbp`
-before entering `kpanic()`, so the panicking CPU now reports the interrupted
-call chain rather than a later `kpanic()`-internal one.
+`[err, rip, cs, rflags, rsp, ss]`. Every stub hands over that error-code
+form: a vector the CPU pushes no error code for gets a zero in the slot from
+its stub (`DECL_EXC`; `DECL_EXC_ERR` for the six vectors that carry one). The
+reported `rsp` is the saved one, which long mode pushes for ring-0 exceptions
+as well as ring-3 ones. The panic path snapshots the fault-time `rbp` before
+entering `kpanic()`, so the panicking CPU reports the interrupted call chain
+rather than a `kpanic()`-internal one.
+
+The boot option `debug.exception_test=<vector>` (x86_64; vectors 1 and 5)
+raises an exception in ring 0 from a stack of its own, after logging the rip
+and rsp the dump must report; `tests/test_exception_dump.py` compares the two.
 
 The fatal panic dump now prints per-CPU backtraces in this style, resolving
 kernel return addresses through a build-generated symbol table:

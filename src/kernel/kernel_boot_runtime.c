@@ -10,7 +10,10 @@
  *     panics only when not even the idle thread is dispatchable.
  *   - kernel_boot_kpanic_stop_test: the debug.kpanic_stop_test boot option,
  *     which panics with a CPU spinning where it takes no ordinary interrupt,
- *     so a test can see whether kpanic's stop reached it. */
+ *     so a test can see whether kpanic's stop reached it.
+ *   - kernel_boot_exception_test: the debug.exception_test boot option, which
+ *     raises a CPU exception in ring 0 from a known rip and rsp, so a test can
+ *     check what the exception dump reports for them. */
 #include "kernel_boot_runtime.h"
 
 #include "arch/arch_cpu.h"
@@ -27,6 +30,9 @@
 #include "cpu_local.h"
 #include "kenv.h"
 #include "wasmos_status.h"
+#if !defined(WASMOS_ARCH_AARCH64)
+#include "arch/x86_64/cpu_x86_64.h"
+#endif
 
 /* debug.kpanic_stop_test: the boot CPU arms the test with a mode, CPU 1 starts
  * spinning and announces it, and the boot CPU then panics. kpanic's stop has
@@ -97,6 +103,28 @@ void kernel_boot_kpanic_stop_test(void) {
 #else
     (void)mode;
     klog_write("[kpanic-stop-test] needs an SMP kernel; not run\n");
+#endif
+}
+
+void kernel_boot_exception_test(void) {
+    char value[4];
+    uint32_t written = 0;
+    if (kenv_get("debug.exception_test", value, sizeof(value), &written) != WASMOS_OK) {
+        return;
+    }
+    uint32_t vector = 0;
+    for (const char* c = value; *c; ++c) {
+        if (*c < '0' || *c > '9') {
+            klog_printf("[exception-test] vector %s unknown; not run\n", value);
+            return;
+        }
+        vector = vector * 10u + (uint32_t)(*c - '0');
+    }
+#if defined(WASMOS_ARCH_AARCH64)
+    (void)vector;
+    klog_write("[exception-test] needs x86_64; not run\n");
+#else
+    x86_exception_test_raise(vector);
 #endif
 }
 

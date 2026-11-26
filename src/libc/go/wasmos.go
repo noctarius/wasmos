@@ -353,11 +353,12 @@ func readIPCReply() IPCReply {
 	}
 }
 
-// Call sends a request to server and blocks until the FIRST message arrives on
-// the per-context managed reply endpoint; it is returned as the reply without
-// checking its request id or source. Only one request may be outstanding on that
-// endpoint at a time, or a stale reply is returned for a later call. The C
-// helper (wasmos_ipc_call) matches instead.
+// Call sends a request to server and blocks until its reply arrives on the
+// per-context managed reply endpoint: the first message carrying this call's
+// request id AND sent from server, the rule wasmos_ipc_call applies. Every other
+// message that lands there meanwhile is consumed and DISCARDED, so a component
+// that must not lose those uses an EventLoop instead. There is no timeout: a
+// server that lives and never answers blocks the caller indefinitely.
 func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (IPCReply, Error) {
 	replyEp, err := ensureIPCReplyEndpoint()
 	if err != ErrOK {
@@ -367,10 +368,14 @@ func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int
 	if ipcSend(server, replyEp, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
 		return IPCReply{}, ErrHostCallFailed
 	}
-	if ipcRecv(replyEp) < 0 {
-		return IPCReply{}, ErrHostCallFailed
+	for {
+		if ipcRecv(replyEp) < 0 {
+			return IPCReply{}, ErrHostCallFailed
+		}
+		if ipcLastField(ipcFieldRequestID) == requestID && ipcLastField(ipcFieldSource) == server {
+			return readIPCReply(), ErrOK
+		}
 	}
-	return readIPCReply(), ErrOK
 }
 
 // Recv blocks until a message arrives on endpoint (for servers).

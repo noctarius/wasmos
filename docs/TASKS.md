@@ -975,10 +975,17 @@ tail.
   `abi/errors.yaml`.
 
 
-- [ ] [BUG][P1] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
-  return the first message arriving on the shared managed reply endpoint; C
-  matches both request id and source, AssemblyScript matches request id. A
-  context with two requests in flight can be handed the wrong reply.
+- [x] [BUG][P1] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
+  returned the first message arriving on the shared managed reply endpoint; they
+  now accept only this call's request id from the endpoint the request went to,
+  as C does, and discard everything else. Covered by `tests/unit/test_ipc_call.rs`,
+  `tests/unit/test_ipc_call.zig` and `testIPCCallMatchesItsReply` in
+  `tests/unit/test_wasm_coroutine.go`, each against a fake mailbox that queues a
+  stale or an impostor message ahead of the answer.
+- [ ] [BUG][P2] Match the reply source in the AssemblyScript `ipc.call` as well. It
+  checks the request id only, so a message carrying the right id from another
+  endpoint is accepted; C, Go, Rust and Zig also require the source to be the
+  endpoint the request went to (`src/libc/assemblyscript/wasmos.ts`).
 - [x] [BUG][P1] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
   `wasmIPCFuture*` declarations. Without both, the symbols stayed undefined at
   link, so `Future.Then` and the `IPCFuture` methods failed to link for any Go

@@ -542,6 +542,37 @@ func testThenAndIPCFutureReachC() int32 {
 	return 0
 }
 
+// ------------------------------------------------------------- ipc.Call
+
+//go:wasmimport wasmos_test ipc_pending
+func ipcPending(endpoint int32) int32
+
+// ipc.Call against the fake mailbox in run_go_test.mjs: server 5 answers with
+// arg0 + 1, and arg1 selects a decoy (arg0 = -1) queued ahead of the answer.
+//
+// Regression: 2026-11-26-lang-ipc-call-match -- Call returned the first message
+// on the managed reply endpoint without checking its request id or source, so a
+// stale reply, or a message with the right id from another endpoint, was handed
+// back as the answer to the request just sent. The C helper (wasmos_ipc_call)
+// accepts only the request's id from the endpoint the request went to.
+func testIPCCallMatchesItsReply() int32 {
+	const server = 5
+	for scenario := int32(0); scenario <= 2; scenario++ {
+		arg0 := 10 * (scenario + 1)
+		reply, err := ipc.Call(server, 0x10, arg0, scenario, 0, 0)
+		if err != ErrOK {
+			return 1100 + scenario
+		}
+		if reply.Arg0 != arg0+1 || reply.Source != server {
+			return 1110 + scenario
+		}
+		if ipcPending(90) != 0 {
+			return 1120 + scenario
+		}
+	}
+	return 0
+}
+
 //go:wasmexport runTests
 func runTests() int32 {
 	if rc := testFFISmoke(); rc != 0 {
@@ -566,6 +597,9 @@ func runTests() int32 {
 		return rc
 	}
 	if rc := testThenAndIPCFutureReachC(); rc != 0 {
+		return rc
+	}
+	if rc := testIPCCallMatchesItsReply(); rc != 0 {
 		return rc
 	}
 	return testCallbackRegistryReclaim()

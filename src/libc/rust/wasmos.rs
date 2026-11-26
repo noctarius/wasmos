@@ -665,11 +665,13 @@ pub mod ipc {
         }
     }
 
-    /// Send a request to server and block until the FIRST message arrives on the
-    /// per-context managed reply endpoint; it is returned as the reply without
-    /// checking its request id or source. Only one request may be outstanding on
-    /// that endpoint at a time, or a stale reply is returned for a later call.
-    /// The C helper (wasmos_ipc_call) matches instead.
+    /// Send a request to server and block until its reply arrives on the
+    /// per-context managed reply endpoint: the first message carrying this
+    /// call's request id AND sent from `server`, the rule `wasmos_ipc_call`
+    /// applies. Every other message that lands there meanwhile is consumed and
+    /// DISCARDED, so a component that must not lose those uses the coroutine
+    /// event loop instead. There is no timeout: a server that lives and never
+    /// answers blocks the caller indefinitely.
     pub fn call(
         server: i32,
         msg_type: i32,
@@ -688,10 +690,16 @@ pub mod ipc {
         {
             return Err(Error::HostCallFailed);
         }
-        if unsafe { ipc_select_one(reply_ep) } < 0 {
-            return Err(Error::HostCallFailed);
+        loop {
+            if unsafe { ipc_select_one(reply_ep) } < 0 {
+                return Err(Error::HostCallFailed);
+            }
+            if unsafe { ipc_last_field(IPC_FIELD_REQUEST_ID) } == request_id
+                && unsafe { ipc_last_field(IPC_FIELD_SOURCE) } == server
+            {
+                return Ok(read_reply());
+            }
         }
-        Ok(read_reply())
     }
 
     /// Block until a message arrives on endpoint (for servers).

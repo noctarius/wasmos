@@ -822,6 +822,10 @@ export namespace ipc {
                 lastCallPeerGone = true;
                 return null;
             }
+            // TODO: also require IPC_FIELD_SOURCE == server, as wasmos_ipc_call
+            // and the Go, Rust and Zig bindings do; without it a message
+            // carrying this request id from another endpoint is accepted as
+            // the reply.
             if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId) {
                 continue;
             }

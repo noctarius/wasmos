@@ -165,9 +165,11 @@ static uint32_t unmasks_of(uint32_t line) {
  * silently steal the line and stop that driver's interrupts. */
 static void test_register_adds_not_replaces(void) {
     reset();
-    expect(irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS) == 0, "first register ok");
-    expect(irq_sharing_register(g_lines, LINE, 20, 0x200, &OPS) == 0, "second register ok");
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    expect(irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS) == 0,
+           "first register ok");
+    expect(irq_sharing_register(g_lines, TEST_LINES, LINE, 20, 0x200, &OPS) == 0,
+           "second register ok");
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(g_deliver_count == 2, "dispatch reaches both sharers");
     expect(delivered_to(0x100) && delivered_to(0x200), "both endpoints addressed");
 }
@@ -176,9 +178,9 @@ static void test_register_adds_not_replaces(void) {
  * second slot. */
 static void test_reregister_same_context_updates(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x1FF, &OPS);
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x1FF, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(g_deliver_count == 1, "still one sharer");
     expect(delivered_to(0x1FF), "endpoint was updated");
 }
@@ -186,10 +188,11 @@ static void test_reregister_same_context_updates(void) {
 static void test_register_full_line_rejected(void) {
     reset();
     for (uint32_t i = 0; i < IRQ_SHARERS_MAX; ++i) {
-        expect(irq_sharing_register(g_lines, LINE, 10 + i, 0x100 + i, &OPS) == 0,
+        expect(irq_sharing_register(g_lines, TEST_LINES, LINE, 10 + i, 0x100 + i, &OPS) == 0,
                "register within capacity");
     }
-    expect(irq_sharing_register(g_lines, LINE, 99, 0x999, &OPS) == WASMOS_ERR_IRQ_LINE_FULL,
+    expect(irq_sharing_register(g_lines, TEST_LINES, LINE, 99, 0x999, &OPS) ==
+               WASMOS_ERR_IRQ_LINE_FULL,
            "register beyond IRQ_SHARERS_MAX returns LINE_FULL");
 }
 
@@ -197,31 +200,31 @@ static void test_register_full_line_rejected(void) {
  * on the first ack re-fires the still-asserted line. */
 static void test_line_reopens_only_after_last_ack(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 20, 0x200, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 20, 0x200, &OPS);
     g_unmask_count = 0;
 
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(g_mask_count >= 1, "dispatch masks the line");
 
-    expect(irq_sharing_ack(g_lines, LINE, 10, &OPS) == 0, "first ack accepted");
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS) == 0, "first ack accepted");
     expect(unmasks_of(LINE) == 0, "line still masked after first of two acks");
 
-    expect(irq_sharing_ack(g_lines, LINE, 20, &OPS) == 0, "second ack accepted");
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 20, &OPS) == 0, "second ack accepted");
     expect(unmasks_of(LINE) == 1, "line reopens after the last ack");
 }
 
 static void test_ack_from_non_sharer_and_duplicate(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
-    expect(irq_sharing_ack(g_lines, LINE, 77, &OPS) == WASMOS_ERR_IRQ_NOT_A_SHARER,
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 77, &OPS) == WASMOS_ERR_IRQ_NOT_A_SHARER,
            "ack from non-sharer returns NOT_A_SHARER");
-    expect(irq_sharing_ack(g_lines, LINE, 10, &OPS) == 0, "ack accepted");
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS) == 0, "ack accepted");
     g_unmask_count = 0;
     /* Drivers may ack defensively; a second ack must be a successful no-op and
      * must not reopen the line again. */
-    expect(irq_sharing_ack(g_lines, LINE, 10, &OPS) == 0, "duplicate ack is a no-op");
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS) == 0, "duplicate ack is a no-op");
     expect(unmasks_of(LINE) == 0, "duplicate ack does not unmask again");
 }
 
@@ -229,13 +232,13 @@ static void test_ack_from_non_sharer_and_duplicate(void) {
  * ack that will never arrive. */
 static void test_failed_delivery_not_counted(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 20, 0x200, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 20, 0x200, &OPS);
     g_deliver_fail_endpoint = 0x200;
     g_unmask_count = 0;
 
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
-    expect(irq_sharing_ack(g_lines, LINE, 10, &OPS) == 0, "reachable sharer acks");
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS) == 0, "reachable sharer acks");
     expect(unmasks_of(LINE) == 1, "line reopens without the unreachable sharer");
 }
 
@@ -243,20 +246,20 @@ static void test_failed_delivery_not_counted(void) {
  * than left masked forever. */
 static void test_no_reachable_sharer_reopens_line(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
     g_deliver_fail_endpoint = 0x100;
     g_unmask_count = 0;
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(unmasks_of(LINE) == 1, "line reopened when no delivery succeeded");
 }
 
 /* One wedged driver must not disable a shared device for its co-sharers. */
 static void test_ack_deadline_force_completes(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 20, 0x200, &OPS);
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
-    (void)irq_sharing_ack(g_lines, LINE, 10, &OPS); /* sharer 20 never acks */
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 20, 0x200, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
+    (void)irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS); /* sharer 20 never acks */
     g_unmask_count = 0;
 
     g_now += IRQ_ACK_DEADLINE_TICKS - 1;
@@ -270,7 +273,7 @@ static void test_ack_deadline_force_completes(void) {
     /* The forced completion must leave the line usable, and a late ack from the
      * wedged sharer must not reopen it a second time. */
     g_unmask_count = 0;
-    expect(irq_sharing_ack(g_lines, LINE, 20, &OPS) == 0, "late ack tolerated");
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 20, &OPS) == 0, "late ack tolerated");
     expect(unmasks_of(LINE) == 0, "late ack does not double-unmask");
 }
 
@@ -278,22 +281,22 @@ static void test_ack_deadline_force_completes(void) {
  * budget bounds it instead of letting it livelock the machine. */
 static void test_dispatch_budget_throttles_and_recovers(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
 
     /* Ack each dispatch immediately, as a driver that finds nothing to do would. */
     for (uint32_t i = 0; i < IRQ_DISPATCH_BUDGET_PER_TICK; ++i) {
-        irq_sharing_dispatch(g_lines, LINE, &OPS);
-        (void)irq_sharing_ack(g_lines, LINE, 10, &OPS);
+        irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
+        (void)irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS);
     }
     expect(g_throttle_log_count == 0, "no throttle within budget");
     uint32_t delivered_before = g_deliver_count;
 
-    irq_sharing_dispatch(g_lines, LINE, &OPS); /* one over budget */
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS); /* one over budget */
     expect(g_throttle_log_count == 1, "throttle logged once past budget");
     expect(g_throttle_logged_line == LINE, "throttle names the offending line");
     expect(g_deliver_count == delivered_before, "throttled dispatch delivers nothing");
 
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(g_throttle_log_count == 1, "throttle diagnostic is not repeated");
 
     /* The next tick restores the budget and reopens the line. */
@@ -301,7 +304,7 @@ static void test_dispatch_budget_throttles_and_recovers(void) {
     g_unmask_count = 0;
     irq_sharing_tick(g_lines, TEST_LINES, &OPS);
     expect(unmasks_of(LINE) == 1, "tick reopens the throttled line");
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(g_deliver_count == delivered_before + 1, "dispatch resumes after the tick");
 }
 
@@ -309,25 +312,26 @@ static void test_dispatch_budget_throttles_and_recovers(void) {
  * masked for the survivors. */
 static void test_unregister_forgives_owed_ack(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 20, 0x200, &OPS);
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
-    (void)irq_sharing_ack(g_lines, LINE, 10, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 20, 0x200, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
+    (void)irq_sharing_ack(g_lines, TEST_LINES, LINE, 10, &OPS);
     g_unmask_count = 0;
 
-    expect(irq_sharing_unregister(g_lines, LINE, 20, &OPS) == 0, "unregister ok");
+    expect(irq_sharing_unregister(g_lines, TEST_LINES, LINE, 20, &OPS) == 0, "unregister ok");
     expect(unmasks_of(LINE) == 1, "line reopens once the owed ack is forgiven");
-    expect(irq_sharing_has_sharers(g_lines, LINE) == 1, "surviving sharer kept");
+    expect(irq_sharing_has_sharers(g_lines, TEST_LINES, LINE) == 1, "surviving sharer kept");
 }
 
 static void test_last_sharer_leaving_masks_line(void) {
     reset();
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x100, &OPS);
     g_mask_count = 0;
-    expect(irq_sharing_unregister(g_lines, LINE, 10, &OPS) == 0, "unregister ok");
+    expect(irq_sharing_unregister(g_lines, TEST_LINES, LINE, 10, &OPS) == 0, "unregister ok");
     expect(g_mask_count == 1, "line masked when the last sharer leaves");
-    expect(irq_sharing_has_sharers(g_lines, LINE) == 0, "line has no sharers");
-    expect(irq_sharing_unregister(g_lines, LINE, 10, &OPS) == WASMOS_ERR_IRQ_NOT_A_SHARER,
+    expect(irq_sharing_has_sharers(g_lines, TEST_LINES, LINE) == 0, "line has no sharers");
+    expect(irq_sharing_unregister(g_lines, TEST_LINES, LINE, 10, &OPS) ==
+               WASMOS_ERR_IRQ_NOT_A_SHARER,
            "second unregister returns NOT_A_SHARER");
 }
 
@@ -335,37 +339,87 @@ static void test_last_sharer_leaving_masks_line(void) {
  * still owed would mask the line forever. */
 static void test_release_context_clears_all_lines(void) {
     reset();
-    (void)irq_sharing_register(g_lines, 4, 10, 0x100, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 10, 0x101, &OPS);
-    (void)irq_sharing_register(g_lines, LINE, 20, 0x200, &OPS);
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, 4, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 10, 0x101, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, LINE, 20, 0x200, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     g_unmask_count = 0;
 
     irq_sharing_release_context(g_lines, TEST_LINES, 10, &OPS);
-    expect(irq_sharing_has_sharers(g_lines, 4) == 0, "context dropped from line 4");
-    expect(irq_sharing_has_sharers(g_lines, LINE) == 1, "co-sharer on line 11 survives");
+    expect(irq_sharing_has_sharers(g_lines, TEST_LINES, 4) == 0, "context dropped from line 4");
+    expect(irq_sharing_has_sharers(g_lines, TEST_LINES, LINE) == 1,
+           "co-sharer on line 11 survives");
     /* Sharer 20 still owes its ack, so the line must not have reopened yet. */
     expect(unmasks_of(LINE) == 0, "line stays masked while the survivor owes an ack");
-    expect(irq_sharing_ack(g_lines, LINE, 20, &OPS) == 0, "survivor acks");
+    expect(irq_sharing_ack(g_lines, TEST_LINES, LINE, 20, &OPS) == 0, "survivor acks");
     expect(unmasks_of(LINE) == 1, "line reopens after the survivor acks");
 }
 
 /* The timer line drives scheduler accounting and is never masked. */
 static void test_timer_line_never_masked(void) {
     reset();
-    (void)irq_sharing_register(g_lines, TIMER_LINE, 10, 0x100, &OPS);
+    (void)irq_sharing_register(g_lines, TEST_LINES, TIMER_LINE, 10, 0x100, &OPS);
     g_mask_count = 0;
     g_unmask_count = 0;
-    irq_sharing_dispatch(g_lines, TIMER_LINE, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, TIMER_LINE, &OPS);
     expect(g_mask_count == 0, "timer line is not masked on dispatch");
-    (void)irq_sharing_ack(g_lines, TIMER_LINE, 10, &OPS);
+    (void)irq_sharing_ack(g_lines, TEST_LINES, TIMER_LINE, 10, &OPS);
     expect(unmasks_of(TIMER_LINE) == 0, "timer line is not unmasked either");
 }
 
 static void test_dispatch_without_sharers_is_inert(void) {
     reset();
-    irq_sharing_dispatch(g_lines, LINE, &OPS);
+    irq_sharing_dispatch(g_lines, TEST_LINES, LINE, &OPS);
     expect(g_mask_count == 0 && g_deliver_count == 0, "unrouted line is not touched");
+}
+
+/* Regression: 2026-11-26-irq-sharing-unbounded-line -- every entry point that
+ * names one line used it as an unchecked index: the family took no line count,
+ * and WASMOS_ERR_IRQ_BAD_LINE was returned only for a NULL table. A line past
+ * the end read and wrote whatever followed the table. Today's callers bound the
+ * line themselves (x86_64 against IRQ_COUNT, aarch64 by slot), so the module's
+ * own contract is what is pinned here.
+ *
+ * The table is followed by one more line it does not include; every call that
+ * names the line just past the end must refuse it and leave that line as it
+ * was. */
+static void test_a_line_past_the_table_is_refused(void) {
+    static struct {
+        irq_line_t lines[TEST_LINES];
+        irq_line_t beyond;
+    } t;
+    memset(&t, 0, sizeof(t));
+    irq_sharing_init(t.lines, TEST_LINES);
+    irq_sharing_init(&t.beyond, 1);
+    reset();
+
+    expect(irq_sharing_register(t.lines, TEST_LINES, TEST_LINES, 10, 0x100, &OPS) ==
+               WASMOS_ERR_IRQ_BAD_LINE,
+           "register refuses the line past the table");
+    expect(t.beyond.sharer_count == 0 && !t.beyond.sharers[0].in_use,
+           "and does not register anything beyond it");
+
+    /* A sharer planted beyond the table must stay out of reach. */
+    t.beyond.sharers[0].in_use = 1;
+    t.beyond.sharers[0].owner_context_id = 20;
+    t.beyond.sharers[0].endpoint = 0x200;
+    t.beyond.sharer_count = 1;
+    expect(irq_sharing_has_sharers(t.lines, TEST_LINES, TEST_LINES) == 0,
+           "has_sharers does not look beyond the table");
+    irq_sharing_dispatch(t.lines, TEST_LINES, TEST_LINES, &OPS);
+    expect(g_deliver_count == 0 && t.beyond.pending_acks == 0,
+           "dispatch delivers nothing for the line past the table");
+    expect(irq_sharing_ack(t.lines, TEST_LINES, TEST_LINES, 20, &OPS) == WASMOS_ERR_IRQ_BAD_LINE,
+           "ack refuses it");
+    expect(irq_sharing_unregister(t.lines, TEST_LINES, TEST_LINES, 20, &OPS) ==
+               WASMOS_ERR_IRQ_BAD_LINE,
+           "unregister refuses it");
+    expect(irq_sharing_unregister_all(t.lines, TEST_LINES, TEST_LINES, &OPS) ==
+               WASMOS_ERR_IRQ_BAD_LINE,
+           "unregister_all refuses it");
+    expect(t.beyond.sharer_count == 1 && t.beyond.sharers[0].in_use,
+           "and the line beyond the table is untouched");
+    expect(g_mask_count == 0 && g_unmask_count == 0, "nor was anything masked or unmasked");
 }
 
 int main(void) {
@@ -386,6 +440,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_release_context_clears_all_lines),
         WASMOS_TEST_CASE(test_timer_line_never_masked),
         WASMOS_TEST_CASE(test_dispatch_without_sharers_is_inert),
+        WASMOS_TEST_CASE(test_a_line_past_the_table_is_refused),
     };
     const uint64_t seed = wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_irq_sharing: %d passed, %d failed\n", g_checks - g_failures, g_failures);

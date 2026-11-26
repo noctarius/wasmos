@@ -396,7 +396,8 @@ int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
         return WASMOS_ERR_IRQ_BAD_ENDPOINT;
     }
     ksync_spinlock_lock(&g_irq_lines_lock);
-    int rc = irq_sharing_register(irq_lines_ptr(), irq_line, context_id, endpoint, &g_irq_ops);
+    int rc = irq_sharing_register(
+        irq_lines_ptr(), IRQ_COUNT, irq_line, context_id, endpoint, &g_irq_ops);
     ksync_spinlock_unlock(&g_irq_lines_lock);
     return rc;
 }
@@ -413,7 +414,7 @@ int irq_ack(uint32_t context_id, uint32_t irq_line) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
     ksync_spinlock_lock(&g_irq_lines_lock);
-    int rc = irq_sharing_ack(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
+    int rc = irq_sharing_ack(irq_lines_ptr(), IRQ_COUNT, irq_line, context_id, &g_irq_ops);
     ksync_spinlock_unlock(&g_irq_lines_lock);
     return rc;
 }
@@ -428,9 +429,10 @@ int irq_unregister(uint32_t context_id, uint32_t irq_line) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
     ksync_spinlock_lock(&g_irq_lines_lock);
-    int rc = (context_id == IPC_CONTEXT_KERNEL)
-                 ? irq_sharing_unregister_all(irq_lines_ptr(), irq_line, &g_irq_ops)
-                 : irq_sharing_unregister(irq_lines_ptr(), irq_line, context_id, &g_irq_ops);
+    int rc =
+        (context_id == IPC_CONTEXT_KERNEL)
+            ? irq_sharing_unregister_all(irq_lines_ptr(), IRQ_COUNT, irq_line, &g_irq_ops)
+            : irq_sharing_unregister(irq_lines_ptr(), IRQ_COUNT, irq_line, context_id, &g_irq_ops);
     ksync_spinlock_unlock(&g_irq_lines_lock);
     return rc;
 }
@@ -490,7 +492,7 @@ void x86_irq_handler(uint64_t vector) {
     if (global_tick) {
         irq_sharing_tick(irq_lines_ptr(), IRQ_COUNT, &g_irq_ops);
     }
-    irq_sharing_dispatch(irq_lines_ptr(), irq_line, &g_irq_ops);
+    irq_sharing_dispatch(irq_lines_ptr(), IRQ_COUNT, irq_line, &g_irq_ops);
     ksync_spinlock_unlock(&g_irq_lines_lock);
     irq_send_eoi(irq_line);
 }

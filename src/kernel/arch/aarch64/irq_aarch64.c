@@ -74,7 +74,7 @@ static uint32_t spi_slot_find(uint32_t intid) {
  * masked the SPI when the last sharer went. */
 static void spi_slots_reclaim(void) {
     for (uint32_t slot = 1; slot < IRQ_SPI_SLOTS; ++slot) {
-        if (g_spi_intid[slot] != 0 && !irq_sharing_has_sharers(g_spi_lines, slot)) {
+        if (g_spi_intid[slot] != 0 && !irq_sharing_has_sharers(g_spi_lines, IRQ_SPI_SLOTS, slot)) {
             g_spi_intid[slot] = 0;
         }
     }
@@ -148,7 +148,8 @@ int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
         g_spi_intid[slot] = irq_line;
         gic_spi_configure(irq_line, 1);
     }
-    int rc = irq_sharing_register(g_spi_lines, slot, context_id, endpoint, &g_spi_ops);
+    int rc =
+        irq_sharing_register(g_spi_lines, IRQ_SPI_SLOTS, slot, context_id, endpoint, &g_spi_ops);
     spi_slots_reclaim();
     ksync_spinlock_unlock(&g_spi_lock);
     return rc;
@@ -162,7 +163,7 @@ int irq_ack(uint32_t context_id, uint32_t irq_line) {
     ksync_spinlock_lock(&g_spi_lock);
     uint32_t slot = gic_spi_valid(irq_line) ? spi_slot_find(irq_line) : 0;
     int rc = slot == 0 ? WASMOS_ERR_IRQ_BAD_LINE
-                       : irq_sharing_ack(g_spi_lines, slot, context_id, &g_spi_ops);
+                       : irq_sharing_ack(g_spi_lines, IRQ_SPI_SLOTS, slot, context_id, &g_spi_ops);
     ksync_spinlock_unlock(&g_spi_lock);
     return rc;
 }
@@ -177,8 +178,8 @@ int irq_unregister(uint32_t context_id, uint32_t irq_line) {
     int rc = WASMOS_ERR_IRQ_BAD_LINE;
     if (slot != 0) {
         rc = (context_id == IPC_CONTEXT_KERNEL)
-                 ? irq_sharing_unregister_all(g_spi_lines, slot, &g_spi_ops)
-                 : irq_sharing_unregister(g_spi_lines, slot, context_id, &g_spi_ops);
+                 ? irq_sharing_unregister_all(g_spi_lines, IRQ_SPI_SLOTS, slot, &g_spi_ops)
+                 : irq_sharing_unregister(g_spi_lines, IRQ_SPI_SLOTS, slot, context_id, &g_spi_ops);
         spi_slots_reclaim();
     }
     ksync_spinlock_unlock(&g_spi_lock);
@@ -260,7 +261,7 @@ void aarch64_irq(irq_frame_t* frame) {
     ksync_spinlock_lock(&g_spi_lock);
     uint32_t slot = spi_slot_find(intid);
     if (slot != 0) {
-        irq_sharing_dispatch(g_spi_lines, slot, &g_spi_ops);
+        irq_sharing_dispatch(g_spi_lines, IRQ_SPI_SLOTS, slot, &g_spi_ops);
     }
     ksync_spinlock_unlock(&g_spi_lock);
     if (slot == 0) {

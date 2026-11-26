@@ -550,10 +550,13 @@ and `architecture/33-completion-ports.md`.
   Migration must keep the net stack + TLS green throughout.
 
 
-- [ ] [BUG][P1] Make the `IPC_CALL` request-id counter atomic and lock the per-pid slot
-  table. Two CPUs issuing `IPC_CALL` concurrently can mint the same id, which
-  both reply correlation and the `syscall_ipc_request_id_issued` replay guard
-  assume is unique (`src/kernel/syscall.c:58` `FIXME`).
+- [x] [BUG][P1] Make the `IPC_CALL` request-id counter atomic and lock the per-pid slot
+  table. Ids are drawn by an atomic fetch-add that skips 0, and
+  `g_syscall_ipc_call_lock` covers claiming and reaping a slot, its pending
+  ring, and the check-then-create of its reply endpoint (which raced between
+  the threads of one process and leaked an endpoint per loss).
+  `test_syscall_ipc` K18-K20 were red first: duplicate ids, lost slot claims,
+  and a torn pending count that hung the ring scan.
 - [ ] [BUG][P1] Bounds-check `line` in `irq_sharing_register/ack/unregister/dispatch/
   has_sharers`. `WASMOS_ERR_IRQ_BAD_LINE` exists but is returned only for a
   NULL table; an out-of-range line is an out-of-bounds access

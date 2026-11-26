@@ -17,6 +17,7 @@
 #include "paging.h"
 #include "serial.h"
 #include "user_mutex.h"
+#include "sync/spinlock.h"
 #ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
 #include "cpu_local.h"
@@ -59,10 +60,10 @@ static uint8_t g_ring3_thread_detach_invalid_deny_logged;
 static uint8_t g_ring3_thread_detach_helper_ok_logged;
 static uint8_t g_ring3_thread_detach_join_deny_logged;
 /* Monotonic request-id source for IPC_CALL, and the anchor
- * syscall_ipc_request_id_issued compares against.
- * FIXME: incremented non-atomically, and the per-pid slot table below is walked
- * without a lock.  Two CPUs issuing IPC_CALL concurrently can hand out the same
- * request id, which the reply-correlation logic assumes is unique. */
+ * syscall_ipc_request_id_issued compares against.  Every CPU draws from it, so
+ * it is only ever advanced by an atomic fetch-add (syscall_ipc_issue_request_id)
+ * and read by an atomic load; an id is unique across all callers until the
+ * counter wraps. */
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
@@ -78,7 +79,14 @@ typedef struct {
     uint32_t pending_count;
 } syscall_ipc_call_slot_t;
 
+/* One slot per process that has issued IPC_CALL: its reply endpoint and the
+ * ring of replies parked for its other in-flight calls.  g_syscall_ipc_call_lock
+ * covers every field of every slot -- claiming and reaping a slot as well as the
+ * ring -- because several CPUs scan the table at once and the threads of one
+ * process share its slot.  It is never held across a send or a blocking
+ * receive. */
 static syscall_ipc_call_slot_t g_syscall_ipc_call_slots[PROCESS_MAX_COUNT];
+static ksync_spinlock_t g_syscall_ipc_call_lock;
 
 static inline uintptr_t syscall_alias_ptr(uintptr_t p) {
 #if defined(WASMOS_HOST_TEST_SMP)
@@ -163,9 +171,19 @@ void syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint) {
     g_ipc_notify_control_deny_endpoint = endpoint;
 }
 
-static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid(uint32_t pid) {
+/*
+ * The slot of `pid`, claimed on first use; 0 if the table is full.  A scan also
+ * reaps the slot of every pid that no longer has a process.
+ *
+ * Caller holds g_syscall_ipc_call_lock.  process_get, called here, scans the
+ * process table without a lock; syscall_ipc_call_source_endpoint takes the IPC
+ * endpoint locks inside this one.  IPC never calls back into this table, so the
+ * order cannot invert.
+ */
+static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid_locked(uint32_t pid) {
     syscall_ipc_call_slot_t* slots = syscall_ipc_call_slots_ptr();
     syscall_ipc_call_slot_t* empty = 0;
+    syscall_ipc_call_slot_t* found = 0;
     if (pid == 0) {
         return 0;
     }
@@ -179,21 +197,39 @@ static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid(uint32_t pid) {
             slot->pending_count = 0;
         }
         if (slot->in_use && slot->pid == pid) {
-            return slot;
+            found = slot;
+            break;
         }
         if (!empty && !slot->in_use) {
             empty = slot;
         }
     }
-    if (!empty) {
-        return 0;
+    if (!found && empty) {
+        empty->in_use = 1;
+        empty->pid = pid;
+        empty->source_endpoint = IPC_ENDPOINT_NONE;
+        empty->pending_head = 0;
+        empty->pending_count = 0;
+        found = empty;
     }
-    empty->in_use = 1;
-    empty->pid = pid;
-    empty->source_endpoint = IPC_ENDPOINT_NONE;
-    empty->pending_head = 0;
-    empty->pending_count = 0;
-    return empty;
+    return found;
+}
+
+/*
+ * The slot of `pid`, as syscall_ipc_call_slot_for_pid_locked, taking the lock.
+ *
+ * The slot stays `pid`'s for as long as that process exists, so a caller may use
+ * the pointer after this returns, but only through the functions below, which
+ * take g_syscall_ipc_call_lock themselves.  Should the process die while one of
+ * its threads still holds the pointer, the slot can pass to another pid; the
+ * worst that thread can then do is park a reply in the other pid's ring, where
+ * no call of that pid matches its request id.
+ */
+static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid(uint32_t pid) {
+    ksync_spinlock_lock(&g_syscall_ipc_call_lock);
+    syscall_ipc_call_slot_t* slot = syscall_ipc_call_slot_for_pid_locked(pid);
+    ksync_spinlock_unlock(&g_syscall_ipc_call_lock);
+    return slot;
 }
 
 /*
@@ -205,7 +241,25 @@ static syscall_ipc_call_slot_t* syscall_ipc_call_slot_for_pid(uint32_t pid) {
  * signed difference so the answer stays right across the counter's wrap.
  */
 static int syscall_ipc_request_id_issued(uint32_t request_id) {
-    return (int32_t)(request_id - g_syscall_ipc_call_next_request_id) < 0;
+    uint32_t next = __atomic_load_n(&g_syscall_ipc_call_next_request_id, __ATOMIC_RELAXED);
+    return (int32_t)(request_id - next) < 0;
+}
+
+/*
+ * A request id no other call holds.  0 is never issued: it is skipped when the
+ * counter wraps onto it.
+ *
+ * Relaxed is enough: the only reader that compares against the counter is
+ * syscall_ipc_request_id_issued, and the reply it judges was carried to this CPU
+ * by IPC, whose endpoint locks order the issuing CPU's fetch-add before the
+ * receiving CPU's load.
+ */
+static uint32_t syscall_ipc_issue_request_id(void) {
+    uint32_t id;
+    do {
+        id = __atomic_fetch_add(&g_syscall_ipc_call_next_request_id, 1u, __ATOMIC_RELAXED);
+    } while (id == 0);
+    return id;
 }
 
 static int syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t* slot, const ipc_message_t* msg) {
@@ -225,6 +279,7 @@ static int syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t* slot, const ipc_
     if (!syscall_ipc_request_id_issued(msg->request_id)) {
         return -1;
     }
+    ksync_spinlock_lock(&g_syscall_ipc_call_lock);
     /* Explicit drop policy: bounded queue, drop oldest on overflow. */
     if (slot->pending_count >= SYSCALL_IPC_PENDING_DEPTH) {
         slot->pending_head = (slot->pending_head + 1u) % SYSCALL_IPC_PENDING_DEPTH;
@@ -233,14 +288,17 @@ static int syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t* slot, const ipc_
     uint32_t tail = (slot->pending_head + slot->pending_count) % SYSCALL_IPC_PENDING_DEPTH;
     slot->pending[tail] = *msg;
     slot->pending_count++;
+    ksync_spinlock_unlock(&g_syscall_ipc_call_lock);
     return 0;
 }
 
 static int syscall_ipc_pending_take_request(syscall_ipc_call_slot_t* slot, uint32_t request_id,
                                             ipc_message_t* out) {
-    if (!slot || !out || slot->pending_count == 0) {
+    int rc = -1;
+    if (!slot || !out) {
         return -1;
     }
+    ksync_spinlock_lock(&g_syscall_ipc_call_lock);
     for (uint32_t i = 0; i < slot->pending_count; ++i) {
         uint32_t idx = (slot->pending_head + i) % SYSCALL_IPC_PENDING_DEPTH;
         if (slot->pending[idx].request_id != request_id) {
@@ -253,9 +311,11 @@ static int syscall_ipc_pending_take_request(syscall_ipc_call_slot_t* slot, uint3
             slot->pending[to] = slot->pending[from];
         }
         slot->pending_count--;
-        return 0;
+        rc = 0;
+        break;
     }
-    return -1;
+    ksync_spinlock_unlock(&g_syscall_ipc_call_lock);
+    return rc;
 }
 
 #ifdef WASMOS_SYSCALL_TEST_SEAMS
@@ -290,7 +350,13 @@ int syscall_test_pending_take(uint32_t pid, uint32_t request_id, ipc_message_t* 
  * builds an "already issued" id as this minus one and a "never issued" id as
  * this or beyond. */
 uint32_t syscall_test_next_request_id(void) {
-    return g_syscall_ipc_call_next_request_id;
+    return __atomic_load_n(&g_syscall_ipc_call_next_request_id, __ATOMIC_RELAXED);
+}
+
+/* Issues a request id exactly as IPC_CALL does, so a test can mint ids from
+ * several threads at once without driving the full call. */
+uint32_t syscall_test_issue_request_id(void) {
+    return syscall_ipc_issue_request_id();
 }
 #endif
 
@@ -309,31 +375,45 @@ static int syscall_ipc_reply_authentic(const ipc_message_t* resp, uint32_t expec
     return reply_owner_context == expected_owner_context;
 }
 
+/*
+ * The reply endpoint every IPC_CALL of `proc` receives on, created on first use
+ * and replaced if it no longer belongs to the process.  The check and the
+ * creation run under g_syscall_ipc_call_lock, so the threads of one process
+ * agree on one endpoint rather than each creating one and leaking all but the
+ * last against the context's endpoint quota.
+ */
 static int syscall_ipc_call_source_endpoint(process_t* proc, uint32_t* out_endpoint) {
     syscall_ipc_call_slot_t* slot = 0;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
     uint32_t owner_context = 0;
+    int rc = IPC_OK;
 
     if (!proc || !out_endpoint) {
         return IPC_ERR_INVALID;
     }
-    slot = syscall_ipc_call_slot_for_pid(proc->pid);
+    ksync_spinlock_lock(&g_syscall_ipc_call_lock);
+    slot = syscall_ipc_call_slot_for_pid_locked(proc->pid);
     if (!slot) {
-        return IPC_ERR_FULL;
-    }
-    if (slot->source_endpoint != IPC_ENDPOINT_NONE &&
-        (ipc_endpoint_owner(slot->source_endpoint, &owner_context) != IPC_OK ||
-         owner_context != proc->context_id)) {
-        slot->source_endpoint = IPC_ENDPOINT_NONE;
-    }
-    if (slot->source_endpoint == IPC_ENDPOINT_NONE) {
-        if (ipc_endpoint_create(proc->context_id, &endpoint) != IPC_OK) {
-            return IPC_ERR_FULL;
+        rc = IPC_ERR_FULL;
+    } else {
+        if (slot->source_endpoint != IPC_ENDPOINT_NONE &&
+            (ipc_endpoint_owner(slot->source_endpoint, &owner_context) != IPC_OK ||
+             owner_context != proc->context_id)) {
+            slot->source_endpoint = IPC_ENDPOINT_NONE;
         }
-        slot->source_endpoint = endpoint;
+        if (slot->source_endpoint == IPC_ENDPOINT_NONE) {
+            if (ipc_endpoint_create(proc->context_id, &endpoint) == IPC_OK) {
+                slot->source_endpoint = endpoint;
+            } else {
+                rc = IPC_ERR_FULL;
+            }
+        }
+        if (rc == IPC_OK) {
+            *out_endpoint = slot->source_endpoint;
+        }
     }
-    *out_endpoint = slot->source_endpoint;
-    return IPC_OK;
+    ksync_spinlock_unlock(&g_syscall_ipc_call_lock);
+    return rc;
 }
 
 static int syscall_ipc_call_kernel_endpoint_allowed(uint32_t destination) {
@@ -729,7 +809,7 @@ uint64_t syscall_dispatch(syscall_frame_t* frame) {
         uint32_t arg2 = 0;
         uint32_t arg3 = 0;
         uint32_t source_endpoint = IPC_ENDPOINT_NONE;
-        uint32_t request_id = g_syscall_ipc_call_next_request_id++;
+        uint32_t request_id = 0;
         uint32_t owner_context = 0;
         uint32_t expected_reply_source = IPC_ENDPOINT_NONE;
         uint32_t expected_reply_owner_context = 0;
@@ -762,9 +842,7 @@ uint64_t syscall_dispatch(syscall_frame_t* frame) {
             syscall_arg_u32(arch_syscall_arg(frame, 5), &arg3) != 0) {
             return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
-        if (request_id == 0) {
-            request_id = g_syscall_ipc_call_next_request_id++;
-        }
+        request_id = syscall_ipc_issue_request_id();
         slot = syscall_ipc_call_slot_for_pid(proc->pid);
         if (!slot) {
             return (uint64_t)(int64_t)IPC_ERR_FULL;

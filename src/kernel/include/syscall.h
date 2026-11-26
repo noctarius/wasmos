@@ -122,6 +122,8 @@ int syscall_test_pending_take(uint32_t pid, uint32_t request_id, ipc_message_t* 
 /* The next request id to be issued, so a test can construct ids that are and
  * are not yet valid. */
 uint32_t syscall_test_next_request_id(void);
+/* Issue one request id through the path IPC_CALL uses. Never 0. */
+uint32_t syscall_test_issue_request_id(void);
 #endif
 
 #endif

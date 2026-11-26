@@ -27,6 +27,7 @@
  * travels the real send-and-wake path rather than a fabricated one.
  */
 
+#include <pthread.h>
 #include <stdio.h>
 
 #include "test_shuffle.h"
@@ -152,16 +153,27 @@ void process_yield(process_run_result_t result) {
     }
 }
 
-/* The process table is one entry deep: only CALLER_PID resolves, so the peer
- * service has a context id and endpoints but no process behind it. The kernel
- * searches its real process list, and its process_current_pid reads the
- * executing CPU's slot rather than a global. */
+/* Pids [g_live_lo, g_live_hi) also resolve, all to g_procs[1]: the concurrency
+ * cases run several processes at once, and the slot table needs each of them
+ * to be alive only for as long as a case says so. Read atomically because those
+ * cases call process_get from several threads while main moves the range. */
+static uint32_t g_live_lo;
+static uint32_t g_live_hi;
+
+/* The process table is one entry deep apart from that range: only CALLER_PID
+ * resolves, so the peer service has a context id and endpoints but no process
+ * behind it. The kernel searches its real process list, and its
+ * process_current_pid reads the executing CPU's slot rather than a global. */
 uint32_t process_current_pid(void) {
     return g_current_pid;
 }
 process_t* process_get(uint32_t pid) {
     if (pid == CALLER_PID) {
         return &g_procs[0];
+    }
+    if (pid >= __atomic_load_n(&g_live_lo, __ATOMIC_ACQUIRE) &&
+        pid < __atomic_load_n(&g_live_hi, __ATOMIC_ACQUIRE)) {
+        return &g_procs[1];
     }
     return 0;
 }
@@ -740,6 +752,173 @@ static void test_notify_passes_the_transport_result_through(void) {
     syscall_set_ipc_notify_control_deny_endpoint(IPC_ENDPOINT_NONE);
 }
 
+/* ------------------------------------------------------- concurrency cases */
+
+/* Regression: 2026-11-26-ipc-call-request-id-race -- IPC_CALL drew its request
+ * id with a plain increment and walked the per-pid slot table with no lock. Two
+ * CPUs issuing calls at once could mint the same id, so one caller could be
+ * resolved by the other's reply and the issued-id replay guard was wrong about
+ * both; two threads of one process could interleave their pending-ring updates
+ * and lose a parked reply; and two processes could claim the same free slot,
+ * leaving one of them with no ring at all. Each case runs CONC_THREADS pthreads
+ * as stand-in CPUs; a thread records failures in a counter, never through
+ * CHECK, which is not thread-safe. */
+
+#define CONC_THREADS 4
+#define CONC_IDS_PER_THREAD 50000u
+#define CONC_RING_ROUNDS 20000u
+#define CONC_CLAIM_ROUNDS 2000u
+#define CONC_PID_BASE 1000u
+
+static uint32_t g_conc_ids[CONC_THREADS][CONC_IDS_PER_THREAD];
+static uint32_t g_conc_failures;
+static uint32_t g_conc_barrier_count;
+static uint32_t g_conc_barrier_gen;
+
+/* All CONC_THREADS threads leave together; the last to arrive opens the next
+ * generation. Spins, since the threads are the only work on their cores. */
+static void conc_barrier(void) {
+    uint32_t gen = __atomic_load_n(&g_conc_barrier_gen, __ATOMIC_ACQUIRE);
+    if (__atomic_add_fetch(&g_conc_barrier_count, 1u, __ATOMIC_ACQ_REL) == CONC_THREADS) {
+        __atomic_store_n(&g_conc_barrier_count, 0u, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_conc_barrier_gen, gen + 1u, __ATOMIC_RELEASE);
+        return;
+    }
+    while (__atomic_load_n(&g_conc_barrier_gen, __ATOMIC_ACQUIRE) == gen) {
+    }
+}
+
+static void conc_run(void* (*fn)(void*)) {
+    pthread_t threads[CONC_THREADS];
+    uintptr_t idx[CONC_THREADS];
+    __atomic_store_n(&g_conc_failures, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_conc_barrier_count, 0u, __ATOMIC_RELAXED);
+    for (uint32_t i = 0; i < CONC_THREADS; ++i) {
+        idx[i] = i;
+        /* A worker short leaves the started ones spinning in conc_barrier for
+         * good, and the join below would hang on them, so the run ends here. */
+        if (pthread_create(&threads[i], 0, fn, (void*)idx[i]) != 0) {
+            printf("  [FAIL] could not start concurrency worker %u\n", i);
+            fflush(stdout);
+            exit(1);
+        }
+    }
+    for (uint32_t i = 0; i < CONC_THREADS; ++i) {
+        (void)pthread_join(threads[i], 0);
+    }
+}
+
+static void* conc_issue_ids(void* arg) {
+    uintptr_t t = (uintptr_t)arg;
+    conc_barrier();
+    for (uint32_t i = 0; i < CONC_IDS_PER_THREAD; ++i) {
+        g_conc_ids[t][i] = syscall_test_issue_request_id();
+    }
+    return 0;
+}
+
+static int cmp_u32(const void* a, const void* b) {
+    uint32_t x = *(const uint32_t*)a;
+    uint32_t y = *(const uint32_t*)b;
+    return (x > y) - (x < y);
+}
+
+static void test_ids_issued_concurrently_are_unique(void) {
+    reset();
+    conc_run(conc_issue_ids);
+    uint32_t* all = &g_conc_ids[0][0];
+    const size_t n = (size_t)CONC_THREADS * CONC_IDS_PER_THREAD;
+    qsort(all, n, sizeof(uint32_t), cmp_u32);
+    size_t zero = 0;
+    size_t dup = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (all[i] == 0) {
+            zero++;
+        }
+        if (i > 0 && all[i] == all[i - 1]) {
+            dup++;
+        }
+    }
+    CHECK(zero == 0, "no thread is handed id 0");
+    CHECK(dup == 0, "no two calls are handed the same id");
+    if (dup != 0) {
+        printf("  %zu duplicate ids among %zu\n", dup, n);
+    }
+}
+
+/* Every thread is the same process, as the threads of one process share its
+ * reply endpoint and so its pending ring. Each parks a reply under an id of its
+ * own and takes it straight back; with at most CONC_THREADS replies parked at
+ * once the ring never overflows, so every take must find its reply intact. */
+static void* conc_share_ring(void* arg) {
+    uintptr_t t = (uintptr_t)arg;
+    conc_barrier();
+    for (uint32_t i = 0; i < CONC_RING_ROUNDS; ++i) {
+        ipc_message_t msg;
+        ipc_message_t got;
+        memset(&msg, 0, sizeof(msg));
+        msg.request_id = syscall_test_issue_request_id();
+        msg.arg0 = (uint32_t)t;
+        msg.arg1 = i;
+        if (syscall_test_pending_enqueue(CALLER_PID, &msg) != 0 ||
+            syscall_test_pending_take(CALLER_PID, msg.request_id, &got) != 0 ||
+            got.request_id != msg.request_id || got.arg0 != msg.arg0 || got.arg1 != i) {
+            __atomic_add_fetch(&g_conc_failures, 1u, __ATOMIC_RELAXED);
+        }
+    }
+    return 0;
+}
+
+static void test_threads_sharing_a_pending_ring_lose_no_reply(void) {
+    reset();
+    conc_run(conc_share_ring);
+    uint32_t lost = __atomic_load_n(&g_conc_failures, __ATOMIC_RELAXED);
+    CHECK(lost == 0, "every parked reply is taken back intact");
+    if (lost != 0) {
+        printf("  %u of %u replies lost or torn\n", lost, CONC_THREADS * CONC_RING_ROUNDS);
+    }
+}
+
+/* Each round brings CONC_THREADS new processes to life, and each claims its
+ * slot at the same moment the others claim theirs and reap the previous round's
+ * dead ones. A process that shares a slot with another, or loses its slot to
+ * a reap, cannot take back the reply it just parked. */
+static void* conc_claim_slots(void* arg) {
+    uintptr_t t = (uintptr_t)arg;
+    for (uint32_t r = 0; r < CONC_CLAIM_ROUNDS; ++r) {
+        conc_barrier();
+        if (t == 0) {
+            uint32_t lo = CONC_PID_BASE + r * CONC_THREADS;
+            __atomic_store_n(&g_live_hi, lo + CONC_THREADS, __ATOMIC_RELEASE);
+            __atomic_store_n(&g_live_lo, lo, __ATOMIC_RELEASE);
+        }
+        conc_barrier();
+        uint32_t pid = CONC_PID_BASE + r * CONC_THREADS + (uint32_t)t;
+        ipc_message_t msg;
+        ipc_message_t got;
+        memset(&msg, 0, sizeof(msg));
+        msg.request_id = syscall_test_issue_request_id();
+        msg.arg0 = pid;
+        if (syscall_test_pending_enqueue(pid, &msg) != 0 ||
+            syscall_test_pending_take(pid, msg.request_id, &got) != 0 || got.arg0 != pid) {
+            __atomic_add_fetch(&g_conc_failures, 1u, __ATOMIC_RELAXED);
+        }
+    }
+    return 0;
+}
+
+static void test_processes_claiming_slots_at_once_each_get_their_own(void) {
+    reset();
+    conc_run(conc_claim_slots);
+    __atomic_store_n(&g_live_lo, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_live_hi, 0u, __ATOMIC_RELEASE);
+    uint32_t lost = __atomic_load_n(&g_conc_failures, __ATOMIC_RELAXED);
+    CHECK(lost == 0, "every process keeps the slot it claimed");
+    if (lost != 0) {
+        printf("  %u of %u claims lost their slot\n", lost, CONC_THREADS * CONC_CLAIM_ROUNDS);
+    }
+}
+
 /* -------------------------------------------------------------------- main */
 
 /* Initialise the IPC layer and the peer's endpoint once, then run every case in
@@ -775,6 +954,11 @@ int main(void) {
         {"K13 an unanswered call reports EMPTY", test_an_unanswered_call_reports_empty_not_success},
         {"K14 notify passes the transport result through",
          test_notify_passes_the_transport_result_through},
+        {"K18 ids issued concurrently are unique", test_ids_issued_concurrently_are_unique},
+        {"K19 threads sharing a pending ring lose no reply",
+         test_threads_sharing_a_pending_ring_lose_no_reply},
+        {"K20 processes claiming slots at once each get their own",
+         test_processes_claiming_slots_at_once_each_get_their_own},
     };
 
     ipc_init();

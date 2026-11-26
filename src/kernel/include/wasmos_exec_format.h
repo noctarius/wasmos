@@ -17,8 +17,8 @@
  * as NOT a WAP.  That downgrades the classify() in pm_resolve_spawn_target from
  * WAP to NONE and fails broker-delegated spawns with
  * WASMOS_ERR_PROC_SPAWN_BROKER_PLAN, rather than rejecting the package. */
-#define WASMOS_EXEC_APP_VERSION 10u
-#define WASMOS_EXEC_APP_HEADER_SIZE 56u
+#define WASMOS_EXEC_APP_VERSION 11u
+#define WASMOS_EXEC_APP_HEADER_SIZE 60u
 
 typedef enum {
     WASMOS_EXEC_FORMAT_NONE = 0,   /* nothing claimed it; not spawnable */

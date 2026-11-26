@@ -9,7 +9,12 @@
 #include "subsystem_registry.h"
 #include "wasmos_app.h"
 #include "wasmos_exec_format.h"
+#include "monocypher-ed25519.h"
 #include <string.h>
+
+/* The Ed25519 public key packages are signed with, generated from the build's
+ * signing seed (make_wasmos_app --pubkey-c; WASMOS_SIGNING_KEY in Kconfig). */
+extern const uint8_t wasmos_image_signing_pubkey[32];
 
 /*
  * WASMOS-APP parsing is kept separate from process-manager policy so the binary
@@ -45,6 +50,9 @@ typedef struct __attribute__((packed)) {
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
     /* Declared register windows, written after the driver matches. */
     uint32_t region_count;
+    /* 0 for an unsigned package, else WASMOS_APP_SIGNATURE_LEN: the signature that
+     * ends the package, over every byte before it, this header included. */
+    uint32_t signature_size;
 } wasmos_app_header_t;
 
 /* Dependency record, followed by name_len raw name bytes with no terminator. */
@@ -532,6 +540,21 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         off += compiled_size;
     }
 
+    /* Version 11: an optional signature, which must be exactly the last bytes of
+     * the blob, so a signed package carries no byte its signature does not cover.
+     * An unsigned package's trailing bytes are not read, as before. */
+    const uint8_t* signature = 0;
+    uint32_t signed_size = 0;
+    if (hdr->signature_size != 0u) {
+        if (hdr->signature_size != WASMOS_APP_SIGNATURE_LEN ||
+            check_bounds(off, WASMOS_APP_SIGNATURE_LEN, blob_size) != 0 ||
+            off + WASMOS_APP_SIGNATURE_LEN != blob_size) {
+            return -1;
+        }
+        signature = &blob[off];
+        signed_size = off;
+    }
+
     out_desc->blob = blob;
     out_desc->blob_size = blob_size;
     out_desc->flags = flags;
@@ -544,6 +567,8 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->wasm_size = wasm_size;
     out_desc->compiled_bytes = compiled_bytes;
     out_desc->compiled_size = compiled_size;
+    out_desc->signature = signature;
+    out_desc->signed_size = signed_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
     return 0;
@@ -657,8 +682,32 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
  * a zero owner context, a name or entry that does not fit, a refused capability, an unresolvable
  * subsystem, or a failed start hook.  On failure the instance is left inactive, but capabilities
  * already granted to the context are NOT withdrawn. */
+int wasmos_app_signature_valid(const wasmos_app_desc_t* desc) {
+    if (!desc || !desc->signature || !desc->blob || desc->signed_size == 0u) {
+        return 0;
+    }
+    return crypto_ed25519_check(
+               desc->signature, wasmos_image_signing_pubkey, desc->blob, desc->signed_size) == 0
+               ? 1
+               : 0;
+}
+
+/* 1 when the package asks for any capability beyond ipc.basic, which is the only
+ * one granted without regard to signature or requester. */
+static int wasmos_app_wants_privilege(const wasmos_app_desc_t* desc) {
+    static const char basic[] = "ipc.basic";
+    for (uint32_t i = 0; i < desc->cap_count; ++i) {
+        if (desc->caps[i].name_len != sizeof(basic) - 1u ||
+            memcmp(desc->caps[i].name, basic, sizeof(basic) - 1u) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
-                     uint32_t owner_context_id, const uint32_t* init_argv, uint32_t init_argc) {
+                     uint32_t owner_context_id, uint32_t requester_cap_mask,
+                     const uint32_t* init_argv, uint32_t init_argc) {
     if (!instance || !desc || owner_context_id == 0) {
         return -1;
     }
@@ -669,6 +718,13 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
         return -1;
     }
 
+    wasmos_app_grant_ctx_t grant_ctx = {
+        .image_signed =
+            (uint8_t)(wasmos_app_wants_privilege(desc) ? wasmos_app_signature_valid(desc) : 0),
+        .requester_cap_mask = requester_cap_mask,
+        .image_name = desc->name,
+        .image_name_len = desc->name_len,
+    };
     for (uint32_t i = 0; i < desc->cap_count; ++i) {
         if (!g_capability_granter) {
             klog_write("[wasmos-app] capability granter missing\n");
@@ -677,7 +733,8 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
         if (g_capability_granter(owner_context_id,
                                  desc->caps[i].name,
                                  desc->caps[i].name_len,
-                                 desc->caps[i].flags) != 0) {
+                                 desc->caps[i].flags,
+                                 &grant_ctx) != 0) {
             klog_write("[wasmos-app] capability grant failed\n");
             return -1;
         }

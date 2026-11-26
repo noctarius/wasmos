@@ -8,7 +8,8 @@
 #include "string.h"
 #include "sync/spinlock.h"
 
-#define CAP_ALL_MASK ((1u << 12) - 1u)
+/* Every kind's bit: kind_to_mask gives kind k bit k. */
+#define CAP_ALL_MASK ((1u << CAPABILITY_KIND_COUNT) - 1u)
 #define CAP_PAGE_SIZE 0x1000u
 
 typedef struct {
@@ -226,6 +227,50 @@ int capability_has(uint32_t context_id, capability_kind_t kind) {
         return 0;
     }
     return (ctx->mask & mask) != 0;
+}
+
+uint32_t capability_mask_of(uint32_t context_id) {
+    capability_context_state_t snap;
+    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
+    return ctx ? ctx->mask : 0u;
+}
+
+/* The kinds that act on a request -- whatever the holder is asked to do, with
+ * the arguments it is started with -- rather than on hardware within bounds the
+ * signed manifest or a spawn profile fixes.  Only these follow the requester
+ * (capability_manifest_grant_check). */
+static int capability_kind_acts_for_requester(capability_kind_t kind) {
+    switch (kind) {
+    case CAP_SYSTEM_CONTROL:
+    case CAP_SUBSYSTEM_REGISTER:
+    case CAP_SVC_CLASS_REGISTER:
+    case CAP_CONSOLE_OWNER:
+    case CAP_SPAWN_GRANT:
+    case CAP_SVC_CONTROL:
+    case CAP_PCI_CONFIG:
+    case CAP_RTC_EFI:
+    case CAP_INVENTORY_DEVICE:
+    case CAP_INVENTORY_STORAGE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+int capability_manifest_grant_check(capability_kind_t kind, int image_signed,
+                                    uint32_t requester_mask) {
+    uint32_t mask = kind_to_mask(kind);
+    if (mask == 0u) {
+        return CAPABILITY_GRANT_UNKNOWN;
+    }
+    if (!image_signed) {
+        return CAPABILITY_GRANT_UNSIGNED;
+    }
+    if (capability_kind_acts_for_requester(kind) && (requester_mask & mask) == 0u &&
+        (requester_mask & kind_to_mask(CAP_SPAWN_GRANT)) == 0u) {
+        return CAPABILITY_GRANT_REQUESTER;
+    }
+    return CAPABILITY_GRANT_OK;
 }
 
 /* 1 once the context has received at least one grant (or is the kernel context),

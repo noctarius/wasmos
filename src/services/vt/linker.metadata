@@ -38,3 +38,15 @@ flags = 0
 [[capabilities]]
 name = "console.owner"
 flags = 0
+
+# The vt spawns the shell (cli) for each console slot past the first. A process
+# may start a package holding an authority capability only if it holds that
+# capability itself (or spawn.grant), so the vt holds the shell's two
+# (docs/architecture/10-capability-and-policy.md, "Signed Packages").
+[[capabilities]]
+name = "system.control"
+flags = 0
+
+[[capabilities]]
+name = "svc.control"
+flags = 0

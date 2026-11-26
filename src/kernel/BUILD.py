@@ -247,14 +247,16 @@ def build(b):
 
     core = [*target["head"], *CORE, *target["sources"]]
     if warp:
-        objs = kernel.compile(b.srcs(*core))
+        objs = kernel.compile(b.srcs(*core), flags=b.exports["monocypher"]["include"])
         kwarp = b.toolchain("kernel-warp")
         objs += kwarp.compile(b.srcs(*WARP_GLUE))
         objs += kwarp.compile([b.root / "libs/warp" / s for s in WARP_LIB])
     else:
         wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
         wasm3_lib = ["-Wno-unused-variable"]
-        objs = kernel.compile(b.srcs(*core), flags=wasm3_inc)
+        objs = kernel.compile(
+            b.srcs(*core), flags=wasm3_inc + b.exports["monocypher"]["include"]
+        )
         objs += kernel.compile(b.srcs(*WASM3_GLUE_KERNEL), flags=wasm3_inc)
         objs += kernel.compile(b.srcs(*WASM3_GLUE), flags=wasm3_inc + wasm3_lib)
         objs += kernel.compile(b.srcs(*WASM3_SHIM), flags=wasm3_inc)
@@ -262,6 +264,15 @@ def build(b):
             [b.root / "libs/wasm3/source" / s for s in WASM3_LIB],
             flags=wasm3_inc + wasm3_lib,
         )
+
+    # Ed25519 (libs/monocypher) and the build's public key: the kernel checks
+    # package signatures with them (wasmos_app_signature_valid).
+    mono = b.exports["monocypher"]
+    objs += kernel.compile(mono["sources"], flags=mono["include"])
+    objs += kernel.compile(
+        [b.exports["signing.pubkey_c"]],
+        obj_names={b.exports["signing.pubkey_c"]: "wasmos_signing_pubkey.o"},
+    )
 
     # Index the other runtime's first-party glue, with the flags a tree of that
     # runtime compiles it with, so one lint pass covers both runtimes.

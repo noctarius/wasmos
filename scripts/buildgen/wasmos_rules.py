@@ -54,12 +54,14 @@ def _manifest_wants_aot(manifest: Path) -> bool:
         return False
 
 
-def pack(b, name, image, manifest, aot=None):
+def pack(b, name, image, manifest, aot=None, sign=True):
     """Pack a module image (.wasm or native .elf) into <name>.wap.
 
     Under WARP, a wasm module whose manifest says `aot = true` is compiled
     ahead of time by warp_aot and the .warpbin is bundled next to the bytecode.
-    `aot=False` forces the plain path (native images are never AOT-compiled)."""
+    `aot=False` forces the plain path (native images are never AOT-compiled).
+    The package is signed with the build's key unless `sign=False`, which only
+    a test of the signature policy wants."""
     sdk = b.exports["sdk"]
     manifest = Path(manifest)
     b.regen_on(manifest)  # `aot = true` is read at generation time
@@ -80,6 +82,12 @@ def pack(b, name, image, manifest, aot=None):
         )
         argv += ["--compiled", warpbin]
         implicit.append(warpbin)
+    # The kernel grants a privileged capability only to a package signed with
+    # the build's key (docs/architecture/10-capability-and-policy.md).
+    if sign:
+        seed = b.exports["signing.seed"]
+        argv += ["--sign", seed]
+        implicit.append(seed)
     argv += ["--out", wap]
     b.command([wap], argv, inputs=[image], implicit=implicit, description=f"PACK {wap}")
     b.alias("modules", wap)
@@ -87,7 +95,16 @@ def pack(b, name, image, manifest, aot=None):
 
 
 def guest(
-    b, name, sources, manifest=None, lang="c", flags=(), wasm=None, aot=None, cxx=False
+    b,
+    name,
+    sources,
+    manifest=None,
+    lang="c",
+    flags=(),
+    wasm=None,
+    aot=None,
+    cxx=False,
+    libs=(),
 ):
     """Build a guest module with the staged SDK and pack it into <name>.wap.
 
@@ -95,8 +112,10 @@ def guest(
     [link] section sizes the module, so it is an input. C sources compile one
     object each with an exact header depfile and link in source order (the
     order is part of the image); other languages are a single driver call
-    whose inputs are the listed sources. Returns the .wap path, or None when
-    the language is disabled or its toolchain is missing."""
+    whose inputs are the listed sources. `libs` are link inputs for C modules
+    (e.g. "-lmonocypher" for an SDK library), placed after the objects.
+    Returns the .wap path, or None when the language is disabled or its
+    toolchain is missing."""
     if not lang_available(b, lang):
         return None
     sdk = b.exports["sdk"]
@@ -130,7 +149,15 @@ def guest(
             b.index(src, [wasm32.cxx if cxx else wasm32.cc, *wasm32.cflags, *cflags])
         b.command(
             [wasm],
-            head + ["--emit-wasm", f"--wasmos-manifest={manifest}", *objs, "-o", wasm],
+            head
+            + [
+                "--emit-wasm",
+                f"--wasmos-manifest={manifest}",
+                *objs,
+                *libs,
+                "-o",
+                wasm,
+            ],
             inputs=objs,
             implicit=deps,
             description=f"LINK[guest] {wasm}",

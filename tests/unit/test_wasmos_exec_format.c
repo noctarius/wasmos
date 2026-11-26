@@ -53,6 +53,7 @@ typedef struct __attribute__((packed)) {
     uint32_t compiled_size;
     char subsystem_tag[8];
     uint32_t region_count;
+    uint32_t signature_size;
 } test_wap_header_t;
 
 typedef struct __attribute__((packed)) {

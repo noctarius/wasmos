@@ -5,7 +5,7 @@ import struct
 WASM_MAGIC = b"\0asm"
 WASM_VERSION = 1
 WASMOS_MAGIC = b"WASMOSAP"
-WASMOS_APP_VERSION = 10
+WASMOS_APP_VERSION = 11
 SUBSYSTEM_TAG_LEN = 8
 # Fixed-size record with no trailing name: wasmos_region_entry_t in
 # scripts/make_wasmos_app.c.
@@ -76,6 +76,7 @@ def parse_wasmos_app(data):
     compiled_size, off = read_u32_le(data, off)
     off += SUBSYSTEM_TAG_LEN
     region_count, off = read_u32_le(data, off)
+    signature_size, off = read_u32_le(data, off)
     if version != WASMOS_APP_VERSION or header_size != off:
         raise ReadError(
             f"unsupported WASMOS-APP version {version} (header_size {header_size}); "
@@ -111,6 +112,7 @@ def parse_wasmos_app(data):
         "entry": entry_raw.decode("utf-8", errors="replace"),
         "wasm_offset": wasm_off,
         "wasm_size": wasm_size,
+        "signed": signature_size != 0,
     }
 
 
@@ -406,6 +408,7 @@ def main():
             print(f"entry: {app_info['entry']}")
             print(f"flags: 0x{app_info['flags']:08X}")
             print(f"wasm_size: {app_info['wasm_size']}")
+            print(f"signed: {'yes' if app_info['signed'] else 'no'}")
             print("")
         print("WASM")
         if info["type_count"] is not None:

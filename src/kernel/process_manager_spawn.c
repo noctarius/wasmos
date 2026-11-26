@@ -393,8 +393,12 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
         /* TODO: a native module runs its whole entry inside the start hook, so
          * a native driver that returns a non-zero status after running is
          * reported as START_FAILED here instead of EXITED with its status. */
-        if (wasmos_app_start(
-                &state->app, &desc, process->context_id, init_args, state->entry_argc) != 0) {
+        if (wasmos_app_start(&state->app,
+                             &desc,
+                             process->context_id,
+                             state->requester_cap_mask,
+                             init_args,
+                             state->entry_argc) != 0) {
             klog_write("[pm] app start failed\n");
             process_set_exit(process, -1, PROC_EXIT_REASON_START_FAILED);
             pm_slot_reset(state);
@@ -423,6 +427,35 @@ static process_run_result_t pm_app_entry(process_t* process, void* arg) {
     preempt_enable();
 #endif
     return PROCESS_RUN_EXITED;
+}
+
+/* What the process asking for a spawn holds, captured when it asks: the child's
+ * manifest capabilities are decided against it (capability_manifest_grant_check)
+ * when the child starts, by which time the requester may have exited.
+ *
+ * A process this manager started from an image holds what its manifest was
+ * granted, and has an app slot for as long as it runs.  A process without one is
+ * the kernel's own -- pid 0, the init process that spawns the supervisor, a
+ * self-test -- and holds every capability, as context 0 does.  The slot, not the
+ * runtime tag, is the test, because only this manager creates slots while a
+ * subsystem broker could register a tag of its choosing.  A requester without a
+ * live process holds nothing. */
+static uint32_t pm_requester_cap_mask(uint32_t parent_pid) {
+    if (parent_pid == 0u) {
+        return capability_mask_of(IPC_CONTEXT_KERNEL);
+    }
+    process_t* requester = process_get(parent_pid);
+    if (!requester) {
+        return 0u;
+    }
+    list_iter_t it;
+    for (pm_app_state_t* app = (pm_app_state_t*)list_first(&g_pm.apps, &it); app;
+         app = (pm_app_state_t*)list_next(&it)) {
+        if (app->in_use && app->pid == parent_pid) {
+            return capability_mask_of(requester->context_id);
+        }
+    }
+    return capability_mask_of(IPC_CONTEXT_KERNEL);
 }
 
 static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t* out_pid) {
@@ -467,6 +500,7 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t*
     slot->blob = ptr_cast(uint8_t, mod->base);
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
+    slot->requester_cap_mask = pm_requester_cap_mask(parent_pid);
     slot->in_use = 1;
     if (pm_apply_entry_bindings(slot, &desc) != 0) {
         klog_write("[pm] spawn_module bindings failed: ");
@@ -606,6 +640,7 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t* blob, uint32
     }
 
     slot->started = 0;
+    slot->requester_cap_mask = pm_requester_cap_mask(parent_pid);
     slot->in_use = 1;
     slot->requested_tty = requested_tty;
     slot->spawn_cli_args_len = 0;

@@ -81,6 +81,36 @@ int capability_grant_name(uint32_t context_id, const uint8_t* name, uint32_t nam
  * allowlist. Returns 0 for an unknown context. */
 int capability_has(uint32_t context_id, capability_kind_t kind);
 
+/* Every capability the context holds, one bit per kind (bit k for kind k); 0 for
+ * a context with no record.  The kernel context (0) holds every bit.  A snapshot:
+ * grants only accumulate, so it can only have grown since. */
+uint32_t capability_mask_of(uint32_t context_id);
+
+/* Whether a package's manifest may be granted `kind`, which is the image policy
+ * of docs/architecture/10-capability-and-policy.md ("Signed Packages"):
+ *   - the package must carry a valid signature by the build's key, or any
+ *     process could write an image declaring the capability and spawn it;
+ *   - for a kind that acts on requests (system.control, subsystem.register,
+ *     svc.class, console.owner, spawn.grant, svc.control, pci.config, rtc.efi,
+ *     inventory.device, inventory.storage), the process that requested the
+ *     spawn must hold `kind` itself, or hold spawn.grant, whose holders
+ *     (device-manager, the supervisor) spawn what others need; otherwise a
+ *     process could spawn a privileged image as a deputy and steer it with
+ *     arguments.  The hardware kinds (io.port, mmio.map, irq.route,
+ *     dma.buffer) reach only what the signed manifest or a spawn profile --
+ *     which only a spawn.grant holder can attach -- bounds, so the signature
+ *     is their whole test.
+ * requester_mask is capability_mask_of the requester when it asked (every bit for
+ * a spawn the kernel made).  ipc.basic is not a kind and is not asked about. */
+typedef enum {
+    CAPABILITY_GRANT_OK = 0,
+    CAPABILITY_GRANT_UNKNOWN = 1,   /* not a capability kind */
+    CAPABILITY_GRANT_UNSIGNED = 2,  /* the package is not signed with the build's key */
+    CAPABILITY_GRANT_REQUESTER = 3, /* the requester holds neither the kind nor spawn.grant */
+} capability_grant_check_t;
+int capability_manifest_grant_check(capability_kind_t kind, int image_signed,
+                                    uint32_t requester_mask);
+
 /* Drops context_id's record -- grants and spawn profile -- when its process is
  * reaped, so records do not outlive their processes and every later lookup
  * scans only live contexts. A context without a record is a no-op. */

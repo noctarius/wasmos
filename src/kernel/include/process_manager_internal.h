@@ -61,6 +61,9 @@ typedef struct {
     uint64_t owned_blob_storage_phys;
     uint32_t owned_blob_storage_pages;
     uint8_t started; /* the child's first entry call has run */
+    /* capability_mask_of the process that requested this spawn, taken when it
+     * asked; the child's manifest capabilities are granted against it. */
+    uint32_t requester_cap_mask;
     /* WASM entry signature, part of the module ABI: argc is always 4 and every
      * arg is 0. Real startup values reach the child through its spawn-info
      * buffer and svc_lookup, not through these. */

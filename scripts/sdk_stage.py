@@ -111,6 +111,9 @@ def main() -> int:
         copy(h, inc / "wasmos")
     for h in (src / "abi/generated/c").glob("*.h"):
         copy(h, inc / "wasmos/abi")
+    # Monocypher's headers, for apps linking -lmonocypher.
+    copy(src / "libs/monocypher/src/monocypher.h", inc)
+    copy(src / "libs/monocypher/src/optional/monocypher-ed25519.h", inc)
 
     for h in inc.rglob("*.h"):
         text = h.read_text()

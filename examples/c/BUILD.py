@@ -79,6 +79,17 @@ def build(b):
     )
     install(b, "apps/atomics_smoke.wap", wap)
 
+    # An app using the SDK's Monocypher library.
+    wap = guest(
+        b,
+        "crypto_smoke",
+        [b.src("crypto_smoke/crypto_smoke.c")],
+        manifest=b.src("crypto_smoke/linker.metadata"),
+        flags=b.exports["monocypher"]["include"],
+        libs=["-lmonocypher"],
+    )
+    install(b, "apps/crypto_smoke.wap", wap)
+
     # priv_probe's bytecode packed two more ways for the signature policy
     # (tests/test_signed_packages.py): without a signature, and signed and then
     # altered by one byte in its payload, so the signature no longer matches.

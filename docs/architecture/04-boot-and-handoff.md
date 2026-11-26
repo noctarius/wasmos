@@ -145,7 +145,7 @@ The bootloader handles this with a retry loop:
 ```
 loop:
   GetMemoryMap(&mmap_size, mmap_buf, &map_key, ...)
-    → if EFI_BUFFER_TOO_SMALL: grow mmap_buf and retry
+    → if EFI_BUFFER_TOO_SMALL: free mmap_buf, allocate a larger one, retry
   fill boot_info_t (no UEFI allocations in this window)
   ExitBootServices(image, map_key)
     → if EFI_SUCCESS: done
@@ -154,9 +154,12 @@ loop:
 ```
 
 The framebuffer snapshot is captured before this loop so no GOP calls occur
-inside it. The `boot_info_t` blob is allocated before the loop on the first
-pass; if the loop retries, the existing allocation is reused (no
-`AllocatePages` inside the retry window).
+inside it. The `boot_info_t` run (boot_info, map copy, initfs, module table) is
+allocated on the first pass and reused while it is large enough; a map that
+outgrows it replaces it with a larger run. Either buffer that is replaced is
+freed first (`src/boot/efi_loader_alloc.h`), because anything still allocated as
+`EFI_LOADER_DATA` at `ExitBootServices` stays reserved for the kernel's lifetime.
+The last map buffer is the one exception: freeing it would invalidate the key.
 
 ### Runtime Services Handover (Kconfig `WASMOS_RTC_EFI`)
 

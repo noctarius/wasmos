@@ -410,10 +410,12 @@ Source: `architecture/06-memory-management.md`,
   passes live in `src/boot/efi_connect.h` and the GUIDs in `src/boot/uefi.h`;
   covered by `tests/unit/test_efi_connect.c`, whose fake firmware publishes
   handles under the spec GUIDs.
-- [ ] [BUG][P1] Free the previous buffer on the `EFI_BUFFER_TOO_SMALL` memory-map retry
-  and on `boot_capacity` growth. Both paths reallocate without releasing, so the
-  pages leak as `EFI_LOADER_DATA` and the kernel never reclaims them
-  (`src/boot/boot.c:617`, `:861`).
+- [x] [BUG][P1] Free the previous buffer on the `EFI_BUFFER_TOO_SMALL` memory-map retry
+  and on `boot_capacity` growth. Both paths reallocated without releasing, so the
+  pages leaked as `EFI_LOADER_DATA` and the kernel never reclaimed them. Both
+  now go through `src/boot/efi_loader_alloc.h`; covered by
+  `tests/unit/test_efi_loader_alloc.c`, whose fake firmware counts live
+  allocations across retries.
 
 
 - [x] [BUG][P1] Free the two ring-3 trampoline pages at

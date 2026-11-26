@@ -16,6 +16,16 @@
 #define EFI_SUCCESS 0
 #define EFI_NOT_FOUND ((EFI_STATUS)0x800000000000000EULL)
 #define EFI_ERROR(x) ((x) != EFI_SUCCESS)
+#define EFI_INVALID_PARAMETER ((EFI_STATUS)0x8000000000000002ULL)
+#define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
+
+/* AllocatePages Type values: ANY_PAGES lets the firmware choose, ADDRESS demands
+ * the exact base in *Memory and fails if it is taken. */
+#define EFI_ALLOCATE_ANY_PAGES 0
+#define EFI_ALLOCATE_ADDRESS 2
+/* The EFI_MEMORY_TYPE the loader tags every allocation with, so the kernel can
+ * tell its own handoff pages apart from firmware data. */
+#define EFI_LOADER_DATA 2
 
 typedef uint64_t EFI_STATUS;
 /* Opaque firmware object reference (EFI_HANDLE).  Never dereferenced by the

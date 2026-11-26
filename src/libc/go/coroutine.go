@@ -116,6 +116,10 @@ var goAsyncAppStart func() *Future
 var goAsyncAppCompletion *Future
 var goAsyncAppStarted bool
 
+// Every bodyless func below needs //go:linkname as well as //go:extern:
+// //go:extern alone binds a VARIABLE of that name, which leaves the call site's
+// symbol undefined at link time.
+
 //go:extern wasmos_wasm_runtime_init
 //go:linkname wasmRuntimeInit wasmos_wasm_runtime_init
 func wasmRuntimeInit(*Runtime)
@@ -157,16 +161,9 @@ func wasmPromiseResolve(*Promise, uintptr) bool
 func wasmPromiseReject(*Promise, int32) bool
 
 //go:extern wasmos_future_then
+//go:linkname wasmFutureThen wasmos_future_then
 func wasmFutureThen(*Runtime, *Future, *Continuation, Callback, Callback, unsafe.Pointer) *Future
 
-// A bodyless func needs //go:linkname as well as //go:extern: //go:extern alone
-// binds a VARIABLE of that name, which leaves the call site's symbol undefined
-// at link time.
-//
-// FIXME(go-extern-linkname): wasmFutureThen and the wasmIPCFuture* declarations
-// below carry //go:extern only, so Future.Then and the IPCFuture methods hit
-// that same undefined-symbol failure the moment a Go guest links them.
-//
 //go:extern wasmos_future_race
 //go:linkname wasmFutureRace wasmos_future_race
 func wasmFutureRace(*Runtime, *FutureGroup, unsafe.Pointer, uintptr, *Continuation) *Future
@@ -184,15 +181,19 @@ func wasmEventLoopInit(*EventLoop, int32, int32)
 func wasmEventLoopPoll(*EventLoop, int32) int32
 
 //go:extern wasmos_sys_wasm_ipc_future_init
+//go:linkname wasmIPCFutureInit wasmos_sys_wasm_ipc_future_init
 func wasmIPCFutureInit(*IPCFuture, IPCReplyStatus, unsafe.Pointer)
 
 //go:extern wasmos_sys_wasm_ipc_future_send
+//go:linkname wasmIPCFutureSend wasmos_sys_wasm_ipc_future_send
 func wasmIPCFutureSend(*EventLoop, *IPCFuture, int32, int32, int32, int32, int32, int32, int32, *int32) *Future
 
 //go:extern wasmos_sys_wasm_ipc_future_cancel
+//go:linkname wasmIPCFutureCancel wasmos_sys_wasm_ipc_future_cancel
 func wasmIPCFutureCancel(*IPCFuture, int32)
 
 //go:extern wasmos_sys_wasm_ipc_future_reply
+//go:linkname wasmIPCFutureReply wasmos_sys_wasm_ipc_future_reply
 func wasmIPCFutureReply(*IPCFuture) *IPCFutureReply
 
 //go:extern wasmos_sys_wasm_fs_request_init
@@ -415,10 +416,6 @@ func (f *Future) Await() (value uintptr, status int32) {
 // The callbacks never run inline: they are queued on the runtime -- at once if
 // the future has already settled -- and dispatched from Run/RunBudget. A Go
 // callback goes through ThenGo instead.
-//
-// FIXME(go-extern-linkname): the wasmos_future_then declaration this calls
-// carries //go:extern without //go:linkname, so linking a guest that uses Then
-// fails on an undefined symbol.
 func (f *Future) Then(runtime *Runtime, continuation *Continuation, success Callback, failure Callback, user unsafe.Pointer) *Future {
 	if runtime == nil || continuation == nil {
 		return nil
@@ -577,10 +574,6 @@ func (loop *EventLoop) Poll(budget int32) int32 {
 //
 // It also zeroes the record and re-arms its future, so the same IPCFuture can
 // serve another round trip. A zero replyStatus accepts any reply.
-//
-// FIXME(go-extern-linkname): the wasmos_sys_wasm_ipc_future_* declarations this
-// and the other IPCFuture methods call carry //go:extern without //go:linkname,
-// so linking a guest that uses them fails on an undefined symbol.
 func (op *IPCFuture) Init(replyStatus IPCReplyStatus, user unsafe.Pointer) {
 	if op != nil {
 		wasmIPCFutureInit(op, replyStatus, user)

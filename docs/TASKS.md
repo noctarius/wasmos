@@ -979,11 +979,11 @@ tail.
   return the first message arriving on the shared managed reply endpoint; C
   matches both request id and source, AssemblyScript matches request id. A
   context with two requests in flight can be handed the wrong reply.
-- [ ] [BUG][P1] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
-  `wasmIPCFuture*` declarations. Without both, the symbols stay undefined at
-  link, so `Future.Then` and the `IPCFuture` methods fail to link for any Go
-  guest that uses them (`src/libc/go/coroutine.go:113`
-  `FIXME(go-extern-linkname)`).
+- [x] [BUG][P1] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
+  `wasmIPCFuture*` declarations. Without both, the symbols stayed undefined at
+  link, so `Future.Then` and the `IPCFuture` methods failed to link for any Go
+  guest that used them. Covered by `testThenAndIPCFutureReachC` in
+  `tests/unit/test_wasm_coroutine.go`, the first caller of each.
 - [ ] [BUG][P1] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
   boundary with packed `abi/errors.yaml` codes: `PROC_IPC_ERROR` arg1 in
   `src/kernel/process_manager_spawn.c`, the PM spawn retry match in

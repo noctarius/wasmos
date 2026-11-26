@@ -491,6 +491,57 @@ func testCallbackRegistryReclaim() int32 {
 	return 0
 }
 
+// ---------------------------------------------------------- C-callback FFI
+
+// Then and the four IPCFuture methods reach C through bodyless declarations.
+//
+// Regression: 2026-11-26-go-extern-linkname -- those five declarations carried
+// //go:extern without //go:linkname, which binds a variable rather than the
+// function, so a guest that called Future.Then or any IPCFuture method failed
+// to link on an undefined symbol. This case is the first caller of each, so the
+// suite itself failed to link.
+func testThenAndIPCFutureReachC() int32 {
+	var rt Runtime
+	rt.Init()
+
+	// Then with no callbacks forwards the source's outcome to its child.
+	var source Future
+	var promise Promise
+	source.Init(&promise)
+	var forward Continuation
+	child := source.Then(&rt, &forward, 0, 0, nil)
+	if child == nil {
+		return 1010
+	}
+	if !promise.Resolve(41) || rt.Run() != 0 {
+		return 1011
+	}
+	if v, s, ok := child.Poll(); !ok || s != 0 || v != 41 {
+		return 1012
+	}
+
+	// An IPCFuture round trip up to the reply: Send goes out through the fake
+	// ipc_send in run_go_test.mjs, Cancel rejects the pending future with the
+	// given status, and Reply is the record's stored reply, zero until one is
+	// dispatched.
+	var loop EventLoop
+	loop.Init(77, 9000)
+	var op IPCFuture
+	op.Init(0, nil)
+	future, requestID := op.Send(&loop, 5, 77, 3, 10, 11, 12, 13)
+	if future == nil || requestID != 9000 {
+		return 1013
+	}
+	op.Cancel(-7)
+	if _, s, ok := future.Poll(); !ok || s != -7 {
+		return 1014
+	}
+	if reply := op.Reply(); reply == nil || reply.RequestID != 0 {
+		return 1015
+	}
+	return 0
+}
+
 //go:wasmexport runTests
 func runTests() int32 {
 	if rc := testFFISmoke(); rc != 0 {
@@ -512,6 +563,9 @@ func runTests() int32 {
 		return rc
 	}
 	if rc := testAll(); rc != 0 {
+		return rc
+	}
+	if rc := testThenAndIPCFutureReachC(); rc != 0 {
 		return rc
 	}
 	return testCallbackRegistryReclaim()

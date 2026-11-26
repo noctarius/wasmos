@@ -29,6 +29,14 @@ const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), {
        at instantiate, not because the tests reach it. */
     spawn_info_buffer: () => 0,
     xfer_buffer_read: () => -1,
+    /* The event loop the IPCFuture case drives builds a select set over its
+       receiver endpoint at init and queues its request through ipc_send. No
+       case polls the loop, so the set is never waited on and a send has no peer
+       to reach: both only have to succeed. */
+    ipc_select_create: () => 1,
+    ipc_select_add: () => 0,
+    ipc_select_destroy: () => 0,
+    ipc_send: () => 0,
   },
 });
 

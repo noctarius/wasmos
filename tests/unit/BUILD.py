@@ -597,6 +597,11 @@ def build(b):
                 "ipc-call",
                 {"wasmos": libc / "zig/wasmos.zig"},
                 unit / "test_ipc_call.zig",
+                # wasmos.zig declares its host calls `extern "wasmos"`; on an ELF
+                # host that names a dynamic library, which Zig accepts only for
+                # PIC. The test exports the symbols itself, so nothing is
+                # loaded at run time.
+                c_flags=["-fPIC"],
                 deps=["wasmos"],
             )
         )

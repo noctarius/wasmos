@@ -22,13 +22,25 @@ const [wasmPath, label] = process.argv.slice(2);
  * (2). Both decoys carry arg0 = -1. ipc_select_one pops into the
  * "last received" slot and fails on an empty queue rather than blocking, so a
  * Call that keeps waiting fails its case instead of hanging the suite.
- * ipc_pending (module wasmos_test) reports what is still queued. */
+ * ipc_pending (module wasmos_test) reports what is still queued.
+ *
+ * ipc_peer_await records the endpoint the reply endpoint awaits and refuses
+ * DEAD, an endpoint with no owner, with WASMOS_NOENT; arg1 = 3 has the server
+ * queue a WASMOS_IPC_HANGUP naming itself in place of an answer.
+ * ipc_call_stats (module wasmos_test) reports, packed, how many requests went
+ * out and how many of those went out before an await on their destination. */
 const SERVER = 5;
 const IMPOSTOR = 6;
+const DEAD = 7;
 const CALL_REPLY_ENDPOINT = 90;
+const WASMOS_NOENT = -4;
+const WASMOS_IPC_HANGUP = 0xff03;
 function fakeMailbox() {
   const queues = new Map();
   let last = new Int32Array(8);
+  let awaited = -1;
+  let sends = 0;
+  let sendsUnawaited = 0;
   const push = (endpoint, type, requestId, source, arg0) => {
     const m = new Int32Array(8);
     m[0] = type;
@@ -41,8 +53,28 @@ function fakeMailbox() {
   };
   return {
     ipc_create_endpoint: () => CALL_REPLY_ENDPOINT,
+    ipc_peer_await: (waiter, endpoint) => {
+      if (endpoint === DEAD) return WASMOS_NOENT;
+      if (waiter === CALL_REPLY_ENDPOINT) awaited = endpoint;
+      return 0;
+    },
+    ipc_call_stats: () => {
+      const stats = sends * 1000 + sendsUnawaited;
+      awaited = -1;
+      sends = 0;
+      sendsUnawaited = 0;
+      return stats;
+    },
     ipc_send: (dest, src, type, requestId, arg0, arg1) => {
+      if (src === CALL_REPLY_ENDPOINT) {
+        sends++;
+        if (awaited !== dest) sendsUnawaited++;
+      }
       if (dest !== SERVER) return 0;
+      if (arg1 === 3) {
+        push(src, WASMOS_IPC_HANGUP, 0, -1, SERVER);
+        return 0;
+      }
       if (arg1 === 1) push(src, type, requestId + 1000, SERVER, -1);
       if (arg1 === 2) push(src, type, requestId, IMPOSTOR, -1);
       push(src, type, requestId, SERVER, arg0 + 1);
@@ -84,8 +116,12 @@ const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), {
     ipc_send: mailbox.ipc_send,
     ipc_select_one: mailbox.ipc_select_one,
     ipc_last_field: mailbox.ipc_last_field,
+    ipc_peer_await: mailbox.ipc_peer_await,
   },
-  wasmos_test: { ipc_pending: mailbox.ipc_pending },
+  wasmos_test: {
+    ipc_pending: mailbox.ipc_pending,
+    ipc_call_stats: mailbox.ipc_call_stats,
+  },
 });
 
 /* TinyGo initialises package globals in _initialize; calling an export before

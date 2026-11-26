@@ -28,6 +28,9 @@ const IPC_FIELD_SOURCE: i32 = 4;
 const IPC_FIELD_DESTINATION: i32 = 5;
 const IPC_FIELD_ARG2: i32 = 6;
 const IPC_FIELD_ARG3: i32 = 7;
+/// WASMOS_IPC_HANGUP (abi/opcodes.yaml) and WASMOS_NOENT (abi/errors.yaml).
+const WASMOS_IPC_HANGUP: i32 = 0xFF03;
+const WASMOS_NOENT: i32 = -4;
 
 // `whence` values for fs.File.seek: the new offset is taken from the start of
 // the file, from the current offset, or from the file size. The FS backend
@@ -66,6 +69,7 @@ extern "wasmos" fn ipc_send(
 ) callconv(.c) i32;
 extern "wasmos" fn ipc_select_one(endpoint: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_last_field(field: i32) callconv(.c) i32;
+extern "wasmos" fn ipc_peer_await(waiter: i32, awaited: i32) callconv(.c) i32;
 extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 extern "wasmos" fn xfer_buffer_size() callconv(.c) i32;
 // Object/owner/borrow xfer ABI (owner-push): read/write name the object by
@@ -134,6 +138,9 @@ pub const Error = error{
     /// registered, no endpoint could be created, or no transfer buffer could be
     /// acquired.
     NotAvailable,
+    /// The server of an IPC call has no owner, or its owner ended before
+    /// answering (ipc.call).
+    PeerGone,
     /// Declared for parity with the other language ports; no function in this
     /// module returns it.
     Unsupported,
@@ -537,10 +544,19 @@ pub const ipc = struct {
     /// call's request id AND sent from `server`, the rule wasmos_ipc_call
     /// applies. Every other message that lands there meanwhile is consumed and
     /// DISCARDED, so a component that must not lose those uses
-    /// coroutine.EventLoop instead. There is no timeout: a server that lives and
-    /// never answers blocks the caller indefinitely.
+    /// coroutine.EventLoop instead.
+    ///
+    /// Before sending, call registers an await on `server` (ipc_peer_await), so
+    /// the kernel reports server's end on the reply endpoint even if it never
+    /// answered; that hangup, or a server with no owner to begin with, returns
+    /// Error.PeerGone (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+    /// There is no timeout: a server that lives and never answers blocks the
+    /// caller indefinitely.
     pub fn call(server: i32, msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!Reply {
         const reply_endpoint = try ensureIpcReplyEndpoint();
+        if (ipc_peer_await(reply_endpoint, server) == WASMOS_NOENT) {
+            return Error.PeerGone;
+        }
         const request_id = nextIpcRequestId();
         if (ipc_send(server, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
             return Error.HostCallFailed;
@@ -548,6 +564,11 @@ pub const ipc = struct {
         while (true) {
             if (ipc_select_one(reply_endpoint) < 0) {
                 return Error.HostCallFailed;
+            }
+            if (ipc_last_field(IPC_FIELD_TYPE) == WASMOS_IPC_HANGUP and
+                ipc_last_field(IPC_FIELD_ARG0) == server)
+            {
+                return Error.PeerGone;
             }
             if (ipc_last_field(IPC_FIELD_REQUEST_ID) == request_id and
                 ipc_last_field(IPC_FIELD_SOURCE) == server)

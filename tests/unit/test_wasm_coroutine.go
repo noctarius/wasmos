@@ -547,6 +547,9 @@ func testThenAndIPCFutureReachC() int32 {
 //go:wasmimport wasmos_test ipc_pending
 func ipcPending(endpoint int32) int32
 
+//go:wasmimport wasmos_test ipc_call_stats
+func ipcCallStats() int32
+
 // ipc.Call against the fake mailbox in run_go_test.mjs: server 5 answers with
 // arg0 + 1, and arg1 selects a decoy (arg0 = -1) queued ahead of the answer.
 //
@@ -569,6 +572,37 @@ func testIPCCallMatchesItsReply() int32 {
 		if ipcPending(90) != 0 {
 			return 1120 + scenario
 		}
+	}
+	// Three requests went out, each after an await on server.
+	if stats := ipcCallStats(); stats != 3000 {
+		return 1130
+	}
+	return 0
+}
+
+// ipc.Call against a server that ends: a hangup naming it (arg1 = 3) and an
+// endpoint with no owner (7, refused by ipc_peer_await) both end the call with
+// ErrPeerGone, and the second sends nothing.
+//
+// Regression: 2026-11-26-lang-ipc-call-hangup -- Call never registered
+// ipc_peer_await before sending and never recognised WASMOS_IPC_HANGUP, so a
+// server that died before answering left the caller blocked forever: the kernel
+// owes a hangup only to an endpoint the server had sent to, or to one that
+// registered an await (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+func testIPCCallEndsWhenTheServerEnds() int32 {
+	const server, dead = 5, 7
+	if _, err := ipc.Call(server, 0x10, 1, 3, 0, 0); err != ErrPeerGone {
+		return 1140
+	}
+	if ipcPending(90) != 0 {
+		return 1141
+	}
+	_ = ipcCallStats()
+	if _, err := ipc.Call(dead, 0x10, 1, 0, 0, 0); err != ErrPeerGone {
+		return 1142
+	}
+	if stats := ipcCallStats(); stats != 0 {
+		return 1143
 	}
 	return 0
 }
@@ -600,6 +634,9 @@ func runTests() int32 {
 		return rc
 	}
 	if rc := testIPCCallMatchesItsReply(); rc != 0 {
+		return rc
+	}
+	if rc := testIPCCallEndsWhenTheServerEnds(); rc != 0 {
 		return rc
 	}
 	return testCallbackRegistryReclaim()

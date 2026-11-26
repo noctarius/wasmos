@@ -981,7 +981,10 @@ tail.
   as C does, and discard everything else. Covered by `tests/unit/test_ipc_call.rs`,
   `tests/unit/test_ipc_call.zig` and `testIPCCallMatchesItsReply` in
   `tests/unit/test_wasm_coroutine.go`, each against a fake mailbox that queues a
-  stale or an impostor message ahead of the answer.
+  stale or an impostor message ahead of the answer. Each also registers
+  `ipc_peer_await` on the server before sending and ends with `PeerGone` on
+  `WASMOS_NOENT` or a hangup naming the server, as C does, so a server that dies
+  before answering no longer blocks the caller forever (same tests).
 - [ ] [BUG][P2] Match the reply source in the AssemblyScript `ipc.call` as well. It
   checks the request id only, so a message carrying the right id from another
   endpoint is accepted; C, Go, Rust and Zig also require the source to be the

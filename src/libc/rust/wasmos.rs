@@ -27,6 +27,9 @@ const IPC_FIELD_SOURCE: i32 = 4;
 const IPC_FIELD_DESTINATION: i32 = 5;
 const IPC_FIELD_ARG2: i32 = 6;
 const IPC_FIELD_ARG3: i32 = 7;
+/// WASMOS_IPC_HANGUP (abi/opcodes.yaml) and WASMOS_NOENT (abi/errors.yaml).
+const WASMOS_IPC_HANGUP: i32 = 0xFF03;
+const WASMOS_NOENT: i32 = -4;
 
 // `whence` values for fs::File::seek: the new offset is measured from the start
 // of the file, from the current offset, or from the file size. The FS backend
@@ -67,6 +70,7 @@ unsafe extern "C" {
     ) -> i32;
     fn ipc_select_one(endpoint: i32) -> i32;
     fn ipc_last_field(field: i32) -> i32;
+    fn ipc_peer_await(waiter: i32, awaited: i32) -> i32;
     fn fs_endpoint() -> i32;
     fn xfer_buffer_size() -> i32;
     fn xfer_buffer_acquire(minimum_size: i32) -> i32;
@@ -104,6 +108,9 @@ pub enum Error {
     /// A prerequisite does not exist yet: no FS service has registered, no
     /// endpoint could be created, or no transfer buffer could be acquired.
     NotAvailable,
+    /// The server of an IPC call has no owner, or its owner ended before
+    /// answering (`ipc::call`).
+    PeerGone,
 }
 
 static mut G_FS_REPLY_ENDPOINT: i32 = -1;
@@ -630,9 +637,10 @@ pub mod std {
 /// while a request is outstanding uses `coroutine::EventLoop` instead.
 pub mod ipc {
     use super::{
-        ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_select_one, ipc_send,
-        next_ipc_request_id, Error, IPC_FIELD_ARG0, IPC_FIELD_ARG1, IPC_FIELD_ARG2, IPC_FIELD_ARG3,
-        IPC_FIELD_DESTINATION, IPC_FIELD_REQUEST_ID, IPC_FIELD_SOURCE, IPC_FIELD_TYPE,
+        ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_peer_await,
+        ipc_select_one, ipc_send, next_ipc_request_id, Error, IPC_FIELD_ARG0, IPC_FIELD_ARG1,
+        IPC_FIELD_ARG2, IPC_FIELD_ARG3, IPC_FIELD_DESTINATION, IPC_FIELD_REQUEST_ID,
+        IPC_FIELD_SOURCE, IPC_FIELD_TYPE, WASMOS_IPC_HANGUP, WASMOS_NOENT,
     };
 
     /// A received message, copied out of the caller's last-received slot. The
@@ -670,8 +678,15 @@ pub mod ipc {
     /// call's request id AND sent from `server`, the rule `wasmos_ipc_call`
     /// applies. Every other message that lands there meanwhile is consumed and
     /// DISCARDED, so a component that must not lose those uses the coroutine
-    /// event loop instead. There is no timeout: a server that lives and never
-    /// answers blocks the caller indefinitely.
+    /// event loop instead.
+    ///
+    /// Before sending, `call` registers an await on `server`
+    /// (`ipc_peer_await`), so the kernel reports server's end on the reply
+    /// endpoint even if it never answered; that hangup, or a server with no
+    /// owner to begin with, returns `Error::PeerGone`
+    /// (docs/architecture/09-process-and-ipc.md, "Peer Hangup"). There is no
+    /// timeout: a server that lives and never answers blocks the caller
+    /// indefinitely.
     pub fn call(
         server: i32,
         msg_type: i32,
@@ -681,6 +696,9 @@ pub mod ipc {
         arg3: i32,
     ) -> Result<Reply, Error> {
         let reply_ep = ensure_ipc_reply_endpoint()?;
+        if unsafe { ipc_peer_await(reply_ep, server) } == WASMOS_NOENT {
+            return Err(Error::PeerGone);
+        }
         let request_id = next_ipc_request_id();
         if unsafe {
             ipc_send(
@@ -693,6 +711,11 @@ pub mod ipc {
         loop {
             if unsafe { ipc_select_one(reply_ep) } < 0 {
                 return Err(Error::HostCallFailed);
+            }
+            if unsafe { ipc_last_field(IPC_FIELD_TYPE) } == WASMOS_IPC_HANGUP
+                && unsafe { ipc_last_field(IPC_FIELD_ARG0) } == server
+            {
+                return Err(Error::PeerGone);
             }
             if unsafe { ipc_last_field(IPC_FIELD_REQUEST_ID) } == request_id
                 && unsafe { ipc_last_field(IPC_FIELD_SOURCE) } == server

@@ -26,6 +26,10 @@ const (
 	ipcFieldDestination int32 = 5
 	ipcFieldArg2        int32 = 6
 	ipcFieldArg3        int32 = 7
+
+	// WASMOS_IPC_HANGUP (abi/opcodes.yaml) and WASMOS_NOENT (abi/errors.yaml).
+	wasmosIPCHangup int32 = 0xFF03
+	wasmosNoEnt     int32 = -4
 )
 
 // SeekSet, SeekCur and SeekEnd are the whence values for File.Seek: the new
@@ -69,6 +73,8 @@ type Error int32
 //	ErrInvalidArgument an empty path, or a ReadLine buffer under two bytes
 //	ErrNameTooLong     the path plus its NUL exceeds the 256-byte staging buffer
 //	ErrNotAvailable    no FS service, no endpoint, or no transfer buffer
+//	ErrPeerGone        the server of an IPC call has no owner, or its owner
+//	                   ended before answering
 const (
 	ErrOK Error = iota
 	ErrBadResponse
@@ -77,6 +83,7 @@ const (
 	ErrInvalidArgument
 	ErrNameTooLong
 	ErrNotAvailable
+	ErrPeerGone
 )
 
 //go:wasmimport wasmos console_write
@@ -99,6 +106,9 @@ func ipcRecv(endpoint int32) int32
 
 //go:wasmimport wasmos ipc_last_field
 func ipcLastField(field int32) int32
+
+//go:wasmimport wasmos ipc_peer_await
+func ipcPeerAwait(waiter int32, awaited int32) int32
 
 //go:wasmimport wasmos fs_endpoint
 func fsEndpoint() int32
@@ -357,12 +367,20 @@ func readIPCReply() IPCReply {
 // per-context managed reply endpoint: the first message carrying this call's
 // request id AND sent from server, the rule wasmos_ipc_call applies. Every other
 // message that lands there meanwhile is consumed and DISCARDED, so a component
-// that must not lose those uses an EventLoop instead. There is no timeout: a
-// server that lives and never answers blocks the caller indefinitely.
+// that must not lose those uses an EventLoop instead.
+//
+// Before sending, Call registers an await on server (ipc_peer_await), so the
+// kernel reports server's end on the reply endpoint even if it never answered;
+// that hangup, or a server with no owner to begin with, returns ErrPeerGone
+// (docs/architecture/09-process-and-ipc.md, "Peer Hangup"). There is no
+// timeout: a server that lives and never answers blocks the caller indefinitely.
 func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (IPCReply, Error) {
 	replyEp, err := ensureIPCReplyEndpoint()
 	if err != ErrOK {
 		return IPCReply{}, err
+	}
+	if ipcPeerAwait(replyEp, server) == wasmosNoEnt {
+		return IPCReply{}, ErrPeerGone
 	}
 	requestID := nextIPCRequestID()
 	if ipcSend(server, replyEp, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
@@ -371,6 +389,9 @@ func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int
 	for {
 		if ipcRecv(replyEp) < 0 {
 			return IPCReply{}, ErrHostCallFailed
+		}
+		if ipcLastField(ipcFieldType) == wasmosIPCHangup && ipcLastField(ipcFieldArg0) == server {
+			return IPCReply{}, ErrPeerGone
 		}
 		if ipcLastField(ipcFieldRequestID) == requestID && ipcLastField(ipcFieldSource) == server {
 			return readIPCReply(), ErrOK

@@ -11,10 +11,12 @@
  *     makes, in order. A record is an opaque token the test made up; the stub
  *     never dereferences or frees it.
  *   - spawn failure injection: while g_stub_fail_mm_create,
- *     g_stub_fail_clone_low_slot or g_stub_fail_pfa_alloc is non-zero, that
- *     call reports failure, so a case can fail a spawn at each point after it
- *     claims a slot. g_stub_mm_created / g_stub_mm_destroyed count the
- *     contexts mm_context_create handed out and mm_context_destroy took back.
+ *     g_stub_fail_clone_low_slot, g_stub_fail_pfa_alloc or
+ *     g_stub_fail_guard_unmap is non-zero, that call reports failure, so a case
+ *     can fail a spawn at each point after it claims a slot. g_stub_mm_created /
+ *     g_stub_mm_destroyed count the contexts mm_context_create handed out and
+ *     mm_context_destroy took back; g_stub_pfa_pages_allocated /
+ *     g_stub_pfa_pages_freed count frames the same way.
  */
 #ifndef WASMOS_TEST_STUBS_PROCESS_PLATFORM_H
 #define WASMOS_TEST_STUBS_PROCESS_PLATFORM_H
@@ -38,6 +40,9 @@ extern uint32_t g_stub_owed_count;
 extern uint32_t g_stub_fail_mm_create;
 extern uint32_t g_stub_fail_clone_low_slot;
 extern uint32_t g_stub_fail_pfa_alloc;
+extern uint32_t g_stub_fail_guard_unmap;
+extern uint64_t g_stub_pfa_pages_allocated;
+extern uint64_t g_stub_pfa_pages_freed;
 extern uint32_t g_stub_mm_created;
 extern uint32_t g_stub_mm_destroyed;
 

@@ -66,13 +66,17 @@ int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags) {
     (void)flags;
     return 0;
 }
+/* process.c unmaps nothing but stack guard pages through this. */
 int paging_unmap_4k(uint64_t virt) {
     (void)virt;
-    return 0;
+    return g_stub_fail_guard_unmap ? -1 : 0;
 }
 uint32_t g_stub_fail_mm_create;
 uint32_t g_stub_fail_clone_low_slot;
 uint32_t g_stub_fail_pfa_alloc;
+uint32_t g_stub_fail_guard_unmap;
+uint64_t g_stub_pfa_pages_allocated;
+uint64_t g_stub_pfa_pages_freed;
 uint32_t g_stub_mm_created;
 uint32_t g_stub_mm_destroyed;
 
@@ -109,11 +113,12 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     if (!p) {
         return 0;
     }
+    g_stub_pfa_pages_allocated += pages;
     return (uint64_t)(uintptr_t)p;
 }
 void pfa_free_pages(uint64_t base, uint64_t pages) {
     (void)base;
-    (void)pages;
+    g_stub_pfa_pages_freed += pages;
 }
 
 /* One shared context record, enough that mm_context_get() returns non-NULL for

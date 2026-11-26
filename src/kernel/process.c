@@ -171,6 +171,34 @@ static void process_stack_poison(uintptr_t stack_base, uintptr_t stack_top) {
     }
 }
 
+static void process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint32_t stack_pages);
+
+/* Unmap the STACK_GUARD_PAGES below and above a stack.  0 when every guard is
+ * unmapped, -1 at the first unmap that fails, with the earlier ones left
+ * unmapped: process_release_stack_frames remaps them. */
+static int process_unmap_stack_guards(uint64_t guard_low_virt, uint64_t guard_high_virt) {
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Give back a [guard][stack][guard] allocation: map every guard page again
+ * (paging_map_4k replaces a mapping that is still present, so guards that were
+ * never unmapped are harmless) and free the frames.  The guards have to be
+ * mapped first: a freed frame is reused through the direct map. */
+static void process_release_stack_frames(uint64_t alloc_base_phys, uint32_t stack_pages) {
+    process_restore_stack_guard_mappings(alloc_base_phys, stack_pages);
+    pfa_free_pages(alloc_base_phys, (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u));
+}
+
 static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     if (!slot || stack_pages == 0) {
         return -1;
@@ -203,17 +231,13 @@ static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     uint64_t guard_high_virt =
         using_higher_half_stack ? (higher_half_base + guard_high) : guard_high;
 
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] guard unmap failed\n");
-            return -1;
-        }
-    }
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] guard unmap failed\n");
-            return -1;
-        }
+    /* An unmap can fail (splitting a large mapping needs a table frame).  The
+     * stack is not recorded in the slot until both guards are cut, so a failure
+     * is undone here: process_reap would never see this allocation. */
+    if (process_unmap_stack_guards(guard_low_virt, guard_high_virt) != 0) {
+        klog_write("[sched] guard unmap failed\n");
+        process_release_stack_frames(base, stack_pages);
+        return -1;
     }
 
     slot->stack_base = (uintptr_t)usable_base_virt;
@@ -256,17 +280,11 @@ static int process_alloc_thread_stack(thread_t* thread, uint32_t stack_pages) {
     uint64_t usable_base_virt = higher_half_base + usable_base;
     uint64_t guard_high_virt = higher_half_base + guard_high;
 
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] worker guard unmap failed\n");
-            return -1;
-        }
-    }
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] worker guard unmap failed\n");
-            return -1;
-        }
+    /* As in process_alloc_stack: undone here, since nothing records it yet. */
+    if (process_unmap_stack_guards(guard_low_virt, guard_high_virt) != 0) {
+        klog_write("[sched] worker guard unmap failed\n");
+        process_release_stack_frames(base, stack_pages);
+        return -1;
     }
 
     thread->kstack_base = (uintptr_t)usable_base_virt;
@@ -1298,10 +1316,8 @@ static void process_reap(process_t* proc) {
             continue;
         }
         if (thread->kstack_alloc_base_phys && thread->kstack_pages) {
-            uint64_t total_pages = (uint64_t)thread->kstack_pages + (STACK_GUARD_PAGES * 2u);
-            process_restore_stack_guard_mappings((uint64_t)thread->kstack_alloc_base_phys,
-                                                 thread->kstack_pages);
-            pfa_free_pages((uint64_t)thread->kstack_alloc_base_phys, total_pages);
+            process_release_stack_frames((uint64_t)thread->kstack_alloc_base_phys,
+                                         thread->kstack_pages);
             thread->kstack_alloc_base_phys = 0;
             thread->kstack_pages = 0;
             thread->kstack_base = 0;
@@ -1309,10 +1325,7 @@ static void process_reap(process_t* proc) {
         }
     }
     if (proc->stack_alloc_base_phys && proc->stack_pages) {
-        uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
-        process_restore_stack_guard_mappings((uint64_t)proc->stack_alloc_base_phys,
-                                             proc->stack_pages);
-        pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
+        process_release_stack_frames((uint64_t)proc->stack_alloc_base_phys, proc->stack_pages);
     }
     /* Before anything is released and before the spawner hears of the exit:
      * until its function is quiesced the device may still master into the DMA

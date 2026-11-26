@@ -1913,8 +1913,10 @@ static void s_an_unwatched_process_owes_nothing(void) {
  * any later spawn.
  *
  * Fails a spawn at each point after the claim, more times than the table has
- * slots, then expects a spawn to succeed and every context it created to have
- * been destroyed. */
+ * slots, then expects a spawn to succeed, and every context and every frame
+ * the failed spawns took to have been given back. A failed guard-page unmap is
+ * one of those points: the stack it was cutting guards into is not yet the
+ * slot's, so only the allocator can give it back. */
 static void s_a_failed_spawn_gives_its_slot_back(void) {
     struct {
         const char* where;
@@ -1923,12 +1925,15 @@ static void s_a_failed_spawn_gives_its_slot_back(void) {
         {"creating the mm context", &g_stub_fail_mm_create},
         {"cloning the low slot", &g_stub_fail_clone_low_slot},
         {"allocating the stack", &g_stub_fail_pfa_alloc},
+        {"unmapping a stack guard page", &g_stub_fail_guard_unmap},
     };
     be_cpu(0);
     for (uint32_t p = 0; p < sizeof(points) / sizeof(points[0]); ++p) {
         uint32_t failed = 0;
         uint32_t created = g_stub_mm_created;
         uint32_t destroyed = g_stub_mm_destroyed;
+        uint64_t frames_allocated = g_stub_pfa_pages_allocated;
+        uint64_t frames_freed = g_stub_pfa_pages_freed;
         *points[p].knob = 1;
         for (uint32_t i = 0; i < PROCESS_MAX_COUNT + 1u; ++i) {
             uint32_t pid = 0;
@@ -1937,6 +1942,8 @@ static void s_a_failed_spawn_gives_its_slot_back(void) {
             }
         }
         *points[p].knob = 0;
+        uint64_t frames_held = (g_stub_pfa_pages_allocated - frames_allocated) -
+                               (g_stub_pfa_pages_freed - frames_freed);
         uint32_t pid = 0;
         int rc = process_spawn("spawn-after", idle_main, 0, &pid);
         printf("  spawn failing at %s: %u failed, then rc=%d, contexts %u created %u destroyed\n",
@@ -1949,6 +1956,11 @@ static void s_a_failed_spawn_gives_its_slot_back(void) {
         CHECK(rc == 0, "a spawn after the failures still finds a slot");
         CHECK(g_stub_mm_created - created == g_stub_mm_destroyed - destroyed + (rc == 0 ? 1u : 0u),
               "every context a failed spawn created was destroyed");
+        if (frames_held != 0) {
+            printf("  ... and %llu frames the failed spawns took were not freed\n",
+                   (unsigned long long)frames_held);
+        }
+        CHECK(frames_held == 0, "every frame a failed spawn allocated was freed");
         if (rc == 0) {
             drop_transition_target(pid);
         }

@@ -533,3 +533,5 @@ the kernel's capability_kind_t takes the same values.
 | `WASMOS_CAP_SVC_CONTROL` | 9 | svc.control: submit, kill and declare the boot set at the supervisor. |
 | `WASMOS_CAP_PCI_CONFIG` | 10 | pci.config: read and write PCI configuration space (pci_config_read/pci_config_write). |
 | `WASMOS_CAP_RTC_EFI` | 11 | rtc.efi: read and set the clock through UEFI runtime services (rtc_efi_get/rtc_efi_set). |
+| `WASMOS_CAP_INVENTORY_DEVICE` | 12 | inventory.device: publish PCI and ACPI device records (and the end of a bus scan) to device-manager's inventory. |
+| `WASMOS_CAP_INVENTORY_STORAGE` | 13 | inventory.storage: publish and retire block-device and volume records in device-manager's inventory. |

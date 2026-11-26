@@ -94,20 +94,15 @@ Source: `architecture/06-memory-management.md`,
   `kernel_boot_build_bootinfo_shadow`, reading boot data the firmware placed
   outside the 512 MiB higher-half window (`KERNEL_HIGHER_HALF_WINDOW_BYTES`).
   The harness boots 512 MiB, so no suite sees it.
-- [ ] [BUG][P1] Authenticate device-inventory publishers. `devmgr.inv` is a
-  discoverable service endpoint, and device-manager adds every
-  `DEVMGR_PUBLISH_DEVICE_DESC`, `DEVMGR_PUBLISH_ACPI_DEVICE_DESC`,
-  `DEVMGR_PUBLISH_BLOCK_DEVICE` and `DEVMGR_PUBLISH_VOLUME` it receives to its
-  inventory without checking who sent it. Any process can therefore publish a
-  forged PCI function or ACPI device and have device-manager spawn a driver
-  granted the register windows, interrupt and DMA it names (a PL011 instance
-  over an attacker-chosen MMIO window, or a second instance over the console's
-  window without its interrupt that masks the real console's receive
-  interrupts). Device-manager spawned pci-bus and acpi-bus and knows their
-  identities; a descriptor must come from the bus service that owns that kind
-  of record (for example by checking the descriptor buffer's owner context
-  against the spawned bus service's), and block/volume records from the
-  managers entitled to them. Raised on PR #69.
+- [x] [BUG][P1] Authenticate device-inventory publishers. Device-manager checks
+  every record on `devmgr.inv` against its sender: `inventory.device` for PCI
+  and ACPI records and scan completion (pci-bus, acpi-bus), `inventory.storage`
+  for block and volume records (ata, virtio-blk, partition manager, volume
+  manager). A refused publication is dropped and logged, a refused retirement
+  answered with `WASMOS_ERR_DEVMGR_NOT_PUBLISHER`
+  (`tests/test_devmgr_inventory_auth.py`). The capabilities are only as strong
+  as the rule over which images may declare them -- see the signed-package
+  entry below.
 - [ ] [ENHANCEMENT][P2] Cross-CPU TLB invalidation. `paging_invalidate` acts on
   the calling CPU only (`paging.h`, `arch/x86_64/paging.c`), so a mapping
   removed or changed on one CPU stays live on every other CPU that cached it,

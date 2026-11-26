@@ -36,6 +36,11 @@ flags = 1
 name = "svc.class"
 flags = 0
 
+# Publishes its disks to device-manager's block inventory.
+[[capabilities]]
+name = "inventory.storage"
+flags = 0
+
 # Register windows this driver needs, in the order it addresses them at runtime.
 # Region 0 is the task file at the fixed ISA ports (a legacy IDE controller
 # leaves BAR0 empty and decodes these instead); region 1 is wherever firmware put

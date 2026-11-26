@@ -12,6 +12,7 @@ SIMPLE = [
     "gfx_mode",
     "gfx_smoke",
     "init_smoke",
+    "inv_forge",
     "irq_route_allow",
     "irq_route_deny",
     "linmem_hold",

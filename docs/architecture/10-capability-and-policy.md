@@ -48,6 +48,8 @@ typedef enum {
     CAP_SVC_CONTROL       = 9,   // mask bit 9: submit, kill, declare the boot set (supervisor)
     CAP_PCI_CONFIG        = 10,  // mask bit 10: PCI config space (pci_config_read/write)
     CAP_RTC_EFI           = 11,  // mask bit 11: the UEFI clock (rtc_efi_get/rtc_efi_set)
+    CAP_INVENTORY_DEVICE  = 12,  // mask bit 12: publish PCI/ACPI records to device-manager
+    CAP_INVENTORY_STORAGE = 13,  // mask bit 13: publish/retire block and volume records
 } capability_kind_t;
 
 #define CAPABILITY_KIND_COUNT 12u
@@ -72,6 +74,8 @@ these kinds via `capability_grant_name`:
 | `"svc.control"`        | `CAP_SVC_CONTROL`        |
 | `"pci.config"`         | `CAP_PCI_CONFIG`         |
 | `"rtc.efi"`            | `CAP_RTC_EFI`            |
+| `"inventory.device"`   | `CAP_INVENTORY_DEVICE`   |
+| `"inventory.storage"`  | `CAP_INVENTORY_STORAGE`  |
 
 The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
 and `capability.h` asserts that the enum matches. Any unrecognized name returns
@@ -93,6 +97,15 @@ pci-bus-only (`pci_config_guest_read`, `src/kernel/pci_config.c`).
 the firmware's GetTime and SetTime (`src/kernel/efi_rtc.c`); only the rtc_efi
 driver declares it. It is its own kind, not `system.control`, so the clock
 driver cannot also halt or reboot the machine.
+`CAP_INVENTORY_DEVICE` and `CAP_INVENTORY_STORAGE` gate what device-manager
+accepts on its inventory endpoint (`devmgr.inv`), which it checks with
+`ipc_endpoint_has_cap` on each record's sender: PCI and ACPI device records and
+the end of a bus scan need `inventory.device` (pci-bus, acpi-bus); block-device
+and volume records, published or retired, need `inventory.storage` (ata,
+virtio-blk, the partition manager, the volume manager). The inventory decides
+which drivers device-manager spawns and what it grants them, so a record from
+anyone else would be a request for hardware
+([Device Manager](16-device-manager-and-bus-enumeration.md)).
 
 ---
 

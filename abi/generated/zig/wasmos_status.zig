@@ -298,6 +298,7 @@ pub const WASMOS_ERR_DEVMGR_NO_MOUNT_RULE: i32 = -0x000A0001; // no block/filesy
 pub const WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: i32 = -0x000A0002; // unknown or unsupported device-manager query type
 pub const WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: i32 = -0x000A0003; // the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something
 pub const WASMOS_ERR_DEVMGR_BAD_RECORD_ID: i32 = -0x000A0004; // the id named for retirement was empty, unterminated, or longer than the inventory's id field
+pub const WASMOS_ERR_DEVMGR_NOT_PUBLISHER: i32 = -0x000A0005; // the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes)
 pub const WASMOS_ERR_VIRTIO_BLK_NOT_READY: i32 = -0x00180001; // no virtio-blk device was probed, or bring-up did not complete
 pub const WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: i32 = -0x00180002; // the request's lba, sector count, or buffer argument is unusable
 pub const WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: i32 = -0x00180003; // unknown or unsupported block opcode
@@ -648,6 +649,7 @@ pub fn strerror(c: i32) []const u8 {
         WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY => "unknown or unsupported device-manager query type",
         WASMOS_ERR_DEVMGR_NO_SUCH_RECORD => "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something",
         WASMOS_ERR_DEVMGR_BAD_RECORD_ID => "the id named for retirement was empty, unterminated, or longer than the inventory's id field",
+        WASMOS_ERR_DEVMGR_NOT_PUBLISHER => "the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes)",
         WASMOS_ERR_VIRTIO_BLK_NOT_READY => "no virtio-blk device was probed, or bring-up did not complete",
         WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST => "the request's lba, sector count, or buffer argument is unusable",
         WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST => "unknown or unsupported block opcode",

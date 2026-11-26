@@ -559,3 +559,7 @@ const WASMOS_CAP_SVC_CONTROL int32 = 9
 const WASMOS_CAP_PCI_CONFIG int32 = 10
 // rtc.efi: read and set the clock through UEFI runtime services (rtc_efi_get/rtc_efi_set).
 const WASMOS_CAP_RTC_EFI int32 = 11
+// inventory.device: publish PCI and ACPI device records (and the end of a bus scan) to device-manager's inventory.
+const WASMOS_CAP_INVENTORY_DEVICE int32 = 12
+// inventory.storage: publish and retire block-device and volume records in device-manager's inventory.
+const WASMOS_CAP_INVENTORY_STORAGE int32 = 13

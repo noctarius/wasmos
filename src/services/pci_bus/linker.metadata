@@ -39,3 +39,8 @@ flags = 0
 [[capabilities]]
 name = "mmio.map"
 flags = 0
+
+# Publishes every PCI function it finds to device-manager's inventory.
+[[capabilities]]
+name = "inventory.device"
+flags = 0

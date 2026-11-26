@@ -319,6 +319,7 @@ enum {
     WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 2), /* unknown or unsupported device-manager query type */
     WASMOS_ERR_DEVMGR_NO_SUCH_RECORD = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 3), /* the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something */
     WASMOS_ERR_DEVMGR_BAD_RECORD_ID = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 4), /* the id named for retirement was empty, unterminated, or longer than the inventory's id field */
+    WASMOS_ERR_DEVMGR_NOT_PUBLISHER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DEVMGR, 5), /* the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes) */
     WASMOS_ERR_VIRTIO_BLK_NOT_READY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 1), /* no virtio-blk device was probed, or bring-up did not complete */
     WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 2), /* the request's lba, sector count, or buffer argument is unusable */
     WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_VIRTIO_BLK, 3), /* unknown or unsupported block opcode */
@@ -681,6 +682,7 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "devmgr.UNSUPPORTED_QUERY";
     case WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: return "devmgr.NO_SUCH_RECORD";
     case WASMOS_ERR_DEVMGR_BAD_RECORD_ID: return "devmgr.BAD_RECORD_ID";
+    case WASMOS_ERR_DEVMGR_NOT_PUBLISHER: return "devmgr.NOT_PUBLISHER";
     case WASMOS_ERR_VIRTIO_BLK_NOT_READY: return "virtio_blk.NOT_READY";
     case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: return "virtio_blk.BAD_REQUEST";
     case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: return "virtio_blk.UNSUPPORTED_REQUEST";
@@ -975,6 +977,7 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_DEVMGR_UNSUPPORTED_QUERY: return "unknown or unsupported device-manager query type";
     case WASMOS_ERR_DEVMGR_NO_SUCH_RECORD: return "the canonical id named for retirement is not in the inventory. A retire that silently accepted an unknown id would let a caller retiring twice read the second as having retired something";
     case WASMOS_ERR_DEVMGR_BAD_RECORD_ID: return "the id named for retirement was empty, unterminated, or longer than the inventory's id field";
+    case WASMOS_ERR_DEVMGR_NOT_PUBLISHER: return "the sender does not hold the inventory capability for this kind of record (inventory.device for PCI and ACPI devices, inventory.storage for block devices and volumes)";
     case WASMOS_ERR_VIRTIO_BLK_NOT_READY: return "no virtio-blk device was probed, or bring-up did not complete";
     case WASMOS_ERR_VIRTIO_BLK_BAD_REQUEST: return "the request's lba, sector count, or buffer argument is unusable";
     case WASMOS_ERR_VIRTIO_BLK_UNSUPPORTED_REQUEST: return "unknown or unsupported block opcode";

@@ -61,6 +61,10 @@ static uint32_t kind_to_mask(capability_kind_t kind) {
         return 1u << 10;
     case CAP_RTC_EFI:
         return 1u << 11;
+    case CAP_INVENTORY_DEVICE:
+        return 1u << 12;
+    case CAP_INVENTORY_STORAGE:
+        return 1u << 13;
     default:
         return 0;
     }
@@ -145,6 +149,8 @@ static const struct {
     {"svc.control", CAP_SVC_CONTROL},
     {"pci.config", CAP_PCI_CONFIG},
     {"rtc.efi", CAP_RTC_EFI},
+    {"inventory.device", CAP_INVENTORY_DEVICE},
+    {"inventory.storage", CAP_INVENTORY_STORAGE},
 };
 
 int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind) {

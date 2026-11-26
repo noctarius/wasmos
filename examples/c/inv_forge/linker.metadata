@@ -1,0 +1,16 @@
+version = 1
+
+[package]
+name = "inv-forge"
+entry = "wasmos_main"
+kind = "app"
+native = false
+aot = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

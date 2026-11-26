@@ -907,8 +907,10 @@ request.
 5. **Capability grants are declared at spawn.** No hardware capability can be
    acquired through IPC after process spawn.
 
-6. **Endpoints are released on process reap.** `ipc_endpoints_release_owner`
-   is called during process reap.
+6. **Endpoints and select sets are released on process reap.**
+   `ipc_endpoints_release_owner` is called during process reap. It tears down
+   the context's select sets first, as `ipc_select_destroy` would (watchers
+   removed, waiters aborted, id and quota freed), then its endpoints.
 
 7. **No busy-polling in services.** Services must use `wasmos_ipc_select_one`
    (blocking single-endpoint) or `wasmos_ipc_select_wait` (blocking multi-endpoint)
@@ -916,6 +918,6 @@ request.
    not yield on spin loops; only blocking waits release the CPU.
 
 8. **Poll-hub registration is exclusive.** Once `ep->poll_struct` is created
-   and a watcher is registered, the watcher persists until `ipc_select_destroy`
-   removes it.  Endpoints and select sets must be destroyed in a consistent
+   and a watcher is registered, the watcher persists until `ipc_select_destroy`,
+   or the reap of the set's owner, removes it.  Endpoints and select sets must be destroyed in a consistent
    order to avoid dangling watcher pointers.

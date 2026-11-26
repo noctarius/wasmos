@@ -978,6 +978,58 @@ static void test_select_sets_are_capped_per_context(void) {
     }
 }
 
+/* Regression: 2026-11-26-select-sets-outlive-owner -- process teardown released
+ * a dead context's endpoints but not its select sets. A process that exited
+ * without ipc_select_destroy left every set it held allocated, its id live, its
+ * watchers registered on whichever endpoints it watched, and its slice of the
+ * per-context quota charged, all for the life of the kernel.
+ *
+ * The owner fills its quota, one set watching an endpoint another context owns,
+ * and dies; its sets must be gone and its quota whole again. */
+static void test_an_owners_death_releases_its_select_sets(void) {
+    uint32_t owner = fresh_ctx();
+    uint32_t other = fresh_ctx();
+    uint32_t foreign_ep = 0;
+    uint32_t ids[IPC_SELECT_PER_CONTEXT_MAX];
+    (void)ipc_endpoint_create(other, &foreign_ep);
+    for (uint32_t i = 0; i < IPC_SELECT_PER_CONTEXT_MAX; ++i) {
+        ids[i] = 0;
+        CHECK(ipc_select_create(owner, &ids[i]) == IPC_OK, "the owner fills its quota");
+    }
+    CHECK(ipc_select_add(ids[0], foreign_ep, owner) == IPC_OK,
+          "one set watches another context's endpoint");
+
+    ipc_endpoints_release_owner(owner);
+
+    uint32_t gone = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_PER_CONTEXT_MAX; ++i) {
+        if (ipc_select_add(ids[i], foreign_ep, IPC_CONTEXT_KERNEL) == IPC_ERR_NOENT) {
+            gone++;
+        }
+    }
+    CHECK(gone == IPC_SELECT_PER_CONTEXT_MAX, "every set of the dead owner is gone");
+
+    uint32_t again[IPC_SELECT_PER_CONTEXT_MAX];
+    uint32_t created = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_PER_CONTEXT_MAX; ++i) {
+        if (ipc_select_create(owner, &again[created]) == IPC_OK) {
+            created++;
+        }
+    }
+    CHECK(created == IPC_SELECT_PER_CONTEXT_MAX, "and its whole quota is free again");
+
+    /* The watched endpoint lives on and still works, with no watcher left on
+     * it pointing into a released set. */
+    ipc_message_t msg;
+    memset(&msg, 0, sizeof(msg));
+    CHECK(ipc_send(foreign_ep, &msg) == IPC_OK, "the endpoint it watched still takes a send");
+
+    for (uint32_t i = 0; i < created; ++i) {
+        ipc_select_destroy(again[i], owner);
+    }
+    ipc_endpoints_release_owner(other);
+}
+
 static void test_endpoints_are_capped_per_context(void) {
     uint32_t greedy = fresh_ctx();
     uint32_t n = 0;
@@ -1225,16 +1277,19 @@ static void test_destroyed_set_stops_receiving_signals(void) {
 }
 
 /* An endpoint torn down with a select watcher still attached must release the
- * watcher storage and stop signalling; the set itself stays usable. */
+ * watcher storage and stop signalling; the set itself stays usable.  The
+ * endpoint belongs to another context, whose death is what tears it down:
+ * releasing the set owner's own context would take the set with it. */
 static void test_releasing_a_watched_endpoint_leaves_the_set_usable(void) {
     uint32_t ctx = fresh_ctx();
+    uint32_t dying = fresh_ctx();
     uint32_t sel = 0, gone = 0, kept = 0;
-    (void)ipc_endpoint_create(ctx, &gone);
+    (void)ipc_endpoint_create(dying, &gone);
     (void)ipc_endpoint_create(CTX_A, &kept);
     (void)ipc_select_listen(ctx, (uint32_t[]){gone, kept}, 2, &sel);
     reset_threads();
 
-    ipc_endpoints_release_owner(ctx); /* drops `gone`, keeps `kept` (CTX_A) */
+    ipc_endpoints_release_owner(dying); /* drops `gone`, keeps `kept` (CTX_A) */
 
     CHECK(ksend(kept, 1u) == IPC_OK, "the surviving endpoint still takes traffic");
     uint32_t ready = 0;
@@ -2047,14 +2102,17 @@ static void test_a_kernel_owned_set_may_drain_another_contexts_endpoint(void) {
     ipc_endpoints_release_owner(owner);
 }
 
+/* Every endpoint the set watches belongs to a context that dies; the set's own
+ * owner lives on, so the set does too. */
 static void test_a_set_survives_its_owner_losing_every_endpoint(void) {
     uint32_t ctx = fresh_ctx();
+    uint32_t dying = fresh_ctx();
     uint32_t ep = 0, sel = 0;
-    (void)ipc_endpoint_create(ctx, &ep);
+    (void)ipc_endpoint_create(dying, &ep);
     (void)ipc_select_listen(ctx, &ep, 1, &sel);
     reset_threads();
 
-    ipc_endpoints_release_owner(ctx);
+    ipc_endpoints_release_owner(dying);
 
     uint32_t ready = 0xAAu;
     CHECK(ipc_select_wait(sel, ctx, &ready, 0) == IPC_EMPTY,
@@ -3384,6 +3442,8 @@ int main(void) {
         {"S26 select reports a notification raised before the watch",
          test_select_reports_a_notification_raised_before_the_watch},
         {"S27 select rotates between ready endpoints", test_select_rotates_between_ready_endpoints},
+        {"S28 an owner's death releases its select sets",
+         test_an_owners_death_releases_its_select_sets},
         {"S19 a kernel-owned set may drain a foreign endpoint",
          test_a_kernel_owned_set_may_drain_another_contexts_endpoint},
         {"S20 a set survives losing every endpoint",

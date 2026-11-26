@@ -33,7 +33,15 @@ from qemu_test_framework import QemuSession, default_config
 RESULT = re.compile(
     rb"\[leak-test\] ([^:\r\n]+): cycles=(\d+) before=(\d+) after=(\d+)"
 )
-NOT_RUN = re.compile(rb"\[leak-test\] ([^:\r\n]+): [^\r\n]*not run")
+# A cycle that cannot run in this kernel says what it needs; a cycle whose
+# setup failed is a failure, never a skip.
+NOT_RUN = re.compile(rb"\[leak-test\] ([^:\r\n]+): needs [^\r\n]*not run")
+SETUP_FAILED = re.compile(rb"\[leak-test\] ([^:\r\n]+): setup failed")
+# Measured on every architecture and runtime.
+ALWAYS = (
+    b"address space with a cloned low slot",
+    b"address space with the low slot stripped",
+)
 
 
 class TeardownLeakTest(unittest.TestCase):
@@ -53,6 +61,15 @@ class TeardownLeakTest(unittest.TestCase):
             # The console and the kernel-log port can both carry a line.
             results = sorted(set(RESULT.findall(log)))
             skipped = sorted({m.decode() for m in NOT_RUN.findall(log)})
+            failed = sorted({m.decode() for m in SETUP_FAILED.findall(log)})
+            self.assertFalse(
+                failed, f"setup failed, so nothing was measured: {failed}.\n{tail}"
+            )
+            measured = {what for what, _, _, _ in results}
+            for what in ALWAYS:
+                self.assertIn(
+                    what, measured, f"{what.decode()} was not measured.\n{tail}"
+                )
             self.assertTrue(results, f"the leak test reported no cycle.\n{tail}")
             for what, cycles, before, after in results:
                 with self.subTest(what=what.decode()):

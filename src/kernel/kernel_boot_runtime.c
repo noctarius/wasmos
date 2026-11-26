@@ -180,13 +180,13 @@ static int leak_test_warp_r3(void) {
 
 static void leak_test_run(const char* what, int (*cycle)(void)) {
     if (cycle() != 0) {
-        klog_printf("[leak-test] %s: setup failed; not run\n", what);
+        klog_printf("[leak-test] %s: setup failed\n", what);
         return;
     }
     uint64_t before = pfa_free_bytes();
     for (uint32_t i = 0; i < LEAK_TEST_CYCLES; ++i) {
         if (cycle() != 0) {
-            klog_printf("[leak-test] %s: setup failed; not run\n", what);
+            klog_printf("[leak-test] %s: setup failed\n", what);
             return;
         }
     }

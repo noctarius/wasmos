@@ -106,9 +106,16 @@ uint64_t paging_get_higher_half_base(void) {
     return 0xFFFF800000000000ull;
 }
 
+/* Counted and always refused. Only the user-copy helpers switch roots, and on
+ * the host a switch that "succeeded" would let them memcpy from a user VA that
+ * is not mapped in this process; refusing makes a copy that got past its
+ * preflight fail instead of crashing, and the count shows it got that far. */
+static atomic_int g_root_switches;
+
 int paging_switch_root(uint64_t root_table) {
     (void)root_table;
-    return 0;
+    atomic_fetch_add(&g_root_switches, 1);
+    return -1;
 }
 
 int paging_create_address_space(uint64_t* out_root_table) {
@@ -252,11 +259,11 @@ static void s_a_fault_never_maps_past_the_backing_a_rebind_installs(void) {
     CHECK(!g_torn, "every fault mapped a page of the backing bound at that moment");
 }
 
-/* Regression: 2026-11-26-fault-maps-physical-page-0 -- the fault path mapped
- * region->phys_base + (page VA - region->base) with no check that the region
- * had backing at all. A region added without one (mm_context_add_region leaves
- * phys_base 0) resolved a fault to physical page 0 onwards -- low physical
- * memory the process was never given -- and mapped it into the process. */
+/* Regression: 2026-11-26-fault-maps-physical-page-0 -- the fault path and the
+ * user-copy preflight mapped region->phys_base + (page VA - region->base) with
+ * no check that the region had backing at all. A region added without one (mm_context_add_region
+ * leaves phys_base 0) resolved a fault to physical page 0 onwards -- low physical memory the
+ * process was never given -- and mapped it into the process. */
 static void s_a_fault_in_a_region_without_backing_maps_nothing(void) {
     mm_context_t* ctx = mm_context_create(CONTEXT_ID + 1u);
     CHECK(ctx != 0, "a second context was created");
@@ -276,6 +283,19 @@ static void s_a_fault_in_a_region_without_backing_maps_nothing(void) {
         mm_handle_page_fault(CONTEXT_ID + 1u, base + PAGE, MM_FAULT_USER | MM_FAULT_WRITE, &mapped);
     CHECK(rc != 0, "the fault is refused");
     CHECK(atomic_load(&g_map_count) == 0, "and nothing is mapped");
+
+    /* The user-copy helpers map a range before copying it, through their own
+     * preflight (mm_ensure_user_range_mapped), not the fault path. Both
+     * directions must refuse the same region before any mapping or root
+     * switch. */
+    uint8_t bytes[64] = {0};
+    atomic_store(&g_root_switches, 0);
+    CHECK(mm_copy_from_user(CONTEXT_ID + 1u, bytes, base + PAGE, sizeof(bytes)) != 0,
+          "a copy from the region is refused");
+    CHECK(mm_copy_to_user(CONTEXT_ID + 1u, base + PAGE, bytes, sizeof(bytes)) != 0,
+          "a copy to the region is refused");
+    CHECK(atomic_load(&g_map_count) == 0, "neither copy mapped anything");
+    CHECK(atomic_load(&g_root_switches) == 0, "neither copy got as far as the copy itself");
     (void)mm_context_destroy(CONTEXT_ID + 1u);
 }
 

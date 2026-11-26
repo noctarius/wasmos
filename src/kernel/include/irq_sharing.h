@@ -63,25 +63,30 @@ typedef struct {
 /* `line_count` lines are reset to "no sharers". */
 void irq_sharing_init(irq_line_t* lines, uint32_t line_count);
 
+/* Every function naming one `line` takes the table's `line_count` and refuses a
+ * line at or past it: WASMOS_ERR_IRQ_BAD_LINE where it returns a code, a no-op
+ * (or 0) where it does not. */
+
 /* Add `context_id` as a sharer of `line`, or update its endpoint if already one.
  * Returns 0, or WASMOS_ERR_IRQ_LINE_FULL. */
-int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, uint32_t endpoint,
-                         const irq_sharing_ops_t* ops);
+int irq_sharing_register(irq_line_t* lines, uint32_t line_count, uint32_t line, uint32_t context_id,
+                         uint32_t endpoint, const irq_sharing_ops_t* ops);
 
 /* Report that `context_id` has inspected its device. Returns 0 (including when
  * nothing was outstanding — drivers may ack defensively), or
  * WASMOS_ERR_IRQ_NOT_A_SHARER. */
-int irq_sharing_ack(irq_line_t* lines, uint32_t line, uint32_t context_id,
+int irq_sharing_ack(irq_line_t* lines, uint32_t line_count, uint32_t line, uint32_t context_id,
                     const irq_sharing_ops_t* ops);
 
 /* Remove one sharer, forgiving any ack it owed. Returns 0, or
  * WASMOS_ERR_IRQ_NOT_A_SHARER. */
-int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id,
-                           const irq_sharing_ops_t* ops);
+int irq_sharing_unregister(irq_line_t* lines, uint32_t line_count, uint32_t line,
+                           uint32_t context_id, const irq_sharing_ops_t* ops);
 
 /* Remove every sharer of `line`. Returns 0 if any were removed, else
  * WASMOS_ERR_IRQ_NOT_A_SHARER. */
-int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops);
+int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line_count, uint32_t line,
+                               const irq_sharing_ops_t* ops);
 
 /* Drop every route held by a dying context across all lines. */
 void irq_sharing_release_context(irq_line_t* lines, uint32_t line_count, uint32_t context_id,
@@ -89,13 +94,14 @@ void irq_sharing_release_context(irq_line_t* lines, uint32_t line_count, uint32_
 
 /* Mask the line and deliver to every sharer, arming the ack deadline. Does
  * nothing when the line has no sharers or is throttled. */
-void irq_sharing_dispatch(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops);
+void irq_sharing_dispatch(irq_line_t* lines, uint32_t line_count, uint32_t line,
+                          const irq_sharing_ops_t* ops);
 
 /* Per-tick maintenance: force-complete acks past their deadline and release
  * throttled lines. */
 void irq_sharing_tick(irq_line_t* lines, uint32_t line_count, const irq_sharing_ops_t* ops);
 
 /* True when the line has at least one registered sharer. */
-int irq_sharing_has_sharers(const irq_line_t* lines, uint32_t line);
+int irq_sharing_has_sharers(const irq_line_t* lines, uint32_t line_count, uint32_t line);
 
 #endif

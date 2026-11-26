@@ -158,11 +158,26 @@ class VirtioGpuOwnershipTest(unittest.TestCase):
             cls.session.close()
 
     def test_ending_virtio_gpu_quiesces_its_function(self) -> None:
-        buf = bytes(self.session.buf)
-        m = re.search(
-            rb"handed to the supervisor: (virtio_gpu@pci:([0-9a-f:.]+)) ", buf
+        # The unit's name comes from the supervisor's table, asked once the
+        # system is idle. device-manager's boot line naming it shares the
+        # console with every driver starting at the same moment, and another
+        # driver's output can land in the middle of it.
+        start = self.session.send_command("svc list", timeout_s=20)
+        self.assertTrue(
+            self.session.expect_from(start, b"wamos> ", timeout_s=30),
+            f"no prompt after svc list\n--- tail ---\n{self.session.tail()}",
         )
-        self.assertIsNotNone(m, "virtio_gpu was not handed to the supervisor")
+        listing = bytes(self.session.buf[start:])
+        m = re.search(
+            rb"^(virtio_gpu@pci:([0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f])) ",
+            listing,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(
+            m,
+            f"the supervisor holds no virtio_gpu unit\n--- svc list ---\n"
+            f"{listing.decode(errors='replace')}",
+        )
         unit, bdf = m.group(1).decode(), m.group(2).decode()
         mark = self.session.send_command(f"svc kill {unit}", timeout_s=20)
         self.assertTrue(

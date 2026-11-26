@@ -309,6 +309,18 @@ static void mm_trace_copy_fail(const char* op, const char* stage, uint32_t conte
     trace_do(klog_write("\n"));
 }
 
+/* The frame backing the page at `page_base` in `region`: its contiguous
+ * backing, phys_base + (page VA - region->base).  0 for a region without
+ * backing -- phys_base 0, as mm_context_add_region leaves it -- which a caller
+ * must refuse rather than map: the arithmetic would hand the process physical
+ * page 0 onwards. */
+static uint64_t mm_region_backing_page(const mem_region_t* region, uint64_t page_base) {
+    if (region->phys_base == 0) {
+        return 0;
+    }
+    return region->phys_base + (page_base - region->base);
+}
+
 /* mm_ensure_user_range_mapped's body; the caller holds ctx->regions_lock. */
 static int mm_ensure_user_range_mapped_locked(mm_context_t* ctx, uint64_t user_addr, uint64_t size,
                                               uint32_t needed_flags) {
@@ -341,8 +353,9 @@ static int mm_ensure_user_range_mapped_locked(mm_context_t* ctx, uint64_t user_a
             cur = page_base + PAGE_SIZE;
             continue;
         }
-        uint64_t phys_page = region->phys_base + (page_base - region->base);
-        if (paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags) < 0) {
+        uint64_t phys_page = mm_region_backing_page(region, page_base);
+        if (!phys_page ||
+            paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags) < 0) {
             return -1;
         }
         cur = page_base + PAGE_SIZE;
@@ -439,8 +452,9 @@ static int mm_range_permitted_locked(mm_context_t* ctx, uint64_t cur, uint64_t e
  * refused too.
  *
  * The frame installed is region->phys_base + (page VA - region->base), i.e. the
- * region's contiguous backing.  Nothing is allocated here, so a region without
- * backing maps frame 0 onwards rather than failing.
+ * region's contiguous backing.  Nothing is allocated here, so a fault in a
+ * region without backing (phys_base 0) is refused rather than resolved to
+ * physical page 0 onwards.
  *
  * Returns 0 once the page is mapped, writing the page-aligned VA to
  * *out_mapped_base when it is non-NULL, and -1 when the fault is not one this
@@ -494,7 +508,10 @@ static int mm_fault_map_locked(mm_context_t* ctx, uint64_t addr, uint32_t access
     /* A region carries a process-visible virtual base and a separate physical
      * backing base, so the faulting page resolves to phys_base + (VA offset into
      * the region) and is wired into the owning context's private root table. */
-    uint64_t phys_page = region->phys_base + (page_base - region->base);
+    uint64_t phys_page = mm_region_backing_page(region, page_base);
+    if (!phys_page) {
+        return -1;
+    }
     return paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags) < 0 ? -1 : 0;
 }
 

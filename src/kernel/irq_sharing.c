@@ -78,13 +78,13 @@ void irq_sharing_init(irq_line_t* lines, uint32_t line_count) {
  * on it and it is not the timer line, so a late arrival cannot reopen a line an
  * earlier sharer has not acked.
  *
- * `line` is used as an unchecked index into `lines`: this function and the rest
- * of the family take no line_count, so the CALLER must bound it.  Returns 0 on
- * success, WASMOS_ERR_IRQ_BAD_LINE for a NULL table, and
+ * `lines` holds `line_count` lines, and every entry point that names one line
+ * refuses a `line` at or past it, as it does a NULL table.  Returns 0 on
+ * success, WASMOS_ERR_IRQ_BAD_LINE for a NULL table or an out-of-range line, and
  * WASMOS_ERR_IRQ_LINE_FULL when all IRQ_SHARERS_MAX slots are taken. */
-int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, uint32_t endpoint,
-                         const irq_sharing_ops_t* ops) {
-    if (!lines) {
+int irq_sharing_register(irq_line_t* lines, uint32_t line_count, uint32_t line, uint32_t context_id,
+                         uint32_t endpoint, const irq_sharing_ops_t* ops) {
+    if (!lines || line >= line_count) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
@@ -119,11 +119,11 @@ int irq_sharing_register(irq_line_t* lines, uint32_t line, uint32_t context_id, 
  *
  * An ack from a sharer with nothing outstanding returns 0 and changes nothing,
  * so a duplicate or late ack cannot reopen the line early.  Returns
- * WASMOS_ERR_IRQ_BAD_LINE for a NULL table and WASMOS_ERR_IRQ_NOT_A_SHARER when
- * the context is not registered on this line. */
-int irq_sharing_ack(irq_line_t* lines, uint32_t line, uint32_t context_id,
+ * WASMOS_ERR_IRQ_BAD_LINE for a NULL table or an out-of-range line and
+ * WASMOS_ERR_IRQ_NOT_A_SHARER when the context is not registered on this line. */
+int irq_sharing_ack(irq_line_t* lines, uint32_t line_count, uint32_t line, uint32_t context_id,
                     const irq_sharing_ops_t* ops) {
-    if (!lines) {
+    if (!lines || line >= line_count) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
@@ -167,11 +167,12 @@ static void drop_sharer(irq_line_t* l, uint32_t line, irq_sharer_t* slot,
  * cannot leave the line masked for the others, and the line is MASKED when the
  * last sharer leaves (except the timer line, which is never masked).
  *
- * Returns 0 on success, WASMOS_ERR_IRQ_BAD_LINE for a NULL table, and
- * WASMOS_ERR_IRQ_NOT_A_SHARER when the context is not registered here. */
-int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id,
-                           const irq_sharing_ops_t* ops) {
-    if (!lines) {
+ * Returns 0 on success, WASMOS_ERR_IRQ_BAD_LINE for a NULL table or an
+ * out-of-range line, and WASMOS_ERR_IRQ_NOT_A_SHARER when the context is not
+ * registered here. */
+int irq_sharing_unregister(irq_line_t* lines, uint32_t line_count, uint32_t line,
+                           uint32_t context_id, const irq_sharing_ops_t* ops) {
+    if (!lines || line >= line_count) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
@@ -186,9 +187,10 @@ int irq_sharing_unregister(irq_line_t* lines, uint32_t line, uint32_t context_id
 /* Drops every sharer of one line, with the same forgiveness and end-state
  * masking as irq_sharing_unregister.  Returns 0 when at least one sharer was
  * removed, WASMOS_ERR_IRQ_NOT_A_SHARER when the line had none, and
- * WASMOS_ERR_IRQ_BAD_LINE for a NULL table. */
-int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops) {
-    if (!lines) {
+ * WASMOS_ERR_IRQ_BAD_LINE for a NULL table or an out-of-range line. */
+int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line_count, uint32_t line,
+                               const irq_sharing_ops_t* ops) {
+    if (!lines || line >= line_count) {
         return WASMOS_ERR_IRQ_BAD_LINE;
     }
     irq_line_t* l = &lines[line];
@@ -204,8 +206,7 @@ int irq_sharing_unregister_all(irq_line_t* lines, uint32_t line, const irq_shari
 
 /* Sweeps a dying context off every line in the table, dropping at most one
  * sharer slot per line.  Reports nothing: a context that shared no line is a
- * no-op, which is the expected case for most teardowns.  Unlike the rest of the
- * family this one IS given line_count and stays inside it. */
+ * no-op, which is the expected case for most teardowns. */
 void irq_sharing_release_context(irq_line_t* lines, uint32_t line_count, uint32_t context_id,
                                  const irq_sharing_ops_t* ops) {
     if (!lines) {
@@ -233,9 +234,11 @@ void irq_sharing_release_context(irq_line_t* lines, uint32_t line_count, uint32_
  * the throttle is logged once per episode.  A line with no sharers, or one
  * already throttled, dispatches nothing.
  *
- * Reports nothing; ops must be non-NULL or the call is a no-op. */
-void irq_sharing_dispatch(irq_line_t* lines, uint32_t line, const irq_sharing_ops_t* ops) {
-    if (!lines || !ops) {
+ * Reports nothing; a NULL ops or an out-of-range line makes the call a
+ * no-op. */
+void irq_sharing_dispatch(irq_line_t* lines, uint32_t line_count, uint32_t line,
+                          const irq_sharing_ops_t* ops) {
+    if (!lines || !ops || line >= line_count) {
         return;
     }
     irq_line_t* l = &lines[line];
@@ -323,8 +326,8 @@ void irq_sharing_tick(irq_line_t* lines, uint32_t line_count, const irq_sharing_
     }
 }
 
-/* 1 when the line has at least one registered sharer, 0 otherwise or for a NULL
- * table.  `line` is again an unchecked index. */
-int irq_sharing_has_sharers(const irq_line_t* lines, uint32_t line) {
-    return (lines && lines[line].sharer_count > 0) ? 1 : 0;
+/* 1 when the line has at least one registered sharer, 0 otherwise, for a NULL
+ * table, or for an out-of-range line. */
+int irq_sharing_has_sharers(const irq_line_t* lines, uint32_t line_count, uint32_t line) {
+    return (lines && line < line_count && lines[line].sharer_count > 0) ? 1 : 0;
 }

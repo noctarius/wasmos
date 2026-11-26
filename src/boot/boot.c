@@ -5,6 +5,8 @@
 #include "uefi.h"
 #include "elf.h"
 #include "boot.h"
+#include "efi_connect.h"
+#include "efi_loader_alloc.h"
 #if defined(WASMOS_EFI_RUNTIME) && defined(__aarch64__)
 #include "efi_runtime_map.h"
 #endif
@@ -67,18 +69,6 @@ typedef EFI_STATUS(EFIAPI* EFI_GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL* Thi
  * memory map, preload the minimal disk bootstrap modules, and transfer control
  * through the versioned boot_info_t contract.
  */
-
-/* Spec constants used by the calls below: the first two are AllocatePages Type
- * values (ANY_PAGES lets the firmware choose, ADDRESS demands the exact base in
- * *Memory and fails if it is taken), EFI_LOADER_DATA is the EFI_MEMORY_TYPE the
- * loader tags every allocation with so the kernel can tell its own handoff pages
- * apart from firmware data, and the last two are the EFI_STATUS values the retry
- * logic tests for by value rather than through EFI_ERROR(). */
-#define EFI_ALLOCATE_ANY_PAGES 0
-#define EFI_ALLOCATE_ADDRESS 2
-#define EFI_LOADER_DATA 2
-#define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
-#define EFI_INVALID_PARAMETER ((EFI_STATUS)0x8000000000000002ULL)
 
 /* ACPI Root System Description Pointer.  Only revision and length are read, to
  * decide how many bytes of the RSDP to hand the kernel: revision < 2 means the
@@ -182,31 +172,6 @@ static void copy_cstr(char* dst, UINTN dst_size, const char* src) {
     dst[i] = '\0';
 }
 
-static void connect_handles_for_protocol(EFI_SYSTEM_TABLE* system,
-                                         EFI_CONNECT_CONTROLLER connect_controller,
-                                         EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer,
-                                         const EFI_GUID* protocol) {
-    if (!system || !connect_controller || !locate_handle_buffer || !protocol) {
-        return;
-    }
-    EFI_HANDLE* handles = 0;
-    UINTN handle_count = 0;
-    EFI_STATUS status = locate_handle_buffer(
-        EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, protocol, 0, &handle_count, &handles);
-    if (EFI_ERROR(status) || !handles || handle_count == 0) {
-        return;
-    }
-    for (UINTN i = 0; i < handle_count; ++i) {
-        if (!handles[i]) {
-            continue;
-        }
-        connect_controller(handles[i], 0, 0, TRUE);
-    }
-    if (system->BootServices && system->BootServices->FreePool) {
-        system->BootServices->FreePool(handles);
-    }
-}
-
 static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
     static int g_graphics_connected = 0;
     if (g_graphics_connected || !system || !system->BootServices) {
@@ -227,23 +192,7 @@ static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
         connect_controller(system->StandardErrorHandle, 0, 0, TRUE);
     }
 
-    static const EFI_GUID text_output_guid = {
-        0x387477c2, 0x69c7, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
-    /* FIXME: neither GUID below matches the UEFI 2.10 spec value
-     * (EFI_PCI_IO_PROTOCOL_GUID is 4CF5B200-68B8-4CA5-9EEC-B23E3F50029A,
-     * EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID is 2F707EBB-4A1A-11D4-9A38-
-     * 0090273FC14D), so both LocateHandleBuffer calls find nothing and those
-     * two connect passes are no-ops. The failure is silent: this whole helper
-     * is best-effort and GOP discovery still succeeds via its own fallbacks. */
-    static const EFI_GUID pci_io_guid = {
-        0x2f707eb9, 0x3a1a, 0x11d4, {0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69}};
-    static const EFI_GUID root_bridge_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
-
-    connect_handles_for_protocol(
-        system, connect_controller, locate_handle_buffer, &text_output_guid);
-    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &pci_io_guid);
-    connect_handles_for_protocol(
-        system, connect_controller, locate_handle_buffer, &root_bridge_guid);
+    efi_connect_graphics_controllers(system->BootServices);
     g_graphics_connected = 1;
 }
 
@@ -1232,32 +1181,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
      * allocation invalidates. The loop re-reads the map, rebuilds boot_info in
      * place and retries; only a different status is fatal. Nothing inside the
      * loop may call a boot service after GetMemoryMap other than the
-     * allocations whose invalidation the retry already covers. */
+     * allocations and frees of efi_loader_alloc.h, whose invalidation the retry
+     * already covers. The map buffer read last stays allocated: freeing it would
+     * invalidate the key ExitBootServices is about to be given. */
     int exited = 0;
     void* map_dst = 0;
     UINTN map_bytes = 0;
     while (!exited) {
-        if (!mmap) {
-            status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
-            if (EFI_ERROR(status)) {
-                uefi_log_status(system, "[boot] AllocatePool(mmap) failed: ", status);
-                return status;
-            }
-        }
-
-        mmap_size = mmap_capacity;
-        status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
-        if (status == EFI_BUFFER_TOO_SMALL) {
-            /* FIXME: dropping the pointer without FreePool leaks the undersized
-             * pool buffer, as does growing boot_buf below without FreePages.
-             * Both stay allocated as EFI_LOADER_DATA and the kernel therefore
-             * never reclaims them. */
-            mmap_capacity = mmap_size + desc_size * 2;
-            mmap = 0;
-            continue;
-        }
+        status = efi_read_memory_map(
+            bs, &mmap, &mmap_capacity, &mmap_size, &map_key, &desc_size, &desc_version);
         if (EFI_ERROR(status)) {
-            uefi_log_status(system, "[boot] GetMemoryMap retry failed: ", status);
+            uefi_log_status(system, "[boot] GetMemoryMap failed: ", status);
             return status;
         }
 
@@ -1265,16 +1199,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system) {
         map_bytes = mmap_size;
         UINTN total_bytes = boot_bytes + map_bytes + initfs_size + module_table_bytes;
         UINTN total_pages = (total_bytes + 0xFFF) / 0x1000;
-        if (boot_capacity < total_pages) {
-            status =
-                bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
-            if (EFI_ERROR(status)) {
-                uefi_log_status(system, "[boot] AllocatePages(boot info) failed: ", status);
-                return status;
-            }
-            boot_capacity = total_pages;
-            boot_info = (boot_info_t*)(UINTN)boot_buf;
+        status = efi_reserve_loader_pages(bs, &boot_buf, &boot_capacity, total_pages);
+        if (EFI_ERROR(status)) {
+            uefi_log_status(system, "[boot] AllocatePages(boot info) failed: ", status);
+            return status;
         }
+        boot_info = (boot_info_t*)(UINTN)boot_buf;
 
         memset8(boot_info, 0, sizeof(boot_info_t));
         boot_info->version = BOOT_INFO_VERSION;

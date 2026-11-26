@@ -16,6 +16,16 @@
 #define EFI_SUCCESS 0
 #define EFI_NOT_FOUND ((EFI_STATUS)0x800000000000000EULL)
 #define EFI_ERROR(x) ((x) != EFI_SUCCESS)
+#define EFI_INVALID_PARAMETER ((EFI_STATUS)0x8000000000000002ULL)
+#define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
+
+/* AllocatePages Type values: ANY_PAGES lets the firmware choose, ADDRESS demands
+ * the exact base in *Memory and fails if it is taken. */
+#define EFI_ALLOCATE_ANY_PAGES 0
+#define EFI_ALLOCATE_ADDRESS 2
+/* The EFI_MEMORY_TYPE the loader tags every allocation with, so the kernel can
+ * tell its own handoff pages apart from firmware data. */
+#define EFI_LOADER_DATA 2
 
 typedef uint64_t EFI_STATUS;
 /* Opaque firmware object reference (EFI_HANDLE).  Never dereferenced by the
@@ -372,7 +382,7 @@ typedef enum {
 
 /* EFI_PCI_IO_PROTOCOL and its helper types mirror the spec's per-device PCI
  * accessor.  Nothing in the loader calls through them: the only PCI use is
- * connect_graphics_controllers(), which needs the protocol GUID and not the
+ * efi_connect_graphics_controllers(), which needs the protocol GUID and not the
  * interface, and the framebuffer fallback reads config space directly through
  * ports 0xCF8/0xCFC.  They are declared so a future user has the layout. */
 typedef struct _EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
@@ -439,13 +449,15 @@ struct _EFI_PCI_IO_PROTOCOL {
     void* RomImage;
 };
 
-/* Initialiser for the GUID named EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID in the
- * spec.  The literal below is NOT that GUID's spec value, so the one use of it
- * (connect_graphics_controllers() in boot.c) matches no handle and its connect
- * pass is a silent no-op; see the FIXME at boot.c:213, which covers this and the
- * equally wrong PCI I/O GUID literal defined next to it. */
+/* Initialisers for the protocol GUIDs the connect passes in efi_connect.h look
+ * up (UEFI 2.10 §12.4 Simple Text Output, §14.4 PCI I/O, §14.2 PCI Root Bridge
+ * I/O). */
+#define EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID                                                       \
+    {0x387477c2, 0x69c7, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}}
+#define EFI_PCI_IO_PROTOCOL_GUID                                                                   \
+    {0x4cf5b200, 0x68b8, 0x4ca5, {0x9e, 0xec, 0xb2, 0x3e, 0x3f, 0x50, 0x02, 0x9a}}
 #define EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID                                                       \
-    {0x2c8b3a3c, 0x7c96, 0x4f50, {0x9f, 0xea, 0xf7, 0xb1, 0x00, 0x65, 0x9f, 0xf9}}
+    {0x2f707ebb, 0x4a1a, 0x11d4, {0x9a, 0x38, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}}
 
 /* The root bridge accessors use the same width encoding as the per-device PCI
  * I/O protocol. */

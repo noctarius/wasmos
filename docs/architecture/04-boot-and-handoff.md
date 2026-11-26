@@ -83,10 +83,12 @@ to determine size. The largest candidate BAR is selected. Width, height, and
 stride default to 1024×768×1024 when this path is taken.
 
 Before the Stage 1 attempt, the bootloader calls `connect_graphics_controllers`
-to connect the console output handle, standard error handle, and all
-`EFI_GRAPHICS_OUTPUT_PROTOCOL`, `EFI_PCI_IO_PROTOCOL`, and
-`EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` handles. This is necessary on OVMF builds
-where GOP drivers are not automatically connected.
+to connect, recursively, the console output handle, the standard error handle,
+and every handle carrying `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL`,
+`EFI_PCI_IO_PROTOCOL` or `EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL`
+(`src/boot/efi_connect.h`, GUIDs in `src/boot/uefi.h`). This binds GOP drivers on
+firmware whose boot manager has not connected them. The passes are best-effort:
+a protocol with no handles is skipped.
 
 **Pixel format encoding in `boot_info_t.flags`:**
 Bits 11:8 carry the `EFI_GRAPHICS_PIXEL_FORMAT` value from the GOP mode info:
@@ -120,7 +122,7 @@ The scanout is sized for the boot mode.
 
 The bootloader scans `EFI_SYSTEM_TABLE.ConfigurationTable` for two GUIDs:
 - ACPI 2.0: `{8868e871-e4f1-11d3-bc22-0080c73c8881}`
-- ACPI 1.0: `{eb9d2d30-2d88-11d3-9a16-00902773fc14d}`
+- ACPI 1.0: `{eb9d2d30-2d88-11d3-9a16-0090273fc14d}`
 
 ACPI 2.0 is preferred. On the first ACPI 2.0 match the search stops. ACPI 1.0
 is accepted as a fallback if no 2.0 entry is found.
@@ -143,7 +145,7 @@ The bootloader handles this with a retry loop:
 ```
 loop:
   GetMemoryMap(&mmap_size, mmap_buf, &map_key, ...)
-    → if EFI_BUFFER_TOO_SMALL: grow mmap_buf and retry
+    → if EFI_BUFFER_TOO_SMALL: free mmap_buf, allocate a larger one, retry
   fill boot_info_t (no UEFI allocations in this window)
   ExitBootServices(image, map_key)
     → if EFI_SUCCESS: done
@@ -152,9 +154,12 @@ loop:
 ```
 
 The framebuffer snapshot is captured before this loop so no GOP calls occur
-inside it. The `boot_info_t` blob is allocated before the loop on the first
-pass; if the loop retries, the existing allocation is reused (no
-`AllocatePages` inside the retry window).
+inside it. The `boot_info_t` run (boot_info, map copy, initfs, module table) is
+allocated on the first pass and reused while it is large enough; a map that
+outgrows it replaces it with a larger run. Either buffer that is replaced is
+freed first (`src/boot/efi_loader_alloc.h`), because anything still allocated as
+`EFI_LOADER_DATA` at `ExitBootServices` stays reserved for the kernel's lifetime.
+The last map buffer is the one exception: freeing it would invalidate the key.
 
 ### Runtime Services Handover (Kconfig `WASMOS_RTC_EFI`)
 

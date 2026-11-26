@@ -79,14 +79,17 @@ def _list_rows(test, session) -> dict:
     return {cols[0]: cols[1:] for cols in (line.split() for line in lines)}
 
 
-def _submit(test, session, spec: str) -> None:
+def _submit(test, session, spec: str, prompt: bool = True) -> None:
+    """Submit a unit and wait for the supervisor to accept it, then for the CLI's
+    next prompt. A caller whose unit halts or reboots the system as soon as it
+    is up passes prompt=False: the halt can overtake that prompt."""
     start = session.send_command(f"svc submit {spec}", timeout_s=20)
     unit = spec.split()[0]
     if not session.expect_from(start, f"svc: {unit} accepted".encode(), timeout_s=30):
         test.fail(
             f"the supervisor did not accept {unit!r}.\n--- tail ---\n{session.tail()}\n"
         )
-    if not session.expect_from(start, b"wamos> ", timeout_s=20):
+    if prompt and not session.expect_from(start, b"wamos> ", timeout_s=20):
         test.fail(f"no prompt after svc.\n--- tail ---\n{session.tail()}\n")
 
 
@@ -821,6 +824,7 @@ class SupervisorCriticalTests(unittest.TestCase):
                 self,
                 session,
                 f"probe-crit {PROBE} class=critical -- crash-once probe-crit",
+                prompt=False,
             )
             self.assertTrue(
                 _syslog_wait(
@@ -924,6 +928,7 @@ class SupervisorCriticalRebootTests(unittest.TestCase):
                 self,
                 session,
                 f"probe-crit {PROBE} class=critical -- crash-once probe-crit",
+                prompt=False,
             )
             # The firmware banner of the next boot is the reboot; the harness
             # reports it as GuestRestarted.

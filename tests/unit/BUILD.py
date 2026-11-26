@@ -212,6 +212,8 @@ TESTS = [
     (RUN, 'test_framebuffer_geometry', []),
     (CC, 'test_efi_runtime_map', [*C11, '-iquote', R('src/boot'), '-iquote', R('src/kernel/include'), '-iquote', R('tests/unit'), R('tests/unit/test_efi_runtime_map.c')]),
     (RUN, 'test_efi_runtime_map', []),
+    (CC, 'test_efi_connect', [*C11, '-iquote', R('src/boot'), '-iquote', R('src/kernel/include'), '-iquote', R('tests/unit'), R('tests/unit/test_efi_connect.c')]),
+    (RUN, 'test_efi_connect', []),
     (CC, 'test_device_window', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_device_window.c'), R('src/kernel/device_window.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_device_window', []),
     (CC, 'test_pci_config', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('tests/unit/shadow_io'), '-iquote', R('tests/unit/include'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), '-iquote', R('tests/unit'), R('tests/unit/test_pci_config.c'), R('src/kernel/pci_config.c'), R('src/kernel/arch/x86_64/pci_cfg_x86_64.c'), R('tests/unit/stubs_spinlock.c')]),

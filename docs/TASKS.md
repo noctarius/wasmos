@@ -405,9 +405,11 @@ Source: `architecture/06-memory-management.md`,
 - [x] [BUG][P1] Read the interrupted RSP from `frame[4]` for kernel faults too. The
   dump now always takes the saved RSP. Covered by `test_exception_dump`, which
   raises from a stack whose top it logs and compares with kpanic's rsp.
-- [ ] [BUG][P1] Correct both PCI protocol GUIDs in the bootloader. Neither matches the
-  UEFI spec value, so both `ConnectController` passes are silent no-ops
-  (`src/boot/boot.c:213` `FIXME`, `src/boot/uefi.h`).
+- [x] [BUG][P1] Correct both PCI protocol GUIDs in the bootloader. Neither matched the
+  UEFI spec value, so both `ConnectController` passes were silent no-ops. The
+  passes live in `src/boot/efi_connect.h` and the GUIDs in `src/boot/uefi.h`;
+  covered by `tests/unit/test_efi_connect.c`, whose fake firmware publishes
+  handles under the spec GUIDs.
 - [ ] [BUG][P1] Free the previous buffer on the `EFI_BUFFER_TOO_SMALL` memory-map retry
   and on `boot_capacity` growth. Both paths reallocate without releasing, so the
   pages leak as `EFI_LOADER_DATA` and the kernel never reclaims them

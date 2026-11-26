@@ -5,6 +5,7 @@
 #include "uefi.h"
 #include "elf.h"
 #include "boot.h"
+#include "efi_connect.h"
 #if defined(WASMOS_EFI_RUNTIME) && defined(__aarch64__)
 #include "efi_runtime_map.h"
 #endif
@@ -182,31 +183,6 @@ static void copy_cstr(char* dst, UINTN dst_size, const char* src) {
     dst[i] = '\0';
 }
 
-static void connect_handles_for_protocol(EFI_SYSTEM_TABLE* system,
-                                         EFI_CONNECT_CONTROLLER connect_controller,
-                                         EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer,
-                                         const EFI_GUID* protocol) {
-    if (!system || !connect_controller || !locate_handle_buffer || !protocol) {
-        return;
-    }
-    EFI_HANDLE* handles = 0;
-    UINTN handle_count = 0;
-    EFI_STATUS status = locate_handle_buffer(
-        EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL, protocol, 0, &handle_count, &handles);
-    if (EFI_ERROR(status) || !handles || handle_count == 0) {
-        return;
-    }
-    for (UINTN i = 0; i < handle_count; ++i) {
-        if (!handles[i]) {
-            continue;
-        }
-        connect_controller(handles[i], 0, 0, TRUE);
-    }
-    if (system->BootServices && system->BootServices->FreePool) {
-        system->BootServices->FreePool(handles);
-    }
-}
-
 static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
     static int g_graphics_connected = 0;
     if (g_graphics_connected || !system || !system->BootServices) {
@@ -227,23 +203,7 @@ static void connect_graphics_controllers(EFI_SYSTEM_TABLE* system) {
         connect_controller(system->StandardErrorHandle, 0, 0, TRUE);
     }
 
-    static const EFI_GUID text_output_guid = {
-        0x387477c2, 0x69c7, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}};
-    /* FIXME: neither GUID below matches the UEFI 2.10 spec value
-     * (EFI_PCI_IO_PROTOCOL_GUID is 4CF5B200-68B8-4CA5-9EEC-B23E3F50029A,
-     * EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID is 2F707EBB-4A1A-11D4-9A38-
-     * 0090273FC14D), so both LocateHandleBuffer calls find nothing and those
-     * two connect passes are no-ops. The failure is silent: this whole helper
-     * is best-effort and GOP discovery still succeeds via its own fallbacks. */
-    static const EFI_GUID pci_io_guid = {
-        0x2f707eb9, 0x3a1a, 0x11d4, {0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69}};
-    static const EFI_GUID root_bridge_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
-
-    connect_handles_for_protocol(
-        system, connect_controller, locate_handle_buffer, &text_output_guid);
-    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &pci_io_guid);
-    connect_handles_for_protocol(
-        system, connect_controller, locate_handle_buffer, &root_bridge_guid);
+    efi_connect_graphics_controllers(system->BootServices);
     g_graphics_connected = 1;
 }
 

@@ -421,15 +421,18 @@ Source: `architecture/06-memory-management.md`,
   (`src/boot/boot.c:617`, `:861`).
 
 
-- [ ] [BUG][P1] Free the two ring-3 trampoline pages at
-  `warp_r3_teardown`. `paging_destroy_address_space` reclaims page-table
-  structures only, not mapped leaf frames, so 8 KiB leaks on every WARP guest
-  teardown (`src/kernel/warp/ring3_trampolines.c`).
-- [ ] [BUG][P1] Free the private PD/PT frames beneath a cloned low slot.
-  `paging_destroy_address_space` frees only the slot-0 PDPT frame and never
-  walks below it, so every root that went through
-  `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
-  paths leak earlier iterations' PDs/PTs too (`src/kernel/arch/x86_64/paging.c`).
+- [x] [BUG][P1] Free the two ring-3 trampoline pages at
+  `warp_r3_teardown`. It now looks both up in the root and frees them before
+  destroying it (`tests/test_teardown_leaks.py`, `debug.leak_test=1`: 8 KiB per
+  cycle before).
+- [x] [BUG][P1] Free the private PD/PT frames beneath a cloned low slot.
+  Destroy and strip release a private low slot with `free_private_low_slot`
+  (aarch64: `free_subtree` over three levels), skipping any table the kernel
+  root shares, and the clone links each table as it allocates it so a failure
+  frees the partial copy whole (`tests/test_teardown_leaks.py`: 4 KiB per
+  process root on x86_64 before). aarch64 did not leak in practice -- its
+  kernel low slot is block-mapped, so the clone has no lower tables -- and was
+  fixed the same way so it cannot once it has.
 - [x] [BUG][P1] Serialize `irq_mask`/`irq_unmask`. Not reachable: the PIC
   masks exist only in the PIC interrupt modes, which Kconfig keeps single-CPU
   (`WASMOS_SMP` depends on the I/O APIC), and there every writer either holds
@@ -561,15 +564,14 @@ and `architecture/33-completion-ports.md`.
   (`src/kernel/irq_sharing.c:71`, `:102`, `:144`).
 - [x] [BUG][P1] Serialize `kenv_set`/`kenv_unset`. Done in c8ae1df3: every
   lookup and change of the store holds `g_kenv_lock`.
-- [ ] [BUG][P1] Release the process slot on every `process_spawn_as_internal`
-  failure after the `->NEW` claim. `process_find_slot` reclaims only
-  UNUSED/DEAD and there is no NEW->DEAD edge, so the slot is stranded for the
-  life of the kernel, plus a leaked mm context on the later paths
-  (`src/kernel/process.c` `FIXME(spawn-slot-leak)`).
-- [ ] [BUG][P1] Sweep select sets on owner death. Endpoints are reclaimed via
-  `idtable_release_owner`; `g_select_table` has no equivalent, so a process
-  exiting without `ipc_select_destroy` leaks its select-set id and its
-  per-context quota (`src/kernel/ipc.c`).
+- [x] [BUG][P1] Release the process slot on every `process_spawn_as_internal`
+  failure after the `->NEW` claim. Each failure now goes through
+  `process_spawn_abandon` (NEW -> ZOMBIE -> REAPING, then `process_reap`), which
+  frees what the spawn had built and publishes DEAD
+  (`test_process_lifecycle`, a failed spawn gives its slot back).
+- [x] [BUG][P1] Sweep select sets on owner death. `ipc_endpoints_release_owner`
+  now releases the context's select sets through `idtable_release_owner`, with
+  the same teardown `ipc_select_destroy` runs (`test_ipc` S28).
 - [ ] [ENHANCEMENT][P2] Initialise `g_user_mutex_lock` with `ksync_spinlock_init`.
   It is never initialised, benign today only because all-zero storage happens
   to be a valid unlocked `spinlock_t` (`src/kernel/user_mutex.c`).

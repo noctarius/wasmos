@@ -36,6 +36,14 @@ void kernel_boot_kpanic_stop_test(void);
  * other vector or architecture it logs that and returns. Boot CPU only. */
 void kernel_boot_exception_test(void);
 
+/* With the boot option debug.leak_test=1, build and release address spaces --
+ * with a cloned low slot, and with it stripped again -- and, on an x86_64 WARP
+ * kernel, WARP ring-3 setups, a fixed number of times each, and log free
+ * physical memory before and after each run ("[leak-test] <what>: cycles=N
+ * before=B after=A"), then "[leak-test] done". Boot CPU only, before the other
+ * CPUs start, so nothing else allocates while it measures. */
+void kernel_boot_leak_test(void);
+
 /* Mode 2's spin: called from each architecture's timer interrupt before the
  * interrupt is ended. Returns at once unless the test is armed in mode 2 and
  * this is CPU 1. */

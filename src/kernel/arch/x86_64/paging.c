@@ -501,6 +501,49 @@ int paging_create_address_space(uint64_t* out_root_table) {
     return rc;
 }
 
+/* Frees a low-slot PDPT that a user root owns, with every PD and PT frame below
+ * it that the root owns too: paging_clone_low_slot_in_root gives each its own.
+ * A PD or PT whose frame is the one the kernel root's low slot has at the same
+ * index is the kernel's, shared by value, and is left alone -- which is what
+ * paging_create_address_space's IDENTITY_PD_COUNT copy installs.  Leaf frames,
+ * 4 KiB or 2 MiB, are never freed: in the low slot they are the kernel's
+ * identity map.  The caller has already established that `pdpt_phys` itself is
+ * not the kernel's low PDPT. */
+static void free_private_low_slot(uint64_t pdpt_phys) {
+    volatile uint64_t* kernel_pml4 = table_ptr(g_pml4_phys);
+    volatile uint64_t* kpdpt =
+        (kernel_pml4[0] & PT_FLAG_PRESENT) ? table_ptr(entry_phys(kernel_pml4[0])) : 0;
+    volatile uint64_t* pdpt = table_ptr(pdpt_phys);
+    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+        if (!(pdpt[i] & PT_FLAG_PRESENT) || (pdpt[i] & PT_FLAG_LARGE_PAGE)) {
+            continue;
+        }
+        uint64_t pd_phys = entry_phys(pdpt[i]);
+        uint64_t kpd_phys = 0;
+        if (kpdpt && (kpdpt[i] & PT_FLAG_PRESENT) && !(kpdpt[i] & PT_FLAG_LARGE_PAGE)) {
+            kpd_phys = entry_phys(kpdpt[i]);
+        }
+        if (pd_phys == kpd_phys) {
+            continue;
+        }
+        volatile uint64_t* pd = table_ptr(pd_phys);
+        volatile uint64_t* kpd = kpd_phys ? table_ptr(kpd_phys) : 0;
+        for (uint32_t j = 0; j < ENTRIES_PER_TABLE; ++j) {
+            if (!(pd[j] & PT_FLAG_PRESENT) || (pd[j] & PT_FLAG_LARGE_PAGE)) {
+                continue;
+            }
+            uint64_t pt_phys = entry_phys(pd[j]);
+            if (kpd && (kpd[j] & PT_FLAG_PRESENT) && !(kpd[j] & PT_FLAG_LARGE_PAGE) &&
+                entry_phys(kpd[j]) == pt_phys) {
+                continue;
+            }
+            pfa_free_pages(pt_phys, 1);
+        }
+        pfa_free_pages(pd_phys, 1);
+    }
+    pfa_free_pages(pdpt_phys, 1);
+}
+
 /* Frees the page-table STRUCTURE owned by a user root: every PT and PD below
  * the user slot (PML4 index 1), that slot's PDPT, a private low PDPT in slot 0
  * when it is not the kernel's own, and finally the root frame itself.
@@ -514,8 +557,8 @@ int paging_create_address_space(uint64_t* out_root_table) {
  * is freed exactly once, so calling this twice for the same root trips the
  * allocator's double-free panic.
  *
- * Only the slot-0 PDPT frame is reclaimed; PD and PT frames installed below it
- * by paging_clone_low_slot_in_root are not walked. */
+ * A private low slot goes with free_private_low_slot, which also frees the PD
+ * and PT frames paging_clone_low_slot_in_root installed below it. */
 void paging_destroy_address_space(uint64_t root_table) {
     if (!root_table || root_table == g_pml4_phys) {
         return;
@@ -553,7 +596,7 @@ void paging_destroy_address_space(uint64_t root_table) {
         pfa_free_pages(pdpt_phys, 1);
     }
     if ((pml4[0] & PT_FLAG_PRESENT) && (!kernel || entry_phys(pml4[0]) != entry_phys(kernel[0]))) {
-        pfa_free_pages(entry_phys(pml4[0]), 1);
+        free_private_low_slot(entry_phys(pml4[0]));
     }
     pfa_free_pages(root_table, 1);
 }
@@ -569,8 +612,10 @@ void paging_destroy_address_space(uint64_t root_table) {
  *
  * dst[0] is overwritten, so any subtree previously installed there is dropped
  * without being freed.  Returns 0 on success, -1 when either root is missing,
- * when the kernel root has no low slot, or on frame exhaustion; the partial
- * copy's PD/PT frames are not all reclaimed on the error paths. */
+ * when the kernel root has no low slot, or on frame exhaustion.  Each new table
+ * is linked into its parent as soon as it is allocated, so on exhaustion the
+ * partial copy is one tree, which free_private_low_slot releases whole before
+ * dst is touched. */
 int paging_clone_low_slot_in_root(uint64_t root_table) {
     if (!root_table || !g_pml4_phys) {
         return -1;
@@ -597,9 +642,10 @@ int paging_clone_low_slot_in_root(uint64_t root_table) {
         uint64_t src_pd_phys = entry_phys(pdpt_entry);
         uint64_t new_pd_phys = 0;
         if (alloc_table(&new_pd_phys) != 0) {
-            pfa_free_pages(new_pdpt_phys, 1);
+            free_private_low_slot(new_pdpt_phys);
             return -1;
         }
+        new_pdpt[pdpt_i] = (new_pd_phys & ~0xFFFULL) | (pdpt_entry & 0xFFFULL);
         volatile uint64_t* src_pd = table_ptr(src_pd_phys);
         volatile uint64_t* new_pd = table_ptr(new_pd_phys);
 
@@ -616,8 +662,7 @@ int paging_clone_low_slot_in_root(uint64_t root_table) {
             uint64_t src_pt_phys = entry_phys(pd_entry);
             uint64_t new_pt_phys = 0;
             if (alloc_table(&new_pt_phys) != 0) {
-                pfa_free_pages(new_pd_phys, 1);
-                pfa_free_pages(new_pdpt_phys, 1);
+                free_private_low_slot(new_pdpt_phys);
                 return -1;
             }
             volatile uint64_t* src_pt = table_ptr(src_pt_phys);
@@ -627,8 +672,6 @@ int paging_clone_low_slot_in_root(uint64_t root_table) {
             }
             new_pd[pd_i] = (new_pt_phys & ~0xFFFULL) | (pd_entry & 0xFFFULL);
         }
-
-        new_pdpt[pdpt_i] = (new_pd_phys & ~0xFFFULL) | (pdpt_entry & 0xFFFULL);
     }
 
     dst[0] = (new_pdpt_phys & ~0xFFFULL) | (src[0] & 0xFFFULL);
@@ -799,11 +842,10 @@ uint64_t paging_virt_to_phys(uint64_t virt) {
     return paging_virt_to_phys_in_root(0, virt);
 }
 
-/* Removes the low identity slot (PML4 index 0) from a user root and frees that
- * slot's PDPT frame, but only when it is private — a root still pointing at the
- * kernel's own low PDPT just has the entry cleared.  PD and PT frames below the
- * PDPT are not walked, so a slot installed by paging_clone_low_slot_in_root
- * leaves those frames allocated.
+/* Removes the low identity slot (PML4 index 0) from a user root and, when that
+ * slot is private, frees it with free_private_low_slot, PD and PT frames
+ * included — a root still pointing at the kernel's own low PDPT just has the
+ * entry cleared.
  *
  * If root_table happens to be the active root, CR3 is rewritten to flush the
  * stale TLB entries on this CPU before returning.
@@ -832,7 +874,7 @@ int paging_strip_low_slot_in_root(uint64_t root_table) {
         WRITE_CR3(root_table);
     }
     if (pdpt_low_phys && pdpt_low_phys != kernel_pdpt_low_phys) {
-        pfa_free_pages(pdpt_low_phys, 1);
+        free_private_low_slot(pdpt_low_phys);
     }
     return paging_verify_user_root_impl(root_table, 0);
 }

@@ -349,6 +349,7 @@ void kmain(boot_info_t* boot_info) {
     smp_init();
     klog_write("[kernel] interrupts on\n");
     arch_irq_enable();
+    kernel_boot_leak_test();
     smp_cpus_up();
     kernel_boot_kpanic_stop_test();
     kernel_boot_exception_test();

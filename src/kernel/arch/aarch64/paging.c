@@ -511,8 +511,10 @@ static void free_subtree(uint64_t entry, uint32_t levels) {
     pfa_free_pages(table, 1);
 }
 
-/* Free the user slot's level-1/2/3 tables, a private low-slot level-1 table,
- * and the root. Leaf frames belong to the region and shared-memory owners. */
+/* Free the user slot's level-1/2/3 tables, a private low slot's level-1/2/3
+ * tables (paging_clone_low_slot_in_root gives the root its own at every level),
+ * and the root. Leaf frames belong to the region and shared-memory owners, and
+ * in the low slot to the kernel's identity map. */
 void paging_destroy_address_space(uint64_t root_table) {
     if (!root_table || root_table == g_kernel_root) {
         return;
@@ -521,13 +523,14 @@ void paging_destroy_address_space(uint64_t root_table) {
     free_subtree(root[USER_L0_INDEX], 3u);
     uint64_t kernel_low = entry_phys(table_ptr(g_kernel_root)[LOW_L0_INDEX]);
     if ((root[LOW_L0_INDEX] & DESC_VALID) && entry_phys(root[LOW_L0_INDEX]) != kernel_low) {
-        pfa_free_pages(entry_phys(root[LOW_L0_INDEX]), 1);
+        free_subtree(root[LOW_L0_INDEX], 3u);
     }
     pfa_free_pages(root_table, 1);
 }
 
 /* Deep-copy `src` (a level-`level` table) into a fresh table; leaves are
- * copied by value. Returns the new table's frame, or 0 on exhaustion. */
+ * copied by value. Returns the new table's frame, or 0 on exhaustion, having
+ * freed every table this call and its recursion allocated. */
 static uint64_t clone_table(uint64_t src, uint32_t level) {
     uint64_t dst = 0;
     if (alloc_table(&dst) != 0) {
@@ -540,6 +543,8 @@ static uint64_t clone_table(uint64_t src, uint32_t level) {
         if (level < 3u && entry_is_table(e)) {
             uint64_t child = clone_table(entry_phys(e), level + 1u);
             if (!child) {
+                /* The entries copied so far hold this copy's own tables. */
+                free_subtree(dst | DESC_VALID | DESC_TABLE, 4u - level);
                 return 0;
             }
             d[i] = child | (e & ~DESC_OA_MASK);
@@ -582,7 +587,7 @@ int paging_strip_low_slot_in_root(uint64_t root_table) {
     }
     uint64_t kernel_low = entry_phys(table_ptr(g_kernel_root)[LOW_L0_INDEX]);
     if (entry_phys(low) != kernel_low) {
-        pfa_free_pages(entry_phys(low), 1);
+        free_subtree(low, 3u);
     }
     return verify_user_root(root_table, 0);
 }

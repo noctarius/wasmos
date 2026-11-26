@@ -74,9 +74,10 @@
  * caller owns both outputs and releases them with warp_r3_teardown. */
 int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys);
 
-/* Release what warp_r3_setup produced: destroy the user address space and free the stack
- * frames.  A zero root or stack is skipped, so a partially built pair is safe to pass.
- * The caller must ensure no CPU still has `user_root` loaded in CR3. */
+/* Release what warp_r3_setup produced: free the two trampoline pages and the stack
+ * frames, and destroy the user address space.  A zero root or stack is skipped, so a partially
+ * built pair is safe to pass.  The caller must ensure no CPU still has `user_root` loaded in
+ * CR3. */
 void warp_r3_teardown(uint64_t user_root, uint64_t stack_phys);
 
 /* link.cpp (exposed as C for syscall.c).

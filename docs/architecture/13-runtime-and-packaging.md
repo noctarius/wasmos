@@ -118,7 +118,7 @@ application is packed into this format by `make_wasmos_app`.
 #### Format Version
 
 The parser in `wasmos_app.c` accepts exactly one version, `WASMOS_APP_VERSION`
-(currently **10**), with exactly one `header_size`. Every package is repacked from
+(currently **11**), with exactly one `header_size`. Every package is repacked from
 source on each build, so an older container is rejected, never reinterpreted:
 v10 reuses v9's header size and changes what one count means, which only the
 version tells apart. Out-of-tree packages have to be repacked after a bump.
@@ -126,7 +126,8 @@ version tells apart. Out-of-tree packages have to be repacked after a bump.
 | Version      | Change                                                                  |
 |--------------|-------------------------------------------------------------------------|
 | 9            | Register-window (`[[regions]]`) table; driver-match table removed       |
-| 10 (current) | Dependency table (`[deps]`) replaces the required-endpoint table        |
+| 10           | Dependency table (`[deps]`) replaces the required-endpoint table        |
+| 11 (current) | `signature_size`: an optional Ed25519 signature ends the package        |
 
 #### Header Layout
 
@@ -145,6 +146,7 @@ typedef struct __attribute__((packed)) {
     uint32_t compiled_size;     /* appended WARP AOT size; 0 if absent */
     char     subsystem_tag[8];  /* ASCII, NUL-padded runtime tag */
     uint32_t region_count;      /* up to WASMOS_APP_MAX_REGIONS (4) */
+    uint32_t signature_size;    /* 0 (unsigned) or WASMOS_APP_SIGNATURE_LEN (64) */
 } wasmos_app_header_t;
 ```
 
@@ -166,10 +168,22 @@ The parser walks the blob in this fixed order, same as the packer writes it:
 [mem_hint_count × wasmos_mem_hint_t]
 [raw WASM or ELF bytes]
 [compiled WARP AOT bytes if compiled_size > 0]
+[Ed25519 signature if signature_size > 0]
 ```
 
 Variable-length sections are bounds-checked with 32-bit overflow-safe
 arithmetic before any pointer access.
+
+#### Signature
+
+A signed package ends in a 64-byte Ed25519 signature (RFC 8032, via
+`libs/monocypher`) over every byte before it, header included, and nothing may
+follow it: a blob with bytes after the signature, or a `signature_size` other
+than 0 or 64, does not parse. Parsing only locates the signature;
+`wasmos_app_signature_valid` checks it against the public key compiled into the
+kernel, and only when the package asks for a capability beyond `ipc.basic`.
+What a valid signature earns is the capability policy's business
+([Capability and Policy](10-capability-and-policy.md), "Signed Packages").
 
 #### Flag Bits
 
@@ -250,11 +264,11 @@ a compatibility alias for `proc.endpoint`.
 
 #### Capability Names (fail-closed at pack time)
 
-`make_wasmos_app` validates capability names against a static allowlist:
-
-```
-ipc.basic   io.port   irq.route   mmio.map   dma.buffer   system.control
-```
+`make_wasmos_app` validates capability names against a static allowlist: every
+name `capability_kind_from_name` knows (`io.port`, `irq.route`, `mmio.map`,
+`dma.buffer`, `system.control`, `subsystem.register`, `svc.class`,
+`console.owner`, `spawn.grant`, `svc.control`, `pci.config`, `rtc.efi`,
+`inventory.device`, `inventory.storage`), plus `ipc.basic`.
 
 Any other name is a pack error. Capability correctness is enforced at build
 time, not discovered at runtime.
@@ -268,7 +282,16 @@ The tool in `scripts/make_wasmos_app.c` has two invocation modes:
 **Manifest mode (preferred):**
 ```
 make_wasmos_app --manifest <path> --in <module.wasm|elf> --out <module.wap>
+                [--compiled <module.warpbin>] [--sign <seed.hex>]
 ```
+
+`--sign` signs the package with the Ed25519 key a hex seed file (32 bytes)
+names. The build signs every package it packs with its seed
+(`WASMOS_SIGNING_KEY` in Kconfig; without one, a development seed created once
+as `<build dir>/signing/dev-seed.hex`), and `make_wasmos_app --pubkey-c
+<seed.hex> <out.c>` writes the matching public key as the C definition the
+kernel compiles in. A kernel built with one key refuses privilege to packages
+signed with another.
 
 The manifest is a TOML-like file parsed from a `linker.metadata` file
 colocated with each component's source directory. Sections:

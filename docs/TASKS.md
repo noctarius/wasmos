@@ -723,17 +723,17 @@ Source: `architecture/13-runtime-and-packaging.md`,
 - [ ] [FEATURE][P2] Finish service-class discovery lifecycle: enumeration,
   add/remove/death notifications, capability-gated registration, and consumer
   migration where class lookup removes hardwired provider names.
-- [ ] [BUG][P1] Stop a manifest from granting itself privileged capabilities.
-  `capability_grant_name` grants whatever a `.wap`'s `[[capabilities]]` names,
-  and `PROC_IPC_SPAWN_PATH` spawns an image from any path, writable volumes
-  included, for any requester. So any process can write and spawn an image that
-  declares `spawn.grant`, `svc.control`, `system.control` or `io.port`, and any
-  process can spawn a privileged utility as a deputy (`svc kill vt`,
-  `svc submit ...`). The requester checks of `architecture/10` ("Requester
-  Checks") hold only for processes that cannot do that. Needs a policy over
-  images -- signed or allow-listed packages, or privileged capabilities granted
-  only to images from the initfs or a read-only system volume -- and, for
-  deputies like `svc`, authentication of the invoking process.
+- [x] [BUG][P1] Stop a manifest from granting itself privileged capabilities.
+  Packages are signed: every `.wap` the build packs ends in an Ed25519
+  signature (`libs/monocypher`), and the kernel grants a manifest capability
+  beyond `ipc.basic` only to a package that verifies against the key it was
+  built with. A kind that acts on requests (`system.control`, `svc.control`,
+  `spawn.grant`, `console.owner`, `subsystem.register`, `svc.class`,
+  `pci.config`, `rtc.efi`, `inventory.*`) is granted only when the requester
+  holds it or holds `spawn.grant`, which closes the deputy case (`svc` started
+  by anyone); the shell holds `svc.control` to run `svc`. Hardware kinds need
+  only the signature. `tests/test_signed_packages.py`, `test_capability`,
+  `test_wasmos_app_deps`; architecture/10 "Signed Packages".
 - [ ] [FEATURE][P1] Supervise the storage and network chains. Decided: clients
   REBIND to a restarted driver where they can, so a restart costs a delay, not
   the open files or sockets above it; `parent=` (the supervisor's restart

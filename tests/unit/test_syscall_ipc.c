@@ -795,7 +795,13 @@ static void conc_run(void* (*fn)(void*)) {
     __atomic_store_n(&g_conc_barrier_count, 0u, __ATOMIC_RELAXED);
     for (uint32_t i = 0; i < CONC_THREADS; ++i) {
         idx[i] = i;
-        CHECK(pthread_create(&threads[i], 0, fn, (void*)idx[i]) == 0, "thread started");
+        /* A worker short leaves the started ones spinning in conc_barrier for
+         * good, and the join below would hang on them, so the run ends here. */
+        if (pthread_create(&threads[i], 0, fn, (void*)idx[i]) != 0) {
+            printf("  [FAIL] could not start concurrency worker %u\n", i);
+            fflush(stdout);
+            exit(1);
+        }
     }
     for (uint32_t i = 0; i < CONC_THREADS; ++i) {
         (void)pthread_join(threads[i], 0);

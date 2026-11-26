@@ -21,7 +21,7 @@ typedef struct {
     uint32_t irqs[WASMOS_IRQ_GRANT_LIMIT];
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
-    uint64_t dma_pinned_bytes; /* cumulative region_alloc bytes charged against dma_max_bytes */
+    uint64_t dma_pinned_bytes; /* bytes charged against dma_max_bytes (capability_dma_charge) */
     uint32_t dma_window_count;
     wasmos_dma_window_t dma_windows[CAPABILITY_DMA_WINDOW_LIMIT];
     uint32_t mask;
@@ -550,35 +550,30 @@ uint32_t capability_dma_max_bytes(uint32_t context_id) {
     return ctx->dma_max_bytes;
 }
 
-/* 1 when charging `bytes` on top of what is already committed would stay within
- * the context's budget.  A pure test: it does not reserve anything, so the
- * caller must follow a successful allocation with capability_dma_commit, and
- * nothing serialises the two.  A zero `bytes`, a missing profile or capability,
- * and a zero budget are all denied. */
-int capability_dma_within_budget(uint32_t context_id, uint64_t bytes) {
-    capability_context_state_t snap;
-    const capability_context_state_t* ctx = capability_snapshot(context_id, &snap);
-    if (!ctx || bytes == 0) {
+/* Contract in capability.h. The test and the charge share one hold of
+ * g_cap_lock, so two reservations cannot both pass against the same remainder. */
+int capability_dma_charge(uint32_t context_id, uint64_t bytes) {
+    if (bytes == 0) {
         return 0;
     }
-    if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
-        return 0;
+    int charged = 0;
+    ksync_spinlock_lock(&g_cap_lock);
+    capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
+    if (ctx && ctx->spawn_profile_configured && (ctx->mask & (1u << 3)) != 0 &&
+        ctx->dma_max_bytes != 0 && ctx->dma_pinned_bytes <= ctx->dma_max_bytes &&
+        bytes <= (uint64_t)ctx->dma_max_bytes - ctx->dma_pinned_bytes) {
+        ctx->dma_pinned_bytes += bytes;
+        charged = 1;
     }
-    if (ctx->dma_max_bytes == 0) {
-        return 0; /* no budget declared -> no driver-owned DMA regions */
-    }
-    return (ctx->dma_pinned_bytes + bytes) <= (uint64_t)ctx->dma_max_bytes;
+    ksync_spinlock_unlock(&g_cap_lock);
+    return charged;
 }
 
-/* Charges `bytes` against the context's cumulative DMA usage.  Monotonic: there
- * is no matching release, so a driver that frees a DMA region does not get its
- * budget back, and the counter is neither clamped to dma_max_bytes nor checked
- * for overflow.  An unknown context is ignored. */
-void capability_dma_commit(uint32_t context_id, uint64_t bytes) {
+void capability_dma_refund(uint32_t context_id, uint64_t bytes) {
     ksync_spinlock_lock(&g_cap_lock);
     capability_context_state_t* ctx = capability_state_for_context(context_id, 0);
     if (ctx) {
-        ctx->dma_pinned_bytes += bytes;
+        ctx->dma_pinned_bytes = bytes <= ctx->dma_pinned_bytes ? ctx->dma_pinned_bytes - bytes : 0;
     }
     ksync_spinlock_unlock(&g_cap_lock);
 }

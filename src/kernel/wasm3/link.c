@@ -2373,7 +2373,7 @@ m3ApiRawFunction(wasmos_region_alloc) {
     }
 
     if (!found) {
-        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        dma_region_unreserve(proc->context_id, phys_base, (uint32_t)pages);
         m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
     /* Placement may have grown linear memory, so re-read the base and size
@@ -2381,7 +2381,7 @@ m3ApiRawFunction(wasmos_region_alloc) {
      * bounds-checked against the old size, and growth only raises it. */
     mem_base = m3_GetMemory(runtime, &mem_size, 0);
     if (!mem_base || mem_size == 0) {
-        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        dma_region_unreserve(proc->context_id, phys_base, (uint32_t)pages);
         m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
 
@@ -2390,7 +2390,7 @@ m3ApiRawFunction(wasmos_region_alloc) {
     if (wasm_user_va_from_offset(proc->context_id, off32, (uint32_t)region_bytes, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, region_bytes, MEM_REGION_FLAG_WRITE) != 0 ||
         (virt & 0xFFFULL) != 0) {
-        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        dma_region_unreserve(proc->context_id, phys_base, (uint32_t)pages);
         m3ApiReturn(WASMOS_ERR_DMA_INVALID);
     }
     if (mm_context_map_physical(proc->context_id,
@@ -2399,7 +2399,7 @@ m3ApiRawFunction(wasmos_region_alloc) {
                                 region_bytes,
                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                     MEM_REGION_FLAG_USER) != 0) {
-        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        dma_region_unreserve(proc->context_id, phys_base, (uint32_t)pages);
         m3ApiReturn(WASMOS_ERR_DMA_UNAVAILABLE);
     }
 
@@ -2408,7 +2408,6 @@ m3ApiRawFunction(wasmos_region_alloc) {
      * extra pin reference; wasm3_release_pid() returns them on reap. */
     wasm_dma_region_map_track(proc->pid, off32, (uint32_t)region_bytes, phys_base, (uint32_t)pages);
     __builtin_memcpy(mem_base + (uint32_t)out_phys_off, &phys_base, sizeof(uint64_t));
-    capability_dma_commit(proc->context_id, region_bytes); /* charge the pinned footprint */
     m3ApiReturn(off32);
 }
 

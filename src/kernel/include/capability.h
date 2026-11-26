@@ -169,12 +169,16 @@ uint32_t capability_dma_max_bytes(uint32_t context_id);
 
 /* Per-context DMA budget for driver-owned pinned regions (region_alloc). The
  * budget (dma_max_bytes) is declared by the driver's dma.buffer manifest
- * capability. capability_dma_within_budget returns non-zero if pinning `bytes`
- * more would stay within it; capability_dma_commit records `bytes` as pinned
- * after a successful allocation. Region allocations are pinned for the context's
- * lifetime (freed at reap when the context is torn down), so there is no
- * uncharge. */
-int capability_dma_within_budget(uint32_t context_id, uint64_t bytes);
-void capability_dma_commit(uint32_t context_id, uint64_t bytes);
+ * capability. capability_dma_charge tests and charges in one step under the
+ * table lock: it returns 1 and adds `bytes` to the pinned total when that stays
+ * within the budget, and 0, charging nothing, otherwise -- so reservations
+ * outstanding on several CPUs together never exceed the budget. A zero `bytes`,
+ * a missing profile or capability, and a zero budget are refused.
+ * capability_dma_refund takes back a charge whose allocation was abandoned
+ * (never below zero). Region allocations stay pinned for the context's
+ * lifetime and are released with the context at reap, so a successful charge
+ * is never refunded. */
+int capability_dma_charge(uint32_t context_id, uint64_t bytes);
+void capability_dma_refund(uint32_t context_id, uint64_t bytes);
 
 #endif

@@ -95,9 +95,9 @@ int32_t hostcall_dma_unmap_borrow(int32_t borrow_id);
  *
  * Every runtime's region allocator -- wasm3 and WARP `region_alloc`, the native
  * driver API's dma_region_alloc -- calls this and then maps the frames its own
- * way. The caller then owes exactly one of: capability_dma_commit(context_id,
- * pages * 4096) once the frames are mapped, or pfa_free_pages(*out_phys, pages)
- * when the mapping fails.
+ * way. A granted reservation is already charged against the budget, so
+ * reservations outstanding at once on several CPUs never exceed it together;
+ * when the mapping fails the caller owes dma_region_unreserve.
  *
  * Returns WASMOS_ERR_NONE and *out_phys, else, with nothing allocated:
  *   WASMOS_ERR_DMA_INVALID      `pages` is 0 or above DMA_REGION_MAX_PAGES
@@ -107,5 +107,9 @@ int32_t hostcall_dma_unmap_borrow(int32_t borrow_id);
  *                               would exceed the declared page budget
  */
 int32_t dma_region_reserve(uint32_t context_id, uint32_t pages, uint64_t* out_phys);
+
+/* Undo a dma_region_reserve whose mapping failed: return its `pages` frames at
+ * `phys` and its charge against context_id's budget. */
+void dma_region_unreserve(uint32_t context_id, uint64_t phys, uint32_t pages);
 
 #endif /* WASMOS_KERNEL_HOSTCALL_DMA_H */

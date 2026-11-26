@@ -390,9 +390,13 @@ Source: `architecture/06-memory-management.md`,
   calls `pfa_alloc_pages` with no floor, so slot-backed linear memory falls
   outside the guarded zone that `memory.h` and `physmem.h` still describe as an
   invariant (`src/kernel/linmem_slots.c:105`).
-- [ ] [BUG][P1] Serialize the capability table. Grants (spawn) and checks (hardware host
-  calls) run on any CPU with no lock, so a grant that grows `g_cap_ctx` can race
-  a concurrent lookup (`src/kernel/capability.c`).
+- [x] [BUG][P1] Serialize the capability table. Done in 9b875143: `g_cap_lock`
+  covers every writer, and checks decide on a copy taken under it. The one
+  check-then-act left -- the DMA budget, tested at reserve and charged only
+  after the caller mapped the region, so two reservations outstanding at once
+  could together exceed it -- is now one step: `capability_dma_charge` tests
+  and charges under the lock, `dma_region_unreserve` refunds a mapping that
+  failed (`test_hostcall_dma`).
 - [ ] [ENHANCEMENT][P2] Validate the initfs higher-half alias. The pointer fixup assumes initfs
   lies inside the 512 MiB shared window; a higher firmware placement yields an
   unmapped pointer with no diagnostic (`src/kernel/kernel_boot_runtime.c:69`).
@@ -428,9 +432,12 @@ Source: `architecture/06-memory-management.md`,
   walks below it, so every root that went through
   `paging_clone_low_slot_in_root` leaks its lower tables; the clone's own error
   paths leak earlier iterations' PDs/PTs too (`src/kernel/arch/x86_64/paging.c`).
-- [ ] [BUG][P1] Serialize `irq_mask`/`irq_unmask`. They read-modify-write
-  `g_pic_mask1/2` with no lock, while only the `irq_sharing` ops path holds
-  `g_irq_lines_lock` (`src/kernel/arch/x86_64/irq_x86_64.c`).
+- [x] [BUG][P1] Serialize `irq_mask`/`irq_unmask`. Not reachable: the PIC
+  masks exist only in the PIC interrupt modes, which Kconfig keeps single-CPU
+  (`WASMOS_SMP` depends on the I/O APIC), and there every writer either holds
+  `g_irq_lines_lock` (interrupts masked) or runs before interrupts are enabled.
+  The dependency is now documented where it is relied on and where it is set
+  (`irq_x86_64.c`, `Kconfig`).
 - [ ] [ENHANCEMENT][P2] Pack `EFI_ADDRESS_SPACE_DESCRIPTOR`. Without
   `__attribute__((packed))` the padding disagrees with the ACPI byte stream it
   mirrors; harmless only because nothing reads it (`src/boot/uefi.h`).
@@ -458,10 +465,12 @@ Source: `architecture/06-memory-management.md`,
   `mm_shared_create` publishes with `refcount == 0` while reclamation happens only
   on the release/unmap paths, so a region nobody retains or maps holds its frames
   until the kernel exits (`src/kernel/memory.c`).
-- [ ] [BUG][P2] Give `capability_dma_commit` a matching release, a clamp to
-  `dma_max_bytes`, and an overflow check. It only ever accumulates, so a long-lived
-  context's committed total drifts upward and past the window it is meant to
-  enforce (`src/kernel/capability.c`).
+- [x] [BUG][P2] Give `capability_dma_commit` a matching release, a clamp to
+  `dma_max_bytes`, and an overflow check. Replaced by `capability_dma_charge`,
+  which refuses a charge past the budget (no wrap: it compares against the
+  remainder) and `capability_dma_refund` for an abandoned reservation. A region
+  that was mapped stays pinned until the context is reaped, which releases the
+  whole record, so a successful charge needs no release.
 - [ ] [ENHANCEMENT][P2] Make `kernel_boot_run_low_slot_sweep_diagnostic` behave like
   its name. It mutates every root it visits, returns nothing, and stops at the first
   failure -- leaving later processes with their low slot intact and no indication
@@ -549,9 +558,8 @@ and `architecture/33-completion-ports.md`.
   has_sharers`. `WASMOS_ERR_IRQ_BAD_LINE` exists but is returned only for a
   NULL table; an out-of-range line is an out-of-bounds access
   (`src/kernel/irq_sharing.c:71`, `:102`, `:144`).
-- [ ] [BUG][P1] Serialize `kenv_set`/`kenv_unset`. The store has no lock, and the
-  "callers run descheduled" justification does not hold on SMP: two CPUs can
-  claim the same free slot (`src/kernel/include/kenv.h:23` `FIXME`).
+- [x] [BUG][P1] Serialize `kenv_set`/`kenv_unset`. Done in c8ae1df3: every
+  lookup and change of the store holds `g_kenv_lock`.
 - [ ] [BUG][P1] Release the process slot on every `process_spawn_as_internal`
   failure after the `->NEW` claim. `process_find_slot` reclaims only
   UNUSED/DEAD and there is no NEW->DEAD edge, so the slot is stranded for the

@@ -757,12 +757,11 @@ static int nd_dma_region_alloc(uint32_t pages, void** out_ptr, uint64_t* out_phy
     /* The pointer is the direct-map alias, which names a frame only inside the
      * higher-half window; the reserve's 2 GiB ceiling can reach past it. */
     if (phys + (uint64_t)pages * PAGE_SIZE > KERNEL_HIGHER_HALF_WINDOW_BYTES) {
-        pfa_free_pages(phys, pages);
+        dma_region_unreserve(proc->context_id, phys, pages);
         return WASMOS_ERR_DMA_UNAVAILABLE;
     }
     void* ptr = ptr_cast(void, (phys | KERNEL_HIGHER_HALF_BASE));
     memset(ptr, 0, (size_t)pages * PAGE_SIZE);
-    capability_dma_commit(proc->context_id, (uint64_t)pages * PAGE_SIZE);
     *out_ptr = ptr;
     *out_phys = phys;
     return 0;

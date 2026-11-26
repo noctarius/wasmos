@@ -143,10 +143,15 @@ int32_t dma_region_reserve(uint32_t context_id, uint32_t pages, uint64_t* out_ph
         return WASMOS_ERR_DMA_UNAVAILABLE;
     }
     if (!capability_dma_range_allowed(context_id, phys, bytes) ||
-        !capability_dma_within_budget(context_id, bytes)) {
+        !capability_dma_charge(context_id, bytes)) {
         pfa_free_pages(phys, pages);
         return WASMOS_ERR_DMA_RANGE;
     }
     *out_phys = phys;
     return WASMOS_ERR_NONE;
+}
+
+void dma_region_unreserve(uint32_t context_id, uint64_t phys, uint32_t pages) {
+    pfa_free_pages(phys, pages);
+    capability_dma_refund(context_id, (uint64_t)pages * 0x1000ULL);
 }

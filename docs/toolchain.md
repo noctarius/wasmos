@@ -375,7 +375,7 @@ lives in one place, `scripts/sdk/wasmos-clang`.
 | `crt1.o` | the `wasmos_main` export and the bridge to `main()` |
 | `libc.a` | `string`, `stdio`, `stdlib`, `ctype`, `math`, `unistd`, `spawn_info`, `ipc_managed`, `script` |
 | `libsys.a` | coroutines, IPC futures, the service runtime |
-| `libmonocypher.a` | [Monocypher](../libs/monocypher) 4.0.3: Ed25519, X25519, BLAKE2b, ChaCha20-Poly1305, Argon2, SHA-512; not linked by default, an app adds `-lmonocypher` (`examples/c/crypto_smoke`) |
+| `libmonocypher.a` | [Monocypher](../libs/monocypher) 4.0.3: Ed25519, X25519, BLAKE2b, ChaCha20-Poly1305, Argon2, SHA-512; not linked by default, an app adds `-lmonocypher` (`examples/c/crypto_smoke`). C and C++ only: the Rust, Zig and TinyGo drivers do not pass library arguments to the link, and AssemblyScript has no link step |
 
 `stdint.h`, `stddef.h`, `stdbool.h` and `stdarg.h` come from clang's freestanding
 resource headers and are not shipped in the sysroot.

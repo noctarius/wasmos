@@ -2465,6 +2465,15 @@ Source: `architecture/25-diagnostics-status.md`,
   prompted this is gone: `examples/rust/hello` builds through `wasmos-rustc` now, so
   it takes the same small-stack layout as an SDK-built module and passes the check
   where it used to fail it.)
+- [ ] [BUG][P2] `wasmos-rustc`, `wasmos-zig` and `wasmos-tinygo` drop every argument
+  that is not a source file of their language or a `.c` file, without a diagnostic,
+  so `-lmonocypher` (or any `-l`/`-L`/`.a`) never reaches the link and the app fails
+  later with undefined symbols. The SDK's `libmonocypher.a` is therefore usable from
+  C and C++ only. Pass library arguments through (`-C link-arg=` for Rust, the
+  `zig build-exe` command line for Zig, the generated target file's `ldflags` for
+  TinyGo), reject anything else by name, and ship a Rust `extern "C"` module for
+  Monocypher. AssemblyScript has no link step and is out of reach of a static
+  library.
 - [ ] [TEST][P3] Run the SDK's *compilers* on Linux. The wrappers themselves are
   covered: all eight parse and run their argument handling, manifest reading and
   path resolution under busybox `ash`/`awk` on Linux (harsher than CI's `dash`),

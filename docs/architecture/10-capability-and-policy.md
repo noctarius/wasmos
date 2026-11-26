@@ -252,10 +252,14 @@ hold. Two rules keep a process from acquiring one through an image instead
    `inventory.storage` are granted only when the process that asked for the
    spawn holds the same kind, or holds `spawn.grant`. Otherwise any process
    could start a signed privileged utility -- `svc kill vt` -- as a deputy and
-   steer it with arguments. What the requester holds is taken when it asks
-   (`pm_requester_cap_mask`), since it may be gone by the time the child
-   starts. A process the kernel runs itself (the init process that spawns the
-   supervisor) has no package and holds every kind. The hardware kinds
+   steer it with arguments. What the requester holds is taken when the
+   process manager receives the request, before it reads the package
+   (`pm_requester_cap_mask`), since the requester may be gone by the time the
+   child starts. A process the manager created from a package is marked so at
+   creation (`process_t.from_image`) and holds what its manifest was granted
+   while it runs and nothing once it is exiting; any other process is one the
+   kernel runs itself (the init process that spawns the supervisor) and holds
+   every kind. The hardware kinds
    (`io.port`, `mmio.map`, `irq.route`, `dma.buffer`) reach only what the
    signed manifest bounds, or what a spawn profile -- which only a
    `spawn.grant` holder can attach -- names, so the signature is their whole

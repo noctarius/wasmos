@@ -195,6 +195,11 @@ typedef struct process {
     /* Set by process_set_critical: a process the system cannot run without and
      * nobody restarts. Its exit, by any path, is a kernel panic. */
     uint8_t critical;
+    /* Set by the process manager when it creates the process from a package
+     * image, before the process first runs, and kept until the slot is reused.
+     * A process without it is the kernel's own. Read by the process manager
+     * only (pm_requester_cap_mask). */
+    uint8_t from_image;
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1]; /* "KERNEL", "WARP", ... */
     /* Template context filled at spawn and copied into the main thread; also
      * refreshed from the interrupted frame on preemption. The context the

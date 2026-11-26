@@ -5,7 +5,12 @@
  * priv_probe its svc.control: otherwise any process could start a privileged
  * package and steer it with arguments of its choosing. The spawn request itself
  * is answered (the child is created); the refusal comes when the child starts,
- * and the kernel logs it. Log lines go to the kernel log, "[priv-deputy] ...". */
+ * and the kernel logs it. Log lines go to the kernel log, "[priv-deputy] ...".
+ *
+ * `priv_deputy exit` sends the same request and exits without waiting for the
+ * answer, so the process manager decides the grant while the requester is
+ * exiting or already a zombie; it must still hold only what the requester held
+ * when it asked. */
 #include <stdint.h>
 
 #include "stdio.h"
@@ -33,7 +38,8 @@ static void deputy_on_reply(void* user, const wasmos_ipc_message_t* msg) {
     g_answered = 1;
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    int exit_at_once = argc > 1 && strcmp(argv[1], "exit") == 0;
     int32_t proc_ep = wasmos_startup_proc_endpoint();
     int32_t ep = wasmos_ipc_create_endpoint();
     if (proc_ep < 0 || ep < 0) {
@@ -63,6 +69,10 @@ int main(void) {
         deputy_log("spawn request failed", -1);
         (void)wasmos_xfer_buffer_release(bid);
         return 1;
+    }
+    if (exit_at_once) {
+        deputy_log("exiting after the request", 0);
+        return 0; /* the buffer is released with the process */
     }
     for (int32_t i = 0; i < PRIV_DEPUTY_WAIT_POLLS && !g_answered; ++i) {
         (void)wasmos_sys_event_loop_poll(&g_loop, 8);

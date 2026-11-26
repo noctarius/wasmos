@@ -49,7 +49,9 @@ class DevmgrInventoryAuthTest(unittest.TestCase):
 
     def _log(self) -> bytes:
         # device-manager's lines are console output, which may also or only
-        # reach the kernel-log port.
+        # reach the kernel-log port. Pumping the session moves pending serial
+        # output into buf; syslog_tail reads its own file.
+        self.session._pump(0.25)
         return bytes(self.session.buf) + self.session.syslog_tail(1 << 20).encode()
 
     def test_an_app_cannot_publish_a_block_device(self):
@@ -65,7 +67,6 @@ class DevmgrInventoryAuthTest(unittest.TestCase):
             log = self._log()
             if ACCEPTED in log or REFUSED.search(log):
                 break
-            time.sleep(0.25)
         log = self._log()
         self.assertFalse(
             ACCEPTED in log,

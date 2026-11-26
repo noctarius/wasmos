@@ -13,7 +13,10 @@
  *     so a test can see whether kpanic's stop reached it.
  *   - kernel_boot_exception_test: the debug.exception_test boot option, which
  *     raises a CPU exception in ring 0 from a known rip and rsp, so a test can
- *     check what the exception dump reports for them. */
+ *     check what the exception dump reports for them.
+ *   - kernel_boot_leak_test: the debug.leak_test boot option, which builds and
+ *     tears down address spaces (and WARP ring-3 setups) repeatedly and logs
+ *     free physical memory before and after, so a test can see a leak. */
 #include "kernel_boot_runtime.h"
 
 #include "arch/arch_cpu.h"
@@ -32,6 +35,9 @@
 #include "wasmos_status.h"
 #if !defined(WASMOS_ARCH_AARCH64)
 #include "arch/x86_64/cpu_x86_64.h"
+#endif
+#if defined(WASMOS_WASM_RUNTIME_WARP) && !defined(WASMOS_ARCH_AARCH64)
+#include "warp_ring3.h"
 #endif
 
 /* debug.kpanic_stop_test: the boot CPU arms the test with a mode, CPU 1 starts
@@ -126,6 +132,86 @@ void kernel_boot_exception_test(void) {
 #else
     x86_exception_test_raise(vector);
 #endif
+}
+
+/* debug.leak_test: each cycle builds one object and releases it, so free physical
+ * memory must come back to the same byte count however many cycles run.  One
+ * cycle runs first, unmeasured, so any one-time growth it triggers is not counted
+ * against the rest. */
+#define LEAK_TEST_CYCLES 16u
+
+/* An address space with a private copy of the low slot, as every process root
+ * starts; `strip` also removes the slot again first, as process roots then do. */
+static int leak_test_address_space(int strip) {
+    uint64_t root = 0;
+    if (paging_create_address_space(&root) != 0) {
+        return -1;
+    }
+    if (paging_clone_low_slot_in_root(root) != 0) {
+        paging_destroy_address_space(root);
+        return -1;
+    }
+    if (strip) {
+        (void)paging_strip_low_slot_in_root(root);
+    }
+    paging_destroy_address_space(root);
+    return 0;
+}
+
+static int leak_test_cloned(void) {
+    return leak_test_address_space(0);
+}
+
+static int leak_test_stripped(void) {
+    return leak_test_address_space(1);
+}
+
+#if defined(WASMOS_WASM_RUNTIME_WARP) && !defined(WASMOS_ARCH_AARCH64)
+static int leak_test_warp_r3(void) {
+    uint64_t root = 0;
+    uint64_t stack = 0;
+    if (warp_r3_setup(&root, &stack) != 0) {
+        return -1;
+    }
+    warp_r3_teardown(root, stack);
+    return 0;
+}
+#endif
+
+static void leak_test_run(const char* what, int (*cycle)(void)) {
+    if (cycle() != 0) {
+        klog_printf("[leak-test] %s: setup failed\n", what);
+        return;
+    }
+    uint64_t before = pfa_free_bytes();
+    for (uint32_t i = 0; i < LEAK_TEST_CYCLES; ++i) {
+        if (cycle() != 0) {
+            klog_printf("[leak-test] %s: setup failed\n", what);
+            return;
+        }
+    }
+    uint64_t after = pfa_free_bytes();
+    klog_printf("[leak-test] %s: cycles=%u before=%llu after=%llu\n",
+                what,
+                (unsigned)LEAK_TEST_CYCLES,
+                (unsigned long long)before,
+                (unsigned long long)after);
+}
+
+void kernel_boot_leak_test(void) {
+    char value[4];
+    uint32_t written = 0;
+    if (kenv_get("debug.leak_test", value, sizeof(value), &written) != WASMOS_OK) {
+        return;
+    }
+    leak_test_run("address space with a cloned low slot", leak_test_cloned);
+    leak_test_run("address space with the low slot stripped", leak_test_stripped);
+#if defined(WASMOS_WASM_RUNTIME_WARP) && !defined(WASMOS_ARCH_AARCH64)
+    leak_test_run("warp ring-3 setup", leak_test_warp_r3);
+#else
+    klog_write("[leak-test] warp ring-3 setup: needs an x86_64 WARP kernel; not run\n");
+#endif
+    klog_write("[leak-test] done\n");
 }
 
 /* Allocate zeroed frames inside the bootstrap window (KERNEL_BOOTSTRAP_WINDOW_BYTES,

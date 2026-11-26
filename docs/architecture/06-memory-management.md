@@ -177,6 +177,12 @@ cloned initially for early kernel-mode processes.
 `paging_strip_low_slot_in_root(root)` removes PML4[0] before a process
 enters CPL3. This is part of the ring3 hardening path.
 
+The low-slot copy is the root's own at every table level, so stripping it, or
+destroying a root that still has it, frees every table frame beneath it as
+well as the slot's top table; only a table frame identical to the kernel
+root's at the same index is skipped, as shared. Leaf frames are never freed
+there: in the low slot they are the kernel's identity map.
+
 `paging_verify_user_root(root, log)` / `paging_verify_user_root_no_low_slot`
 enforce allowed PML4 slot constraints: only slots 0 (kernel bootstrap,
 pre-strip), 1 (user), and 511 (kernel higher-half) are permitted. Any other

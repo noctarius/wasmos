@@ -235,12 +235,21 @@ int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     return 0;
 }
 
-/* Release what warp_r3_setup produced.  Destroying the address space also releases the
- * two trampoline pages mapped into it.  Either argument may be 0, in which case that
- * half is skipped, so a partially-set-up driver can be torn down with the same call.
- * The caller must ensure no CPU still has `user_root` loaded. */
+/* Release what warp_r3_setup produced.  paging_destroy_address_space frees page-table
+ * frames only, never the leaves mapped through them, so the two trampoline pages are
+ * looked up in the root and freed here first, as the stack is below.  Either argument
+ * may be 0, in which case that half is skipped, so a partially-set-up driver can be
+ * torn down with the same call.  The caller must ensure no CPU still has `user_root`
+ * loaded. */
 void warp_r3_teardown(uint64_t user_root, uint64_t stack_phys) {
     if (user_root) {
+        const uint64_t trampolines[] = {WARP_R3_HC_TRAMPOLINE, WARP_R3_RET_TRAMPOLINE};
+        for (uint32_t i = 0; i < sizeof(trampolines) / sizeof(trampolines[0]); ++i) {
+            uint64_t phys = paging_virt_to_phys_in_root(user_root, trampolines[i]);
+            if (phys) {
+                pfa_free_pages(phys & ~(PAGE_SIZE - 1u), 1);
+            }
+        }
         paging_destroy_address_space(user_root);
     }
     if (stack_phys) {

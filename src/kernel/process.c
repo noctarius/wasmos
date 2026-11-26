@@ -171,6 +171,34 @@ static void process_stack_poison(uintptr_t stack_base, uintptr_t stack_top) {
     }
 }
 
+static void process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint32_t stack_pages);
+
+/* Unmap the STACK_GUARD_PAGES below and above a stack.  0 when every guard is
+ * unmapped, -1 at the first unmap that fails, with the earlier ones left
+ * unmapped: process_release_stack_frames remaps them. */
+static int process_unmap_stack_guards(uint64_t guard_low_virt, uint64_t guard_high_virt) {
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Give back a [guard][stack][guard] allocation: map every guard page again
+ * (paging_map_4k replaces a mapping that is still present, so guards that were
+ * never unmapped are harmless) and free the frames.  The guards have to be
+ * mapped first: a freed frame is reused through the direct map. */
+static void process_release_stack_frames(uint64_t alloc_base_phys, uint32_t stack_pages) {
+    process_restore_stack_guard_mappings(alloc_base_phys, stack_pages);
+    pfa_free_pages(alloc_base_phys, (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u));
+}
+
 static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     if (!slot || stack_pages == 0) {
         return -1;
@@ -203,17 +231,13 @@ static int process_alloc_stack(process_t* slot, uint32_t stack_pages) {
     uint64_t guard_high_virt =
         using_higher_half_stack ? (higher_half_base + guard_high) : guard_high;
 
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] guard unmap failed\n");
-            return -1;
-        }
-    }
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] guard unmap failed\n");
-            return -1;
-        }
+    /* An unmap can fail (splitting a large mapping needs a table frame).  The
+     * stack is not recorded in the slot until both guards are cut, so a failure
+     * is undone here: process_reap would never see this allocation. */
+    if (process_unmap_stack_guards(guard_low_virt, guard_high_virt) != 0) {
+        klog_write("[sched] guard unmap failed\n");
+        process_release_stack_frames(base, stack_pages);
+        return -1;
     }
 
     slot->stack_base = (uintptr_t)usable_base_virt;
@@ -256,17 +280,11 @@ static int process_alloc_thread_stack(thread_t* thread, uint32_t stack_pages) {
     uint64_t usable_base_virt = higher_half_base + usable_base;
     uint64_t guard_high_virt = higher_half_base + guard_high;
 
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] worker guard unmap failed\n");
-            return -1;
-        }
-    }
-    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            klog_write("[sched] worker guard unmap failed\n");
-            return -1;
-        }
+    /* As in process_alloc_stack: undone here, since nothing records it yet. */
+    if (process_unmap_stack_guards(guard_low_virt, guard_high_virt) != 0) {
+        klog_write("[sched] worker guard unmap failed\n");
+        process_release_stack_frames(base, stack_pages);
+        return -1;
     }
 
     thread->kstack_base = (uintptr_t)usable_base_virt;
@@ -1298,10 +1316,8 @@ static void process_reap(process_t* proc) {
             continue;
         }
         if (thread->kstack_alloc_base_phys && thread->kstack_pages) {
-            uint64_t total_pages = (uint64_t)thread->kstack_pages + (STACK_GUARD_PAGES * 2u);
-            process_restore_stack_guard_mappings((uint64_t)thread->kstack_alloc_base_phys,
-                                                 thread->kstack_pages);
-            pfa_free_pages((uint64_t)thread->kstack_alloc_base_phys, total_pages);
+            process_release_stack_frames((uint64_t)thread->kstack_alloc_base_phys,
+                                         thread->kstack_pages);
             thread->kstack_alloc_base_phys = 0;
             thread->kstack_pages = 0;
             thread->kstack_base = 0;
@@ -1309,10 +1325,7 @@ static void process_reap(process_t* proc) {
         }
     }
     if (proc->stack_alloc_base_phys && proc->stack_pages) {
-        uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
-        process_restore_stack_guard_mappings((uint64_t)proc->stack_alloc_base_phys,
-                                             proc->stack_pages);
-        pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
+        process_release_stack_frames((uint64_t)proc->stack_alloc_base_phys, proc->stack_pages);
     }
     /* Before anything is released and before the spawner hears of the exit:
      * until its function is quiesced the device may still master into the DMA
@@ -1482,11 +1495,26 @@ int process_spawn(const char* name, process_entry_t entry, void* arg, uint32_t* 
  * schedulable state and no path other than this one moves a NEW slot, so the
  * lock is only needed to make find-then-claim atomic against a concurrent spawn.
  *
- * FIXME(spawn-slot-leak): every failure AFTER the ->NEW claim returns without
- * putting the slot back. process_find_slot only reclaims UNUSED/DEAD and
- * process_transition_legal has no NEW -> DEAD edge, so a failed spawn strands
- * that g_processes[] entry permanently, along with its mm context on the paths
- * that create one first. */
+ * Every failure after the claim goes through process_spawn_abandon, which
+ * reaps the half-built slot like any dead process.  For that to release exactly
+ * what was built, the slot carries its pid from the claim on and its context id
+ * from the moment the mm context exists. */
+/* Give back a slot whose spawn failed after claiming it.  NEW -> ZOMBIE is the
+ * edge process_transition_legal keeps for this, and ZOMBIE -> REAPING claims the
+ * slot for process_reap, which frees whatever the spawn had built -- the mm
+ * context, the main thread, the stacks -- and publishes DEAD, where
+ * process_find_slot can claim it again.  Both transitions must succeed: the slot
+ * was never published, so nothing else can have moved it.  Returns -1, the
+ * spawn's failure result. */
+static int process_spawn_abandon(process_t* slot) {
+    if (!process_transit(slot, PROCESS_STATE_NEW, PROCESS_STATE_ZOMBIE) ||
+        !process_transit(slot, PROCESS_STATE_ZOMBIE, PROCESS_STATE_REAPING)) {
+        process_sched_invariant_fail("spawn abandon failed", slot->pid, (uint64_t)slot->state);
+    }
+    process_reap(slot);
+    return -1;
+}
+
 static int process_spawn_as_internal(uint32_t parent_pid, const char* name, process_entry_t entry,
                                      void* arg, uint32_t* out_pid,
                                      thread_state_t initial_thread_state,
@@ -1512,19 +1540,19 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     }
 
     uint32_t pid = g_next_pid++;
+    slot->pid = pid;
+    slot->context_id = 0;
     ksync_spinlock_unlock(&g_process_table_lock);
     mm_context_t* ctx = mm_context_create(pid);
     if (!ctx) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
+    slot->context_id = ctx->id;
     if (paging_clone_low_slot_in_root(ctx->root_table) != 0) {
-        mm_context_destroy(ctx->id);
-        return -1;
+        return process_spawn_abandon(slot);
     }
 
-    slot->pid = pid;
     slot->parent_pid = parent_pid;
-    slot->context_id = ctx->id;
     slot->main_tid = 0;
     __atomic_store_n(&slot->thread_count, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&slot->live_thread_count, 0u, __ATOMIC_RELAXED);
@@ -1560,17 +1588,17 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
     if (thread_spawn_in_owner(
             pid, name ? name : "", initial_thread_state, initial_thread_reason, &slot->main_tid) !=
         0) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
 
     thread_t* main_thread = process_main_thread(slot);
     if (!main_thread) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
     main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     main_thread->ticks_remaining = main_thread->time_slice_ticks;
@@ -1580,7 +1608,7 @@ static int process_spawn_as_internal(uint32_t parent_pid, const char* name, proc
     __atomic_store_n(&slot->live_thread_count, 1u, __ATOMIC_RELAXED);
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
-        return -1;
+        return process_spawn_abandon(slot);
     }
     arch_context_init_kernel_entry(
         &slot->ctx,

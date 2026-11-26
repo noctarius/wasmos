@@ -250,6 +250,12 @@ The boot option `debug.exception_test=<vector>` (x86_64; vectors 1 and 5)
 raises an exception in ring 0 from a stack of its own, after logging the rip
 and rsp the dump must report; `tests/test_exception_dump.py` compares the two.
 
+The boot option `debug.leak_test=1` runs build-and-teardown cycles -- an
+address space with a cloned low slot, the same with the slot stripped, and on
+an x86_64 WARP kernel a WARP ring-3 setup -- on the boot CPU before the other
+CPUs start, logging `pfa_free_bytes()` before and after each run;
+`tests/test_teardown_leaks.py` requires the two to match.
+
 The fatal panic dump now prints per-CPU backtraces in this style, resolving
 kernel return addresses through a build-generated symbol table:
 

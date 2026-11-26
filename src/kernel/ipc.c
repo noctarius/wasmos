@@ -110,6 +110,7 @@ typedef struct ipc_select {
 
 static idtable_t g_select_table;
 static ksync_spinlock_t g_select_table_lock;
+static void ipc_select_teardown(void* elem, void* user);
 
 static idtable_t g_endpoint_table;
 static ksync_spinlock_t g_endpoint_table_lock;
@@ -970,8 +971,9 @@ static void ipc_owed_deliver(ipc_owed_t* record) {
     ksync_spinlock_unlock(&ep->lock);
 }
 
-/* Releases every endpoint owned by `owner_context_id`, running the teardown
- * above on each, then delivers the hangups that context owed: one to every
+/* Releases every select set and endpoint owned by `owner_context_id`: each set
+ * as ipc_select_destroy would, each endpoint through the teardown above. Then
+ * delivers the hangups that context owed: one to every
  * destination its endpoints sent to, and one per ipc_context_watch on it.
  * Called from the process reap path, so the owner is already dead and cannot
  * race its own endpoints. A thread blocked on one of these endpoints is aborted
@@ -984,6 +986,12 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id) {
     if (owner_context_id == 0) {
         return;
     }
+    /* The context's select sets first, while the endpoints they watch still
+     * exist to have their watchers removed, and before the endpoint table lock:
+     * the file-wide order is select table -> endpoint table. */
+    ksync_spinlock_lock(&g_select_table_lock);
+    (void)idtable_release_owner(&g_select_table, owner_context_id, ipc_select_teardown, 0);
+    ksync_spinlock_unlock(&g_select_table_lock);
     ksync_spinlock_lock(&g_endpoint_table_lock);
     (void)idtable_release_owner(&g_endpoint_table, owner_context_id, ipc_endpoint_teardown, &batch);
     for (ipc_owed_t** link = &g_context_watches; *link;) {
@@ -1189,8 +1197,8 @@ static ipc_select_t* ipc_select_find(uint32_t select_id, uint32_t owner_context_
  * store rejects, IPC_ERR_FULL when the per-context quota is reached or the store
  * cannot grow.  The set watches nothing until ipc_select_add is called, and a
  * wait on an empty set therefore blocks until its timeout.  The caller owns the
- * id and must ipc_select_destroy it; process teardown does not sweep select
- * sets the way it sweeps endpoints. */
+ * id and destroys it with ipc_select_destroy; whatever it still holds when its
+ * process is reaped goes with ipc_endpoints_release_owner. */
 int ipc_select_create(uint32_t owner_context_id, uint32_t* out_select_id) {
     if (!out_select_id) {
         return IPC_ERR_INVALID;
@@ -1482,6 +1490,30 @@ int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id, uint32_t* out
     return ipc_recv_for(owner_context_id, ready, out_message);
 }
 
+/* What a select set holds, undone, short of freeing its slot: its watcher on
+ * every endpoint it watches is removed and anyone parked on it is woken with
+ * ABORT.  Runs from ipc_select_destroy and, through idtable_release_owner, from
+ * ipc_endpoints_release_owner; both hold g_select_table_lock and free the slot
+ * afterwards.  Takes each endpoint's lock through ipc_endpoint_get and then the
+ * set's event lock, the file-wide order. */
+static void ipc_select_teardown(void* elem, void* user) {
+    ipc_select_t* sel = (ipc_select_t*)elem;
+    (void)user;
+    for (uint32_t i = 0; i < sel->ep_count; i++) {
+        ipc_endpoint_t* ep = ipc_endpoint_get(sel->ep_ids[i]);
+        if (ep) {
+            if (ep->poll_struct) {
+                poll_struct_remove(ep->poll_struct, sel);
+            }
+            ksync_spinlock_unlock(&ep->lock);
+        }
+    }
+    ksync_spinlock_lock(&sel->event.lock);
+    sched_event_abort_all(&sel->event);
+    ksync_spinlock_unlock(&sel->event.lock);
+    sel->ep_count = 0;
+}
+
 /* Unregisters the set from every endpoint it watches, aborts anyone parked on
  * it, and frees the id.  Silent on failure by design — there is nothing a caller
  * could do about "the set was already gone" or "it is not yours", and both leave
@@ -1500,21 +1532,7 @@ void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id) {
         ksync_spinlock_unlock(&g_select_table_lock);
         return;
     }
-    /* Remove push watchers from all watched endpoints. */
-    for (uint32_t i = 0; i < sel->ep_count; i++) {
-        ipc_endpoint_t* ep = ipc_endpoint_get(sel->ep_ids[i]);
-        if (ep) {
-            if (ep->poll_struct) {
-                poll_struct_remove(ep->poll_struct, sel);
-            }
-            ksync_spinlock_unlock(&ep->lock);
-        }
-    }
-    /* Wake any blocked waiter with ABORT. */
-    ksync_spinlock_lock(&sel->event.lock);
-    sched_event_abort_all(&sel->event);
-    ksync_spinlock_unlock(&sel->event.lock);
-    sel->ep_count = 0;
+    ipc_select_teardown(sel, 0);
     (void)idtable_free(&g_select_table, select_id);
     ksync_spinlock_unlock(&g_select_table_lock);
 }

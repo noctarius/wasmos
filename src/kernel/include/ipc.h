@@ -246,9 +246,11 @@ int ipc_send(uint32_t endpoint, const ipc_message_t* message);
 int ipc_recv(uint32_t endpoint, ipc_message_t* out_message);
 int ipc_notify(uint32_t endpoint);
 int ipc_wait(uint32_t endpoint);
-/* Destroy every endpoint owned by owner_context_id, aborting its waiters
- * (SCHED_PEND_ABORT) and freeing its poll hub first, so nothing is left parked
- * on an endpoint that no longer exists. Called from process teardown; a
+/* Destroy every select set and endpoint owned by owner_context_id: each set as
+ * ipc_select_destroy would (its watchers removed, its waiters aborted, its id
+ * and quota freed), each endpoint with its waiters aborted (SCHED_PEND_ABORT)
+ * and its poll hub freed, so nothing is left parked on an object that no
+ * longer exists. Called from process teardown; a
  * context id of 0 (the kernel) is ignored, since kernel endpoints outlive any
  * one process. */
 void ipc_endpoints_release_owner(uint32_t owner_context_id);

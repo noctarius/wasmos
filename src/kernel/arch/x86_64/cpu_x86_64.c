@@ -452,7 +452,10 @@ static __attribute__((noreturn)) void x86_exception_panic_common(uint64_t vector
         cs = frame[2];
         rflags = frame[3];
         rbp = regs[EXC_REG_RBP];
-        rsp = ((cs & 0x3u) == 0x3u) ? frame[4] : addr_cast(uint64_t, frame);
+        /* Long mode saves SS:RSP on every exception, from ring 0 as well as
+         * ring 3 (Intel SDM Vol. 3A, 6.14.2), so frame[4] is the interrupted
+         * stack pointer either way. */
+        rsp = frame[4];
     } else {
         __asm__ volatile("lea (%%rip), %0" : "=r"(rip));
         __asm__ volatile("mov %%cs, %0" : "=r"(cs));
@@ -555,6 +558,69 @@ __attribute__((noreturn)) void x86_exception_panic(uint64_t vector) {
  * pointer is borrowed and only read before the machine halts. Does not return. */
 __attribute__((noreturn)) void x86_exception_panic_frame(uint64_t vector, const uint64_t* regs) {
     x86_exception_panic_common(vector, regs);
+}
+
+/* debug.exception_test (x86_exception_test_raise).  Each trigger moves %rsp to
+ * the top of g_x86_exception_test_stack, clears rbp so kpanic's backtrace ends
+ * at the trigger, and raises its exception; the instruction at the matching
+ * *_resume label is the one the saved rip must name.  The stack is the only one
+ * the panic path then runs on, so it is sized for that path, not for the
+ * trigger.  A single-step #DB is a trap taken after the instruction that follows
+ * the popfq setting TF, so its saved rip is the label after that nop. */
+#define X86_EXCEPTION_TEST_STACK_SIZE 32768u
+static uint8_t g_x86_exception_test_stack[X86_EXCEPTION_TEST_STACK_SIZE]
+    __attribute__((aligned(16)));
+
+extern void x86_exception_test_db(uint64_t stack_top);
+extern void x86_exception_test_int5(uint64_t stack_top);
+extern const char x86_exception_test_db_resume[];
+extern const char x86_exception_test_int5_resume[];
+
+__asm__(".text\n"
+        ".global x86_exception_test_db\n"
+        "x86_exception_test_db:\n"
+        "    mov %rdi, %rsp\n"
+        "    xor %ebp, %ebp\n"
+        "    pushfq\n"
+        "    orq $0x100, (%rsp)\n"
+        "    popfq\n"
+        "    nop\n"
+        ".global x86_exception_test_db_resume\n"
+        "x86_exception_test_db_resume:\n"
+        "1:  cli\n"
+        "    hlt\n"
+        "    jmp 1b\n"
+        ".global x86_exception_test_int5\n"
+        "x86_exception_test_int5:\n"
+        "    mov %rdi, %rsp\n"
+        "    xor %ebp, %ebp\n"
+        "    int $5\n"
+        ".global x86_exception_test_int5_resume\n"
+        "x86_exception_test_int5_resume:\n"
+        "1:  cli\n"
+        "    hlt\n"
+        "    jmp 1b\n");
+
+void x86_exception_test_raise(uint32_t vector) {
+    uint64_t stack_top =
+        addr_cast(uint64_t, &g_x86_exception_test_stack[0]) + X86_EXCEPTION_TEST_STACK_SIZE;
+    void (*trigger)(uint64_t) = 0;
+    uint64_t rip = 0;
+    if (vector == 1u) {
+        trigger = x86_exception_test_db;
+        rip = addr_cast(uint64_t, x86_exception_test_db_resume);
+    } else if (vector == 5u) {
+        trigger = x86_exception_test_int5;
+        rip = addr_cast(uint64_t, x86_exception_test_int5_resume);
+    } else {
+        klog_printf("[exception-test] vector %u unsupported; not run\n", (unsigned)vector);
+        return;
+    }
+    serial_printf("[exception-test] vector=%u rip=%016llx rsp=%016llx\n",
+                  (unsigned)vector,
+                  (unsigned long long)rip,
+                  (unsigned long long)stack_top);
+    trigger(stack_top);
 }
 
 /* Decide whether a CPU exception is a ring-3 process fault the kernel can absorb.

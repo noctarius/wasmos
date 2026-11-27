@@ -91,10 +91,23 @@ static void test_every_integer_type_has_its_real_limits(void) {
     CHECK(std::numeric_limits<double>::max() == __DBL_MAX__, "double max");
 }
 
+/* Regression: 2026-11-27-warp-compat-is-convertible -- is_convertible<From, To>
+ * asked whether To is constructible from From, so a type reachable only through
+ * an explicit constructor counted as implicitly convertible. */
+static void test_is_convertible_rejects_explicit_only_conversions(void) {
+    constexpr bool explicit_only = std::is_convertible<int, OnlyExplicit>::value;
+    constexpr bool implicit = std::is_convertible<int, long>::value;
+    constexpr bool to_void_pointer = std::is_convertible<OnlyExplicit*, const void*>::value;
+    CHECK(!explicit_only, "int counts as convertible to a type with only an explicit constructor");
+    CHECK(implicit, "int is not convertible to long");
+    CHECK(to_void_pointer, "a pointer is not convertible to const void*");
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_type_without_limits_has_no_max),
         WASMOS_TEST_CASE(test_every_integer_type_has_its_real_limits),
+        WASMOS_TEST_CASE(test_is_convertible_rejects_explicit_only_conversions),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_warp_compat_traits: ok\n");

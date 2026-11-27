@@ -622,7 +622,7 @@ static void warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem) 
      * can grow on demand and host zero-copy overlays, rather than the tiny
      * per-driver heap declared in the manifest.  This only sizes the reserved-VA
      * placement/scan window inside the fixed WARP_LINMEM_VA_STRIDE slot; physical
-     * pages are still committed lazily and bounded by kPhysLimit.  Mirrors the
+     * pages are still committed lazily.  Mirrors the
      * wasm3 side, where InitMemory floors maxPages to the 2 GiB slot. */
     const uint64_t floor = 512ULL * 1024ULL * 1024ULL; /* 512 MiB */
     if (initial_linmem < floor) {

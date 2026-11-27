@@ -710,6 +710,12 @@ static uint32_t warp_buffer_unborrow(uint32_t borrow_id, void* ctx_) {
 // ---------------------------------------------------------------------------
 
 #define WARP_BLOCK_BUF_PAGES 2u /* 8 KB block buffer per process */
+/* Exclusive physical limit for a block buffer: it is reached through the kernel direct map,
+ * and its address must pass block_buffer_check_phys (bit 31 clear, so it fits the i32 the
+ * host call returns). 512 MiB on x86_64, whose direct map is smaller; 2 GiB on aarch64. */
+#define WARP_BLOCK_BUF_PHYS_LIMIT                                                                  \
+    (KERNEL_HIGHER_HALF_WINDOW_BYTES < BLOCK_BUFFER_PHYS_LIMIT ? KERNEL_HIGHER_HALF_WINDOW_BYTES   \
+                                                               : BLOCK_BUFFER_PHYS_LIMIT)
 
 struct WarpBlockSlot {
     uint32_t pid;
@@ -766,7 +772,7 @@ static void warp_block_unpin(uint64_t phys) {
 
 /* hostcalls.yaml `block_buffer_phys`: physical base of this process's private 8 KiB
  * block buffer, allocated on first call and freed by warp_release_pid.  This backend
- * allocates below 512 MiB (the kernel's higher-half window and the 32-bit ATA DMA
+ * allocates below WARP_BLOCK_BUF_PHYS_LIMIT (512 MiB on x86_64, inside ATA's 32-bit DMA
  * range); the wasm3 backend uses BLOCK_BUFFER_PHYS_LIMIT (2 GiB), so a guest cannot
  * assume the address is in the low 512 MiB.
  * Returns the address as a u32 — it shares one signed i32 with the error codes, which
@@ -779,11 +785,7 @@ static uint32_t warp_block_buffer_phys(void* ctx_) {
     if (!slot)
         return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
     if (!slot->phys) {
-        /* Must be < 512MB: that's the kernel's higher-half identity mapping
-         * window AND within ATA's 32-bit DMA address range. That is already
-         * well under the 2 GiB the ABI can express, which block_buffer_check_phys
-         * asserts so a later pool change cannot turn an address into an error. */
-        slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, 512ULL * 1024 * 1024);
+        slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, WARP_BLOCK_BUF_PHYS_LIMIT);
         if (!slot->phys)
             return (uint32_t)WASMOS_ERR_BLOCK_NO_BACKING;
     }
@@ -813,7 +815,7 @@ static uint32_t warp_block_buffer_copy(uint32_t phys, uint32_t ptr_off, uint32_t
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     if (!warp_block_pin_by_phys((uint64_t)phys))
         return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
-    uint8_t* buf = reinterpret_cast<uint8_t*>((uint64_t)phys | 0xFFFFFFFF80000000ULL);
+    uint8_t* buf = reinterpret_cast<uint8_t*>((uint64_t)phys | KERNEL_HIGHER_HALF_BASE);
     __builtin_memcpy(wasm_ptr, buf + offset, len);
     warp_block_unpin((uint64_t)phys);
     return 0;
@@ -835,7 +837,7 @@ static uint32_t warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_
         return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
     if (!warp_block_pin_by_phys((uint64_t)phys))
         return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
-    uint8_t* buf = reinterpret_cast<uint8_t*>((uint64_t)phys | 0xFFFFFFFF80000000ULL);
+    uint8_t* buf = reinterpret_cast<uint8_t*>((uint64_t)phys | KERNEL_HIGHER_HALF_BASE);
     __builtin_memcpy(buf + offset, wasm_ptr, len);
     warp_block_unpin((uint64_t)phys);
     return 0;
@@ -2228,7 +2230,7 @@ static uint32_t warp_block_buffer_map(void* ctx_) {
     if (!slot)
         return (uint32_t)WASMOS_ERR_BLOCK_NO_SLOT;
     if (!slot->phys) {
-        slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, 512ULL * 1024 * 1024);
+        slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, WARP_BLOCK_BUF_PHYS_LIMIT);
         if (!slot->phys)
             return (uint32_t)WASMOS_ERR_BLOCK_NO_BACKING;
     }

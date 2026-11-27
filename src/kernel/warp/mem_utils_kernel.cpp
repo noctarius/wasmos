@@ -464,8 +464,9 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
  * architecture needs before freshly written code runs.  getStackInfo returns a
  * zero-filled struct — the kernel hands WARP its stack bounds directly instead.
  * allocAlignedMemory ignores the requested alignment and returns page-aligned memory,
- * which satisfies every alignment WARP asks for; it and reallocAlignedMemory throw std::bad_alloc on exhaustion, which the
- * driver's exception checkpoint turns into a longjmp rather than an unwind. */
+ * which satisfies every alignment WARP asks for; it and reallocAlignedMemory throw std::bad_alloc
+ * on exhaustion, which the driver's exception checkpoint turns into a longjmp rather than an
+ * unwind. */
 
 /* -----------------------------------------------------------------------
  * vb::MemUtils implementation

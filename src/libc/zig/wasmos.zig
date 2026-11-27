@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("root");
+const builtin = @import("builtin");
 
 /// Stackless coroutines, futures/promises, the IPC event loop and the typed
 /// asynchronous filesystem operations. Re-exported so a guest imports only this
@@ -27,6 +28,9 @@ const IPC_FIELD_SOURCE: i32 = 4;
 const IPC_FIELD_DESTINATION: i32 = 5;
 const IPC_FIELD_ARG2: i32 = 6;
 const IPC_FIELD_ARG3: i32 = 7;
+/// WASMOS_IPC_HANGUP (abi/opcodes.yaml) and WASMOS_NOENT (abi/errors.yaml).
+const WASMOS_IPC_HANGUP: i32 = 0xFF03;
+const WASMOS_NOENT: i32 = -4;
 
 // `whence` values for fs.File.seek: the new offset is taken from the start of
 // the file, from the current offset, or from the file size. The FS backend
@@ -65,6 +69,7 @@ extern "wasmos" fn ipc_send(
 ) callconv(.c) i32;
 extern "wasmos" fn ipc_select_one(endpoint: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_last_field(field: i32) callconv(.c) i32;
+extern "wasmos" fn ipc_peer_await(waiter: i32, awaited: i32) callconv(.c) i32;
 extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 extern "wasmos" fn xfer_buffer_size() callconv(.c) i32;
 // Object/owner/borrow xfer ABI (owner-push): read/write name the object by
@@ -133,6 +138,9 @@ pub const Error = error{
     /// registered, no endpoint could be created, or no transfer buffer could be
     /// acquired.
     NotAvailable,
+    /// The server of an IPC call has no owner, or its owner ended before
+    /// answering (ipc.call).
+    PeerGone,
     /// Declared for parity with the other language ports; no function in this
     /// module returns it.
     Unsupported,
@@ -285,7 +293,11 @@ pub const startup = struct {
 /// manager via proc_exit. Takes no arguments: every startup value comes from the
 /// spawn-info buffer. proc_exit does not return, so the trailing return is
 /// unreachable in a live process.
-pub export fn wasmos_main() callconv(.c) i32 {
+///
+/// It is exported only outside `zig test`: there the root module is the test
+/// runner, whose `main` is not the guest's, and a host test of this binding
+/// (tests/unit/test_ipc_call.zig) must not pull it in.
+pub fn wasmos_main() callconv(.c) i32 {
     loadSpawnInfo();
     g_startup_args[0] = @bitCast(g_spawn_info.proc_endpoint);
     g_startup_args[1] = 0;
@@ -295,6 +307,12 @@ pub export fn wasmos_main() callconv(.c) i32 {
     const rc: i32 = @intCast(root.main());
     _ = proc_exit(rc);
     return rc;
+}
+
+comptime {
+    if (!builtin.is_test) {
+        @export(&wasmos_main, .{ .name = "wasmos_main" });
+    }
 }
 
 fn rawWrite(bytes: []const u8) Error!void {
@@ -521,20 +539,42 @@ pub const ipc = struct {
         return ep;
     }
 
-    /// Send a request to server and block until the FIRST message arrives on the
-    /// per-context managed reply endpoint; it is returned as the reply without
-    /// checking its request id or source. Only one request may be outstanding on
-    /// that endpoint at a time, or a stale reply is returned for a later call.
-    /// The C helper (wasmos_ipc_call) matches instead, and eventloop-driven
-    /// components demultiplex properly.
+    /// Send a request to server and block until its reply arrives on the
+    /// per-context managed reply endpoint: the first message carrying this
+    /// call's request id AND sent from `server`, the rule wasmos_ipc_call
+    /// applies. Every other message that lands there meanwhile is consumed and
+    /// DISCARDED, so a component that must not lose those uses
+    /// coroutine.EventLoop instead.
+    ///
+    /// Before sending, call registers an await on `server` (ipc_peer_await), so
+    /// the kernel reports server's end on the reply endpoint even if it never
+    /// answered; that hangup, or a server with no owner to begin with, returns
+    /// Error.PeerGone (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+    /// There is no timeout: a server that lives and never answers blocks the
+    /// caller indefinitely.
     pub fn call(server: i32, msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!Reply {
         const reply_endpoint = try ensureIpcReplyEndpoint();
+        if (ipc_peer_await(reply_endpoint, server) == WASMOS_NOENT) {
+            return Error.PeerGone;
+        }
         const request_id = nextIpcRequestId();
         if (ipc_send(server, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
             return Error.HostCallFailed;
         }
-        if (ipc_select_one(reply_endpoint) < 0) {
-            return Error.HostCallFailed;
+        while (true) {
+            if (ipc_select_one(reply_endpoint) < 0) {
+                return Error.HostCallFailed;
+            }
+            if (ipc_last_field(IPC_FIELD_TYPE) == WASMOS_IPC_HANGUP and
+                ipc_last_field(IPC_FIELD_ARG0) == server)
+            {
+                return Error.PeerGone;
+            }
+            if (ipc_last_field(IPC_FIELD_REQUEST_ID) == request_id and
+                ipc_last_field(IPC_FIELD_SOURCE) == server)
+            {
+                break;
+            }
         }
         return Reply{
             .type = ipc_last_field(IPC_FIELD_TYPE),

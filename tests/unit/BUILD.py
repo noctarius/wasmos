@@ -277,6 +277,7 @@ TESTS = [
     (RUN, 'test_shutdown_order', []),
     (CC, 'test_wasm_coroutine_rust_core.o', [*C11, "-I" + R('src/libsys/wasm/include'), '-c', R('src/libsys/wasm/coroutine_wasm.c')]),
     (RUN, 'test_wasm_coroutine_rust', ['--test-threads=1']),
+    (RUN, 'test_ipc_call_rust', ['--test-threads=1']),
     (CC, 'test_wasm_coroutine', [*C11, "-I" + R('src/libsys/wasm/include'), "-I" + R('src/libc/include'), "-I" + R('src/drivers/include'), R('tests/unit/test_wasm_coroutine.c'), R('src/libsys/wasm/coroutine_wasm.c'), R('src/libsys/wasm/ipc_future_wasm.c')]),
     (RUN, 'test_wasm_coroutine', []),
     (CC, 'test_native_coroutine', [*C11, "-I" + R('src/libsys/native/include'), R('tests/unit/test_native_coroutine.c'), R('src/libsys/native/coroutine_native.c'), HOST_ASM]),
@@ -436,6 +437,28 @@ def build(b):
             description=f"RUSTC[unit] {rust_test}",
         )
         built.append(rust_test)
+        # ipc::call in src/libc/rust/wasmos.rs against the fake mailbox the test
+        # exports; the binding uses raw identifiers, so it needs edition 2018+.
+        ipc_call_test = "test_ipc_call_rust"
+        b.command(
+            [ipc_call_test],
+            [
+                b.tools["rustc"],
+                "--edition",
+                "2021",
+                "--test",
+                unit / "test_ipc_call.rs",
+                "-o",
+                ipc_call_test,
+            ],
+            inputs=[unit / "test_ipc_call.rs"],
+            implicit=[
+                ROOT / "src/libc/rust/wasmos.rs",
+                ROOT / "src/libc/rust/coroutine.rs",
+            ],
+            description=f"RUSTC[unit] {ipc_call_test}",
+        )
+        built.append(ipc_call_test)
     for kind, name, args in TESTS:
         if kind in (CC, CXX, SAN):
             cc = {CC: [clang], CXX: [clangxx], SAN: san_cc}[kind]
@@ -566,6 +589,20 @@ def build(b):
                 c_sources=[libsys_wasm / "coroutine_wasm.c"],
                 c_flags=[f"-I{libsys_wasm / 'include'}"],
                 deps=["coroutine"],
+            )
+        )
+        steps.append(
+            zig_test(
+                b,
+                "ipc-call",
+                {"wasmos": libc / "zig/wasmos.zig"},
+                unit / "test_ipc_call.zig",
+                # wasmos.zig declares its host calls `extern "wasmos"`; on an ELF
+                # host that names a dynamic library, which Zig accepts only for
+                # PIC. The test exports the symbols itself, so nothing is
+                # loaded at run time.
+                c_flags=["-fPIC"],
+                deps=["wasmos"],
             )
         )
         steps.append(

@@ -975,15 +975,25 @@ tail.
   `abi/errors.yaml`.
 
 
-- [ ] [BUG][P1] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
-  return the first message arriving on the shared managed reply endpoint; C
-  matches both request id and source, AssemblyScript matches request id. A
-  context with two requests in flight can be handed the wrong reply.
-- [ ] [BUG][P1] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
-  `wasmIPCFuture*` declarations. Without both, the symbols stay undefined at
-  link, so `Future.Then` and the `IPCFuture` methods fail to link for any Go
-  guest that uses them (`src/libc/go/coroutine.go:113`
-  `FIXME(go-extern-linkname)`).
+- [x] [BUG][P1] Match replies by request id in the Zig, Rust and Go `ipc.call`. All three
+  returned the first message arriving on the shared managed reply endpoint; they
+  now accept only this call's request id from the endpoint the request went to,
+  as C does, and discard everything else. Covered by `tests/unit/test_ipc_call.rs`,
+  `tests/unit/test_ipc_call.zig` and `testIPCCallMatchesItsReply` in
+  `tests/unit/test_wasm_coroutine.go`, each against a fake mailbox that queues a
+  stale or an impostor message ahead of the answer. Each also registers
+  `ipc_peer_await` on the server before sending and ends with `PeerGone` on
+  `WASMOS_NOENT` or a hangup naming the server, as C does, so a server that dies
+  before answering no longer blocks the caller forever (same tests).
+- [ ] [BUG][P2] Match the reply source in the AssemblyScript `ipc.call` as well. It
+  checks the request id only, so a message carrying the right id from another
+  endpoint is accepted; C, Go, Rust and Zig also require the source to be the
+  endpoint the request went to (`src/libc/assemblyscript/wasmos.ts`).
+- [x] [BUG][P1] Add `//go:linkname` beside `//go:extern` on `wasmFutureThen` and the four
+  `wasmIPCFuture*` declarations. Without both, the symbols stayed undefined at
+  link, so `Future.Then` and the `IPCFuture` methods failed to link for any Go
+  guest that used them. Covered by `testThenAndIPCFutureReachC` in
+  `tests/unit/test_wasm_coroutine.go`, the first caller of each.
 - [ ] [BUG][P1] Replace the remaining bare `-1`/ad-hoc integers that cross a subsystem
   boundary with packed `abi/errors.yaml` codes: `PROC_IPC_ERROR` arg1 in
   `src/kernel/process_manager_spawn.c`, the PM spawn retry match in

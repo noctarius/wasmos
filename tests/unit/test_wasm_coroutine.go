@@ -491,6 +491,122 @@ func testCallbackRegistryReclaim() int32 {
 	return 0
 }
 
+// ---------------------------------------------------------- C-callback FFI
+
+// Then and the four IPCFuture methods reach C through bodyless declarations.
+//
+// Regression: 2026-11-26-go-extern-linkname -- those five declarations carried
+// //go:extern without //go:linkname, which binds a variable rather than the
+// function, so a guest that called Future.Then or any IPCFuture method failed
+// to link on an undefined symbol. This case is the first caller of each, so the
+// suite itself failed to link.
+func testThenAndIPCFutureReachC() int32 {
+	var rt Runtime
+	rt.Init()
+
+	// Then with no callbacks forwards the source's outcome to its child.
+	var source Future
+	var promise Promise
+	source.Init(&promise)
+	var forward Continuation
+	child := source.Then(&rt, &forward, 0, 0, nil)
+	if child == nil {
+		return 1010
+	}
+	if !promise.Resolve(41) || rt.Run() != 0 {
+		return 1011
+	}
+	if v, s, ok := child.Poll(); !ok || s != 0 || v != 41 {
+		return 1012
+	}
+
+	// An IPCFuture round trip up to the reply: Send goes out through the fake
+	// ipc_send in run_go_test.mjs, Cancel rejects the pending future with the
+	// given status, and Reply is the record's stored reply, zero until one is
+	// dispatched.
+	var loop EventLoop
+	loop.Init(77, 9000)
+	var op IPCFuture
+	op.Init(0, nil)
+	future, requestID := op.Send(&loop, 5, 77, 3, 10, 11, 12, 13)
+	if future == nil || requestID != 9000 {
+		return 1013
+	}
+	op.Cancel(-7)
+	if _, s, ok := future.Poll(); !ok || s != -7 {
+		return 1014
+	}
+	if reply := op.Reply(); reply == nil || reply.RequestID != 0 {
+		return 1015
+	}
+	return 0
+}
+
+// ------------------------------------------------------------- ipc.Call
+
+//go:wasmimport wasmos_test ipc_pending
+func ipcPending(endpoint int32) int32
+
+//go:wasmimport wasmos_test ipc_call_stats
+func ipcCallStats() int32
+
+// ipc.Call against the fake mailbox in run_go_test.mjs: server 5 answers with
+// arg0 + 1, and arg1 selects a decoy (arg0 = -1) queued ahead of the answer.
+//
+// Regression: 2026-11-26-lang-ipc-call-match -- Call returned the first message
+// on the managed reply endpoint without checking its request id or source, so a
+// stale reply, or a message with the right id from another endpoint, was handed
+// back as the answer to the request just sent. The C helper (wasmos_ipc_call)
+// accepts only the request's id from the endpoint the request went to.
+func testIPCCallMatchesItsReply() int32 {
+	const server = 5
+	for scenario := int32(0); scenario <= 2; scenario++ {
+		arg0 := 10 * (scenario + 1)
+		reply, err := ipc.Call(server, 0x10, arg0, scenario, 0, 0)
+		if err != ErrOK {
+			return 1100 + scenario
+		}
+		if reply.Arg0 != arg0+1 || reply.Source != server {
+			return 1110 + scenario
+		}
+		if ipcPending(90) != 0 {
+			return 1120 + scenario
+		}
+	}
+	// Three requests went out, each after an await on server.
+	if stats := ipcCallStats(); stats != 3000 {
+		return 1130
+	}
+	return 0
+}
+
+// ipc.Call against a server that ends: a hangup naming it (arg1 = 3) and an
+// endpoint with no owner (7, refused by ipc_peer_await) both end the call with
+// ErrPeerGone, and the second sends nothing.
+//
+// Regression: 2026-11-26-lang-ipc-call-hangup -- Call never registered
+// ipc_peer_await before sending and never recognised WASMOS_IPC_HANGUP, so a
+// server that died before answering left the caller blocked forever: the kernel
+// owes a hangup only to an endpoint the server had sent to, or to one that
+// registered an await (docs/architecture/09-process-and-ipc.md, "Peer Hangup").
+func testIPCCallEndsWhenTheServerEnds() int32 {
+	const server, dead = 5, 7
+	if _, err := ipc.Call(server, 0x10, 1, 3, 0, 0); err != ErrPeerGone {
+		return 1140
+	}
+	if ipcPending(90) != 0 {
+		return 1141
+	}
+	_ = ipcCallStats()
+	if _, err := ipc.Call(dead, 0x10, 1, 0, 0, 0); err != ErrPeerGone {
+		return 1142
+	}
+	if stats := ipcCallStats(); stats != 0 {
+		return 1143
+	}
+	return 0
+}
+
 //go:wasmexport runTests
 func runTests() int32 {
 	if rc := testFFISmoke(); rc != 0 {
@@ -512,6 +628,15 @@ func runTests() int32 {
 		return rc
 	}
 	if rc := testAll(); rc != 0 {
+		return rc
+	}
+	if rc := testThenAndIPCFutureReachC(); rc != 0 {
+		return rc
+	}
+	if rc := testIPCCallMatchesItsReply(); rc != 0 {
+		return rc
+	}
+	if rc := testIPCCallEndsWhenTheServerEnds(); rc != 0 {
 		return rc
 	}
 	return testCallbackRegistryReclaim()

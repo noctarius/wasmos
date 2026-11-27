@@ -360,13 +360,11 @@ Source: `architecture/06-memory-management.md`,
   (`src/kernel/process.c:2492` `TODO(memory-rss)`; `architecture/06`:507-512).
 - [ ] [CLEANUP][P3] Wire the kernel-thread trampoline into PM launch policy and delete the
   legacy trampoline (`src/kernel/process.c:1503,1771`).
-- [ ] [BUG][P1] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug: the case passes
-  `ctx5` (== `a4`, the `stats` param) as the kernel ctx, but a 5-param host call
-  needs ctx in `a5` (R9) — there is no `ctx6`, so the hand-written case silently
-  reused `ctx5`. Ring-3 `proc_info_stats` therefore gets a garbage ctx (a user
-  offset) → wrong `warp_mem` resolution. The generated dispatch computes
-  `ctx = a<arity>` and fixes it; fix lands when the ring-3 dispatch is swapped in.
-  Found during host-call dispatch codegen (`src/kernel/warp/link.cpp:3130`).
+- [x] [BUG][P1] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug. Fixed in
+  1870887f1, which replaced the hand-written cases with the generated
+  `wasmos_ring3_dispatch.inc`: `emit_ring3_dispatch` passes ctx as the
+  (arity+1)-th argument, so `HC_PROC_INFO_STATS` (five parameters) takes it from
+  `a5`. Confirmed against the generated table; no hand-written case remains.
 - [ ] [FEATURE][P2] Extend DMA isolation to an IOMMU domain model (VT-d/AMD-Vi) and add
   non-coherent cache-maintenance hooks before targeting non-coherent hardware
   (`architecture/12`:88,618,625).

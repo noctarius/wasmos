@@ -896,10 +896,9 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `FunctionRef`'s signature constraint unconditional (`compat/type_traits`);
   `mprotect` no-ops returning 0, so a W^X request appears to succeed, and
   `posix_memalign` ignores its alignment (`warp/posix_kernel.c`).
-- [ ] [BUG][P1] Resolve the `std::terminate` ODR violation: an inline definition in
-  `warp/compat/exception` and an out-of-line one in `warp/cxx_abi.cpp`. It
-  links, but which one runs depends on whether the translation unit saw the
-  compat header.
+- [x] [BUG][P1] Resolve the `std::terminate` ODR violation. `compat/exception`
+  only declares it; the one definition is `warp/cxx_abi.cpp`'s, which panics
+  with `std_terminate_panic` whichever translation unit calls it.
 - [ ] [BUG][P1] Make `realloc(ptr, 0)` free and return NULL in the wasm3 shim. It
   currently returns 0 without freeing -- neither the C contract nor
   leak-free (`src/kernel/wasm3/shim.c`).

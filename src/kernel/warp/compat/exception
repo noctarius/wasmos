@@ -39,14 +39,9 @@ public:
 };
 
 /* std::terminate — called by the ABI when exception handling fails.  Panics
- * (stops every CPU and halts); never returns.
- *
- * Defined inline here, so a translation unit that includes this header panics
- * with the reason "cpp_exception_terminate".  warp/cxx_abi.cpp carries a
- * second, out-of-line std::terminate that panics with "std_terminate_panic";
- * that one serves callers which never saw this declaration. */
-[[noreturn]] inline void terminate() noexcept {
-    kpanic("cpp_exception_terminate", 0, 0ULL);
-}
+ * (stops every CPU and halts) with the reason "std_terminate_panic"; never
+ * returns.  Declared only: the one definition is in warp/cxx_abi.cpp, so every
+ * caller reaches the same function whether or not it saw this header. */
+[[noreturn]] void terminate() noexcept;
 
 } // namespace std

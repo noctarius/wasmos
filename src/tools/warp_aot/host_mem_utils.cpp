@@ -32,6 +32,12 @@ static size_t round_up_page(size_t n) {
     return (n + ps - 1) & ~(ps - 1);
 }
 
+/* Whether an aligned block of `size` bytes is representable: the size rounded
+ * up to a page plus the header page must not wrap size_t. */
+static bool aligned_block_fits(size_t size) {
+    return size <= SIZE_MAX - 2 * host_page_size();
+}
+
 } // namespace
 
 /* -----------------------------------------------------------------------
@@ -136,10 +142,11 @@ void clearInstructionCache(uint8_t*, size_t) VB_NOEXCEPT {
  * header is what lets freeAlignedMemory, which WARP calls with the pointer
  * alone, release the whole mapping. Alignment up to the host page size is
  * honoured by construction; a larger one throws std::bad_alloc (WARP asks for
- * the page size only). */
+ * the page size only), and so does a size that cannot be rounded and given its
+ * header page without wrapping. */
 uint8_t* allocAlignedMemory(size_t size, size_t alignment) {
     size_t ps = host_page_size();
-    if (alignment > ps)
+    if (alignment > ps || !aligned_block_fits(size))
         throw std::bad_alloc();
     size_t total = round_up_page(size) + ps;
     MmapMemory m = allocPagedMemory(total);
@@ -156,6 +163,8 @@ uint8_t* allocAlignedMemory(size_t size, size_t alignment) {
  * which means shrinking discards the tail. Throws std::bad_alloc if the new
  * block cannot be allocated, leaving `old` valid. */
 uint8_t* reallocAlignedMemory(uint8_t* old, size_t oldSz, size_t newSz, size_t alignment) {
+    if (!aligned_block_fits(newSz))
+        throw std::bad_alloc();
     newSz = round_up_page(newSz);
     if (oldSz == newSz)
         return old;

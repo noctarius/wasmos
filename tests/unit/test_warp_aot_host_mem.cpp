@@ -13,6 +13,12 @@
  * mapping. It faulted, or handed munmap a misaligned base and a garbage length
  * and the block was never released.
  *
+ * Regression: 2026-11-27-aot-aligned-size-overflow. A size within a page (plus
+ * the header page) of SIZE_MAX wrapped when rounded: allocAlignedMemory
+ * returned a pointer past a one-page mapping instead of throwing, and
+ * reallocAlignedMemory to such a size released the original block instead of
+ * reporting the failure and leaving it valid.
+ *
  * "Released" is observed with msync, which fails with ENOMEM on a range that is
  * no longer mapped. Each case runs in a child process, so a fault inside the
  * shim fails that case instead of the whole suite.
@@ -22,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -60,9 +67,20 @@ static void run_case(const char* name, void (*body)()) {
         body();
         _exit(0);
     }
+    if (pid < 0) {
+        g_failures++;
+        printf("  [FAIL] %s: fork failed (%s)\n", name, strerror(errno));
+        return;
+    }
     int status = 0;
-    waitpid(pid, &status, 0);
-    if (WIFSIGNALED(status)) {
+    pid_t waited;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited != pid) {
+        g_failures++;
+        printf("  [FAIL] %s: waitpid failed (%s)\n", name, strerror(errno));
+    } else if (WIFSIGNALED(status)) {
         g_failures++;
         printf("  [FAIL] %s: the shim died with signal %d\n", name, WTERMSIG(status));
     } else if (WEXITSTATUS(status) != 0) {
@@ -112,6 +130,36 @@ static void free_aligned_leaves_neighbours_mapped() {
     }
 }
 
+static void an_unrepresentable_size_throws() {
+    size_t ps = getOSMemoryPageSize();
+    const size_t sizes[] = {SIZE_MAX, SIZE_MAX - ps + 1, SIZE_MAX - 2 * ps + 1};
+    for (size_t size : sizes) {
+        bool threw = false;
+        try {
+            (void)allocAlignedMemory(size, ps);
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        REQUIRE(threw, 1);
+    }
+}
+
+static void a_failed_realloc_leaves_the_old_block_valid() {
+    size_t ps = getOSMemoryPageSize();
+    uint8_t* old = allocAlignedMemory(ps, ps);
+    memset(old, 0x33, ps);
+    bool threw = false;
+    try {
+        (void)reallocAlignedMemory(old, ps, SIZE_MAX, ps);
+    } catch (const std::bad_alloc&) {
+        threw = true;
+    }
+    REQUIRE(threw, 1);
+    REQUIRE(mapped(old, ps), 2);
+    REQUIRE(old[ps - 1] == 0x33, 3);
+    freeAlignedMemory(old);
+}
+
 static void free_virtual_releases_what_alloc_virtual_reserved() {
     size_t ps = getOSMemoryPageSize();
     void* v = allocVirtualMemory(8 * ps);
@@ -127,6 +175,10 @@ int main() {
              realloc_keeps_the_contents_and_releases_the_old_block);
     run_case("freeAlignedMemory leaves neighbouring blocks mapped",
              free_aligned_leaves_neighbours_mapped);
+    run_case("an unrepresentable aligned size throws std::bad_alloc",
+             an_unrepresentable_size_throws);
+    run_case("a failed reallocAlignedMemory leaves the old block valid",
+             a_failed_realloc_leaves_the_old_block_valid);
     run_case("freeVirtualMemory releases what allocVirtualMemory reserved",
              free_virtual_releases_what_alloc_virtual_reserved);
     printf("test_warp_aot_host_mem: %d cases, %d failures\n", g_checks, g_failures);

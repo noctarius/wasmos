@@ -881,11 +881,11 @@ Source: `architecture/13-runtime-and-packaging.md`,
   list, nothing calls its API, and no rule emits the
   `_binary_chardev_server_wasm_*` symbols it references
   (`src/kernel/wasm_chardev.c:8` `FIXME(chardev-dead)`).
-- [ ] [BUG][P1] Fix `freeAlignedMemory` in the AOT host shim. It reads a size header at
-  `ptr - sizeof(size_t)` that `allocAlignedMemory` never writes, so it faults or
-  `munmap`s a garbage length (`src/tools/warp_aot/host_mem_utils.cpp:141`).
-
-
+- [x] [BUG][P1] Fix `freeAlignedMemory` in the AOT host shim. `allocAlignedMemory`
+  now maps a header page carrying the mapping's length in front of each block,
+  `freeAlignedMemory` unmaps the whole mapping from it, `reallocAlignedMemory`
+  frees through it, and `allocVirtualMemory` is a plain mapping that
+  `freeVirtualMemory` releases (`test_warp_aot_host_mem`).
 - [ ] [BUG][P1] Replace the WARP C++ compat stubs that return silently wrong values
   with either a correct implementation or a hard failure. Each compiles and
   links, produces no diagnostic, and yields a wrong answer:

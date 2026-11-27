@@ -202,6 +202,8 @@ TESTS = [
     (RUN, 'test_physmem', []),
     (CC, 'test_linmem_slots', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_linmem_slots.c'), R('src/kernel/linmem_slots.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_linmem_slots', []),
+    (CXX, 'test_warp_aot_host_mem', ['-std=c++14', '-Wall', '-Wno-unused-parameter', '-Wno-macro-redefined', '-Wno-c++20-extensions', '-Wno-deprecated', '-DJIT_TARGET_X86_64', '-DVB_POSIX', '-DVB_WIN32_OR_POSIX', '-DNVALGRIND', '-I', R('libs/warp'), '-I', R('libs/warp/src'), R('tests/unit/test_warp_aot_host_mem.cpp'), R('src/tools/warp_aot/host_mem_utils.cpp')]),
+    (RUN, 'test_warp_aot_host_mem', []),
     (CC, 'test_pm_shutdown', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), R('tests/unit/test_pm_shutdown.c'), R('src/kernel/process_manager_shutdown.c'), R('src/kernel/shutdown_order.c')]),
     (RUN, 'test_pm_shutdown', []),
     (CC, 'test_pm_caps', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), R('tests/unit/test_pm_caps.c'), R('src/kernel/process_manager_caps.c')]),

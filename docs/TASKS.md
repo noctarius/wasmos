@@ -1704,6 +1704,17 @@ tail.
   one shared async runner (`virtio_blk` alone), notifying every one of them would
   have added roughly a minute to every halt.
 
+- [ ] [BUG][P2] A WARP SMP app can start with its linear memory still a legacy
+  contiguous block and then fail the ring-3 dual map: `[warp] r3 linmem: no
+  tracked allocation for the base`, `dual-map failed`, start failed. Seen once
+  in CI (PR #91, networking battery, x86_64_warp_smp: fs-init, so the
+  supervisor halted the boot); six local boots of the same tree were clean.
+  No `has no slot` line preceded it, so the first grow never claimed the
+  reserve hint (`warp_linmem_reserve_claim` in `shim.cpp` keys it on
+  `cpu_local()->wasm3_heap_bound_pid`), and the legacy block was missing from
+  `g_mmap_table`, which is unsynchronised and drops an allocation that finds no
+  free slot (`mem_utils_kernel.cpp`). Either way the block should never reach
+  ring 3 unslotted.
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
   artifact (no app target, no manifest, no device-manager rule, absent from

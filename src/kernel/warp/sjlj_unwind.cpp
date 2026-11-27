@@ -17,10 +17,9 @@
  * No setjmp.h is needed: the compiler emits the setjmp inline, and the only
  * call made here is __builtin_longjmp (a clang intrinsic, no header required).
  *
- * The context stack is per-CPU-slot, which is sound only under the WARP
- * single-CPU invariant (one CPU inside WARP at a time).  That invariant is an
- * assumption, not something warp_runtime_enter enforces — see the
- * FIXME(smp-warp) in warp/shim.cpp. */
+ * The context stack belongs to the calling thread: its top lives in the thread's
+ * exception checkpoint (include/warp_exception.h), so it stays with a thread that
+ * is switched out or moves to another CPU. */
 
 #include <stdint.h>
 #include <stddef.h>
@@ -30,7 +29,7 @@
 extern "C" {
 #include "klog.h"
 #include "kpanic.h"
-#include "cpu_local.h"
+#include "warp_exception.h"
 }
 
 // ---------------------------------------------------------------------------
@@ -68,14 +67,11 @@ struct _Unwind_FunctionContext {
 };
 
 // ---------------------------------------------------------------------------
-// Per-CPU-slot context stack (sound only under the WARP single-CPU invariant)
+// Per-thread context stack
 // ---------------------------------------------------------------------------
 
-static _Unwind_FunctionContext* g_sjlj_top[64];
-
 static inline _Unwind_FunctionContext** ctx_stack(void) {
-    uint32_t id = cpu_local()->cpu_id;
-    return &g_sjlj_top[id < 64u ? id : 0u];
+    return reinterpret_cast<_Unwind_FunctionContext**>(&warp_exception_get_checkpoint()->sjlj_top);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +80,7 @@ static inline _Unwind_FunctionContext** ctx_stack(void) {
 
 extern "C" {
 
-/* Push `ctx` onto this CPU's context stack.  `ctx` is borrowed and lives in the
+/* Push `ctx` onto this thread's context stack.  `ctx` is borrowed and lives in the
  * registering frame, so it must be unregistered before that frame returns. */
 void _Unwind_SjLj_Register(_Unwind_FunctionContext* ctx) {
     _Unwind_FunctionContext** top = ctx_stack();
@@ -92,7 +88,7 @@ void _Unwind_SjLj_Register(_Unwind_FunctionContext* ctx) {
     *top = ctx;
 }
 
-/* Pop `ctx` if it is the top of this CPU's stack; a non-top context is silently
+/* Pop `ctx` if it is the top of this thread's stack; a non-top context is silently
  * ignored rather than spliced out, so out-of-order unregistration leaves the stack
  * holding a dead frame. */
 void _Unwind_SjLj_Unregister(_Unwind_FunctionContext* ctx) {

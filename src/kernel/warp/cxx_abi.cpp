@@ -2,16 +2,16 @@
  *
  * Exception dispatch strategy:
  *   WARP throws C++ exceptions internally.  The standard Dwarf/SJLJ unwinding
- *   infrastructure is bypassed entirely in favour of a per-CPU "throw
- *   checkpoint".  Before each WARP call, warp_driver.cpp saves a __builtin_setjmp
- *   buffer via warp_exception_checkpoint_set().  If __cxa_throw is reached it
+ *   infrastructure is bypassed entirely in favour of a per-thread "throw
+ *   checkpoint" (include/warp_exception.h).  Before each WARP call, warp_driver.cpp
+ *   arms a __builtin_setjmp buffer in it.  If __cxa_throw is reached it
  *   calls __builtin_longjmp to that checkpoint — effectively implementing a
  *   zero-infrastructure catch-all at the driver boundary.
  *
  *   Benefits: no Dwarf tables, no SJLJ register/unregister overhead, no LSDA
  *   parsing.  Works with -fexceptions (Dwarf-based throw) or -fsjlj-exceptions.
  *
- *   Limitation: only one active checkpoint per CPU; nested checkpoints are not
+ *   Limitation: only one active checkpoint per thread; nested checkpoints are not
  *   supported (not needed — all WARP calls originate from warp_driver.cpp). */
 
 #include <stdint.h>
@@ -24,26 +24,7 @@ extern "C" {
 #include "klog.h"
 #include "slab.h"
 #include "serial.h"
-#include "cpu_local.h"
-}
-
-// ---------------------------------------------------------------------------
-// Per-CPU exception checkpoint
-// ---------------------------------------------------------------------------
-
-struct WarpExceptionCheckpoint {
-    void* jbuf[5]; /* __builtin_setjmp buffer */
-    int active;    /* 1 if a checkpoint is set */
-};
-
-/* One checkpoint per CPU, capped at 64.  A cpu_id at or above the cap folds onto slot
- * 0, so such a CPU would share slot 0's checkpoint; the kernel does not bring up that
- * many CPUs.  Zero-initialised, so `active` is 0 until a driver arms one. */
-static WarpExceptionCheckpoint g_warp_ckpt[64]; /* indexed by cpu_id */
-
-extern "C" WarpExceptionCheckpoint* warp_exception_get_checkpoint(void) {
-    uint32_t id = cpu_local()->cpu_id;
-    return &g_warp_ckpt[id < 64u ? id : 0u];
+#include "warp_exception.h"
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +49,7 @@ extern "C" void __cxa_free_exception(void* e) noexcept {
 // ---------------------------------------------------------------------------
 
 /* Deliver a thrown exception.  Ignores the exception object, its type_info and its
- * destructor entirely: if this CPU has an armed checkpoint it is disarmed and control
+ * destructor entirely: if the calling thread has an armed checkpoint it is disarmed and control
  * longjmps there, otherwise the kernel panics.  Consequences a caller must plan for —
  * no type matching, so the nearest armed checkpoint catches everything; no unwinding,
  * so destructors between the throw and the checkpoint DO NOT RUN and anything they
@@ -76,7 +57,7 @@ extern "C" void __cxa_free_exception(void* e) noexcept {
  * object is never freed. */
 extern "C" __attribute__((noreturn)) void __cxa_throw(void* obj, void* type_info,
                                                       void (* /*dtor*/)(void*)) {
-    WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
+    warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     if (ckpt->active) {
         ckpt->active = 0;
         __builtin_longjmp(ckpt->jbuf, 1);

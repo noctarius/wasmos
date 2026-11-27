@@ -138,6 +138,7 @@ WARP_GLUE = [
     "warp/link_ipc.cpp",
     "warp/link_rtc.cpp",
     "warp/cxx_abi.cpp",
+    "warp/exception_checkpoint.c",
     "warp/posix_kernel.c",
     "warp/mem_utils_kernel.cpp",
     "warp/os_api_checker_kernel.cpp",

@@ -6,6 +6,9 @@
 
 #include "sched_list.h"
 #include "sched_event.h"
+#ifdef WASMOS_WASM_RUNTIME_WARP
+#include "warp_exception.h"
+#endif
 
 /* Slots in the fixed global thread table, shared by ALL processes: this is a
  * system-wide ceiling, not a per-process one, and a spawn past it fails. */
@@ -117,6 +120,11 @@ typedef struct thread {
     uint64_t warp_r3_old_cr3; /* CR3 to restore when the ring-3 call returns */
     uint8_t warp_r3_active;   /* 1 while a ring-3 call is in progress */
     void* warp_r3_jbuf[5];    /* setjmp checkpoint for WARP_RETURN */
+    /* This thread's C++ exception checkpoint (warp_exception.h).  A ring-0 WARP
+     * call runs with preemption enabled and can block in a host call, so the
+     * checkpoint armed before it must stay with the thread across a switch and a
+     * migration, like the ring-3 state above. */
+    warp_exception_checkpoint_t warp_exc_ckpt;
 #endif
     char name_storage[THREAD_NAME_MAX];
     const char* name; /* points into name_storage, or NULL in a free slot */

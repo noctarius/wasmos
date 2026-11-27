@@ -696,8 +696,8 @@ Source: `architecture/13-runtime-and-packaging.md`,
   themselves. Each conversion is a behaviour-preserving switch to `main(argc,
   argv)` and needs its own guest check.
 - [ ] [ENHANCEMENT][P2] Close the remaining WARP refinement TODOs (host-call coverage itself is
-  broad): synchronise symbol lookups/alloc under SMP (`src/kernel/warp/link.cpp:90`
-  `TODO(smp-warp)`, `src/kernel/warp/shim.cpp:579` `FIXME(smp-warp)`); reserve
+  broad): audit `libs/warp` for mutable state shared between modules
+  (`FIXME(smp-warp)` at `warp_runtime_enter`, `src/kernel/warp/shim.cpp`); reserve
   overlay windows against real heap growth (`link.cpp`); write-combining
   PAT for framebuffer/scanout (`link.cpp:2145`); enable W^X once kernel paging
   supports per-4K remap (`src/kernel/warp/posix_kernel.c:97`). Provide a supported
@@ -1704,17 +1704,20 @@ tail.
   one shared async runner (`virtio_blk` alone), notifying every one of them would
   have added roughly a minute to every halt.
 
-- [ ] [BUG][P2] A WARP SMP app can start with its linear memory still a legacy
+- [x] [BUG][P2] A WARP SMP app can start with its linear memory still a legacy
   contiguous block and then fail the ring-3 dual map: `[warp] r3 linmem: no
   tracked allocation for the base`, `dual-map failed`, start failed. Seen once
   in CI (PR #91, networking battery, x86_64_warp_smp: fs-init, so the
   supervisor halted the boot); six local boots of the same tree were clean.
-  No `has no slot` line preceded it, so the first grow never claimed the
-  reserve hint (`warp_linmem_reserve_claim` in `shim.cpp` keys it on
-  `cpu_local()->wasm3_heap_bound_pid`), and the legacy block was missing from
-  `g_mmap_table`, which is unsynchronised and drops an allocation that finds no
-  free slot (`mem_utils_kernel.cpp`). Either way the block should never reach
-  ring 3 unslotted.
+  Root cause: `g_mmap_table` (`mem_utils_kernel.cpp`) had no lock, and
+  `allocPagedMemory` claimed a slot before filling it, so two CPUs allocating
+  at once could take the same slot and erase one allocation's entry. The table
+  is now locked (`test_warp_mem_tracking`, plain and TSan). Publishing a
+  contiguous block is not itself the fault: a boot publishes eight modules
+  (native-call-min, init-smoke, chardev-server, chardev-client, uart16550,
+  keyboard, mouse, rtc) that way, because their linear memory first grows after
+  start and moves into its slot only then. Refusing an unslotted block would
+  refuse them.
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
   artifact (no app target, no manifest, no device-manager rule, absent from

@@ -11,7 +11,7 @@
  *   0                        not initialized
  *   WARP_CXA_GUARD_BUSY      one caller is running the initializer
  *   WARP_CXA_GUARD_DONE      initialized; the first byte is non-zero
- * Several CPUs can be inside WARP at once (FIXME(smp-warp) in warp/shim.cpp), so
+ * Several CPUs can be inside WARP at once (warp_runtime_enter in warp/shim.cpp), so
  * every transition is atomic.  acquire returns 1 to exactly one caller, which
  * must then call release or abort; every other caller waits while the guard is
  * BUSY and returns 0 once it is DONE, so it never sees a half-built object.  The

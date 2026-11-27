@@ -108,7 +108,7 @@ struct MmapEntry {
  * and its physical range then cannot be resolved by find_entry_by_phys.
  *
  * g_mmap_lock guards every read and write of the table: several CPUs can be inside
- * WARP at once (see the FIXME(smp-warp) in warp/shim.cpp).  A slot is claimed and
+ * WARP at once (see warp_runtime_enter in warp/shim.cpp).  A slot is claimed and
  * filled in one critical section, and readers copy the fields they need out of an
  * entry before releasing the lock -- an entry pointer is not valid past the unlock.
  * The helpers below require the lock held.  No path holds it across a blocking wait
@@ -312,7 +312,10 @@ extern "C" int warp_mem_ring3_map_jit(uint64_t user_root, uint8_t const* jit_ker
  * page count, then maps from WARP_R3_LINMEM_BASE - basedataLength upwards. */
 /* Handles both linmem layouts: a dedicated-VA slot, whose frames are scattered and are
  * resolved per page by walking the page tables, and a legacy contiguous allocation
- * resolved through the tracking table.  A re-publication for the same root extends the
+ * resolved through the tracking table.  The contiguous layout is a normal state, not a
+ * failure: a module whose linear memory first grows after start is published while its
+ * block is still contiguous, and is republished from the slot once that growth moves
+ * the block (warp_krealloc in warp/shim.cpp).  A re-publication for the same root extends the
  * existing mapping when base, physical identity and offsets are unchanged and only the
  * page count grew; otherwise the previous range is unmapped first.  Returns 0 on
  * success, -1 when the allocation cannot be located, a page has no backing frame, or a

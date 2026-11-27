@@ -3,8 +3,8 @@
  * function-local static guards from src/kernel/warp/cxa_guard.h.
  *
  * Host threads stand in for CPUs that are inside WARP at the same time, which an
- * SMP build allows: warp_runtime_enter does not serialize them (FIXME(smp-warp) in
- * src/kernel/warp/shim.cpp). The kernel spinlock is the host stub from
+ * SMP build allows: warp_runtime_enter (src/kernel/warp/shim.cpp) does not
+ * serialize them. The kernel spinlock is the host stub from
  * stubs_spinlock.c. The header is included directly and the host <mutex> is not,
  * so std::mutex here is the one the kernel build compiles WARP against. */
 

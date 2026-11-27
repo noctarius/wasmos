@@ -31,11 +31,10 @@ uint32_t warp_heap_bind_pid(uint32_t pid);
 /* Restore the CPU-local allocator binding saved by warp_heap_bind_pid. */
 void warp_heap_restore_pid(uint32_t previous_pid);
 
-/* Enter/leave a WARP runtime region for `pid`.  Currently exactly the bind/restore
- * pair above — no lock is taken, so the "one CPU inside WARP at a time" invariant the
- * rest of the backend assumes is not enforced here (see the FIXME(smp-warp) at the
- * definition).  Unlike wasm3_runtime_enter these do NOT disable preemption, because a
- * ring-3 WARP guest must stay timer-preemptible. */
+/* Enter/leave a WARP runtime region for `pid`: exactly the bind/restore pair above.
+ * No lock is taken, so several CPUs can be inside WARP at once; the definition lists
+ * what synchronises the state they share.  Unlike wasm3_runtime_enter these do NOT
+ * disable preemption, because a ring-3 WARP guest must stay timer-preemptible. */
 uint32_t warp_runtime_enter(uint32_t pid);
 void warp_runtime_leave(uint32_t previous_pid);
 

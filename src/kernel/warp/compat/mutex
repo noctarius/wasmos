@@ -10,7 +10,7 @@
  * a use of any of them is a compile error at the call site.
  *
  * std::mutex is a kernel spinlock (sync/spinlock.h), because several CPUs can be
- * inside WARP at once (FIXME(smp-warp) in warp/shim.cpp).  lock() spins and
+ * inside WARP at once (warp_runtime_enter in warp/shim.cpp).  lock() spins and
  * returns with interrupts masked and preemption disabled on the holding CPU;
  * try_lock() is the bare exchange and changes neither.  unlock() releases the
  * way the current hold was taken, so the two acquisitions pair with the one

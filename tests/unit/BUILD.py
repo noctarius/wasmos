@@ -78,6 +78,7 @@ WARP_MEM_TRACKING = [
 # and warp/cxx_abi.cpp) on the host; the plain and the ThreadSanitizer arm
 # share it.
 WARP_COMPAT_SYNC = [
+    *HOST_ARCH_DEFS,
     "-std=c++17",
     "-Wall",
     "-pthread",

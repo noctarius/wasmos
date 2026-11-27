@@ -18,6 +18,7 @@
 #include <stddef.h>
 
 #include "../include/kpanic.h"
+#include "cxa_guard.h"
 
 extern "C" {
 #include "klog.h"
@@ -134,13 +135,7 @@ __attribute__((noreturn)) void _Unwind_Resume(_Unwind_Exception) {
 /* Static-object lifetime and guard stubs.  __cxa_atexit accepts and DISCARDS the
  * destructor, reporting success — static destructors never run, which is correct for a
  * kernel that does not shut its runtime down.  __cxa_finalize does nothing and
- * __dso_handle exists only to be addressed.
- *
- * The guard triple implements a non-atomic, non-blocking first-use check: acquire
- * returns 1 to the first caller and 0 once the low bit is set, release sets it, abort
- * clears the whole word.  There is no waiting, so two CPUs initialising the same
- * function-local static concurrently can both run the initialiser — sound only under
- * the WARP single-CPU invariant (warp/shim.cpp). */
+ * __dso_handle exists only to be addressed.  The guard triple is warp/cxa_guard.h. */
 extern "C" int __cxa_atexit(void (*)(void*), void*, void*) noexcept {
     return 0;
 }
@@ -148,16 +143,13 @@ extern "C" void __cxa_finalize(void*) noexcept {}
 extern "C" void* __dso_handle = nullptr;
 
 extern "C" int __cxa_guard_acquire(unsigned long long* g) noexcept {
-    if (*g & 1ULL)
-        return 0;
-    *g = 0x100ULL;
-    return 1;
+    return warp_cxa_guard_acquire(g);
 }
 extern "C" void __cxa_guard_release(unsigned long long* g) noexcept {
-    *g = 1ULL;
+    warp_cxa_guard_release(g);
 }
 extern "C" void __cxa_guard_abort(unsigned long long* g) noexcept {
-    *g = 0ULL;
+    warp_cxa_guard_abort(g);
 }
 
 namespace std {

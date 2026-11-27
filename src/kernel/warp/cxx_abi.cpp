@@ -27,6 +27,9 @@ extern "C" {
 #include "warp_exception.h"
 }
 
+#include "src/core/common/VbExceptions.hpp"
+#include "src/core/runtime/TrapException.hpp"
+
 // ---------------------------------------------------------------------------
 // Exception object allocation
 // ---------------------------------------------------------------------------
@@ -48,15 +51,64 @@ extern "C" void __cxa_free_exception(void* e) noexcept {
 // Throw — longjmp to the nearest driver checkpoint if one is set
 // ---------------------------------------------------------------------------
 
-/* Deliver a thrown exception.  Ignores the exception object, its type_info and its
- * destructor entirely: if the calling thread has an armed checkpoint it is disarmed and control
- * longjmps there, otherwise the kernel panics.  Consequences a caller must plan for —
- * no type matching, so the nearest armed checkpoint catches everything; no unwinding,
- * so destructors between the throw and the checkpoint DO NOT RUN and anything they
- * would have released (locks, page-table roots, allocations) leaks; and the exception
- * object is never freed. */
+/* WARP's exception types, by the mangled name in their type_info: the C++ name to log,
+ * and whether the object is a vb::TrapException (else a vb::RuntimeError).  Every one
+ * derives from std::exception alone, so a pointer to the thrown object is a pointer to
+ * that base too. */
+struct WarpExceptionType {
+    const char* mangled;
+    const char* name;
+    bool trap;
+};
+
+static const WarpExceptionType k_warp_exception_types[] = {
+    {"N2vb13TrapExceptionE", "vb::TrapException", true},
+    {"N2vb12RuntimeErrorE", "vb::RuntimeError", false},
+    {"N2vb19ValidationExceptionE", "vb::ValidationException", false},
+    {"N2vb16LinkingExceptionE", "vb::LinkingException", false},
+    {"N2vb28FeatureNotSupportedExceptionE", "vb::FeatureNotSupportedException", false},
+    {"N2vb32ImplementationLimitationExceptionE", "vb::ImplementationLimitationException", false},
+};
+
+static bool names_equal(const char* a, const char* b) {
+    while (*a && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+/* Log one line naming a thrown exception: "[warp] throw <type>: <message>" for WARP's
+ * own exceptions, with the message WARP gives (TrapException::what, RuntimeError::what),
+ * and "[warp] throw <mangled type name>" for anything else (std::bad_alloc is
+ * St9bad_alloc).  The name is the second word of the Itanium type_info. */
+static void warp_log_throw(void* obj, const void* type_info) {
+    const char* mangled = type_info ? static_cast<const char* const*>(type_info)[1] : nullptr;
+    if (!mangled) {
+        klog_write("[warp] throw (no type)\n");
+        return;
+    }
+    for (const WarpExceptionType& t : k_warp_exception_types) {
+        if (names_equal(mangled, t.mangled)) {
+            const char* what = t.trap ? static_cast<vb::TrapException*>(obj)->what()
+                                      : static_cast<vb::RuntimeError*>(obj)->what();
+            klog_printf("[warp] throw %s: %s\n", t.name, what);
+            return;
+        }
+    }
+    klog_printf("[warp] throw %s\n", mangled);
+}
+
+/* Deliver a thrown exception.  The exception is logged (warp_log_throw), then its object,
+ * type_info and destructor are otherwise ignored: if the calling thread has an armed
+ * checkpoint it is disarmed and control longjmps there, otherwise the kernel panics.
+ * Consequences a caller must plan for — no type matching, so the nearest armed checkpoint
+ * catches everything; no unwinding, so destructors between the throw and the checkpoint DO
+ * NOT RUN and anything they would have released (locks, page-table roots, allocations)
+ * leaks; and the exception object is never freed. */
 extern "C" __attribute__((noreturn)) void __cxa_throw(void* obj, void* type_info,
                                                       void (* /*dtor*/)(void*)) {
+    warp_log_throw(obj, type_info);
     warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     if (ckpt->active) {
         warp_exception_abandon(ckpt);

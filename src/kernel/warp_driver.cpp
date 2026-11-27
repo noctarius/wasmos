@@ -40,6 +40,7 @@ extern "C" {
 #include "src/WasmModule/WasmModule.hpp"
 #undef private
 #include "src/core/runtime/MemoryHelper.hpp"
+#include "src/core/runtime/TrapException.hpp"
 #include "src/core/common/Span.hpp"
 #include "src/core/common/ILogger.hpp"
 #include "warp/shim.h"
@@ -504,7 +505,15 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
         /* WARP_RETURN fired — restore kernel CR3 and return. */
         paging_switch_root(t->warp_r3_old_cr3);
         uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + 40);
-        return (tc == 0) ? 0 : -1;
+        if (tc == 0) {
+            return 0;
+        }
+        /* A guest trap never reaches __cxa_throw: the JIT returns its code here. The
+         * message is WARP's own for that code (TrapException::what). */
+        vb::TrapException trap(static_cast<vb::TrapCode>(tc));
+        klog_printf(
+            "[warp] trap in %s: %s (code %u)\n", name, trap.what(), static_cast<unsigned>(tc));
+        return -1;
     }
 
     /* Enter the debug entry trampoline, which captures the user stack pointer

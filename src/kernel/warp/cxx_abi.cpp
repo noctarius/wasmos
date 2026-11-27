@@ -59,7 +59,7 @@ extern "C" __attribute__((noreturn)) void __cxa_throw(void* obj, void* type_info
                                                       void (* /*dtor*/)(void*)) {
     warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     if (ckpt->active) {
-        ckpt->active = 0;
+        warp_exception_abandon(ckpt);
         __builtin_longjmp(ckpt->jbuf, 1);
     }
     klog_write("[warp] uncaught C++ exception — kernel panic\n");

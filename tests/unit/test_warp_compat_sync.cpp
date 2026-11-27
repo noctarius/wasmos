@@ -17,6 +17,12 @@
 #include "warp/compat/mutex"
 #include "warp/cxa_guard.h"
 
+/* The guard's per-thread bookkeeping for throw delivery is the exception
+ * checkpoint's (src/kernel/warp/exception_checkpoint.c), covered by
+ * test_warp_exception_checkpoint; here it records nothing. */
+extern "C" void warp_exception_note_guard(unsigned long long*) {}
+extern "C" void warp_exception_drop_guard(unsigned long long*) {}
+
 namespace {
 
 constexpr int kThreads = 4;

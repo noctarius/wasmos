@@ -10,12 +10,20 @@
 
 #include <stdint.h>
 
+/* Depth of nested function-local static initialisation a thread may reach; one
+ * more panics (warp_exception_note_guard). */
+#define WARP_EXCEPTION_MAX_GUARDS 8u
+
 typedef struct warp_exception_checkpoint {
     void* jbuf[5]; /* __builtin_setjmp buffer */
     int active;    /* 1 while armed */
     /* Top of the SJLJ unwind context stack (warp/sjlj_unwind.cpp), which shares
      * the checkpoint's owner. */
     void* sjlj_top;
+    /* Function-local static guards (warp/cxa_guard.h) this thread holds BUSY,
+     * innermost last: a throw skips their __cxa_guard_abort. */
+    unsigned long long* guards[WARP_EXCEPTION_MAX_GUARDS];
+    uint32_t guard_count;
 } warp_exception_checkpoint_t;
 
 #ifdef __cplusplus
@@ -29,6 +37,20 @@ extern "C" {
  * cpu_id at or above the cap folds onto slot 0).  The thread is read with
  * preemption disabled. */
 warp_exception_checkpoint_t* warp_exception_get_checkpoint(void);
+
+/* Disarm `ckpt` for delivery of a throw, settling what the longjmp to the checkpoint
+ * skips because nothing is unwound: every guard the thread holds BUSY returns to 0,
+ * so the static is initialised again on its next use rather than spun on forever,
+ * and the SJLJ stack is emptied, since every frame registered since arming is
+ * discarded.  __cxa_throw calls it immediately before __builtin_longjmp. */
+void warp_exception_abandon(warp_exception_checkpoint_t* ckpt);
+
+/* Record that the calling thread now holds guard `g` BUSY / no longer does.  Called
+ * by warp_cxa_guard_acquire on success and by its release and abort.  Nesting deeper
+ * than WARP_EXCEPTION_MAX_GUARDS panics: an untracked guard would be left BUSY by a
+ * throw. */
+void warp_exception_note_guard(unsigned long long* g);
+void warp_exception_drop_guard(unsigned long long* g);
 
 #ifdef __cplusplus
 }

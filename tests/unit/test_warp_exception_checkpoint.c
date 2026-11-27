@@ -13,6 +13,7 @@
 #include "cpu_local.h"
 #include "test_shuffle.h"
 #include "thread.h"
+#include "warp/cxa_guard.h"
 #include "warp_exception.h"
 
 cpu_local_t g_cpus[WASMOS_MAX_CPUS];
@@ -107,11 +108,55 @@ static void test_without_a_thread_each_cpu_has_its_own(void) {
     CHECK(a != NULL && b != NULL && a != b, "CPUs without a thread share a checkpoint");
 }
 
+/* Review of PR #93 -- a WARP throw from inside a function-local static's
+ * initializer longjmps to the checkpoint without unwinding, so
+ * __cxa_guard_abort never ran and the guard stayed BUSY. Every later use of
+ * that static, including the AOT-to-JIT retry on the same thread, spun in
+ * __cxa_guard_acquire forever. */
+static void test_a_throw_abandons_the_statics_it_was_initializing(void) {
+    reset();
+    run_on(0, &g_t1);
+    warp_exception_checkpoint_t* c = warp_exception_get_checkpoint();
+    c->active = 1;
+    unsigned long long done = 0;
+    CHECK(warp_cxa_guard_acquire(&done) == 1, "first acquire of a fresh guard refused");
+    warp_cxa_guard_release(&done);
+    unsigned long long outer = 0;
+    unsigned long long inner = 0;
+    CHECK(warp_cxa_guard_acquire(&outer) == 1, "outer acquire refused");
+    CHECK(warp_cxa_guard_acquire(&inner) == 1, "nested acquire refused");
+
+    warp_exception_abandon(c);
+
+    CHECK(outer == 0 && inner == 0, "a guard was left BUSY after the throw");
+    CHECK(done == WARP_CXA_GUARD_DONE, "a completed static was reset by the throw");
+    CHECK(c->active == 0, "the checkpoint is still armed");
+    CHECK(warp_cxa_guard_acquire(&outer) == 1, "the abandoned static cannot be retried");
+    warp_cxa_guard_release(&outer);
+}
+
+/* Review of PR #93 -- the SJLJ context stack top lives in the checkpoint, and a
+ * throw's longjmp discards every frame registered since arming without
+ * unregistering it. The thread kept a pointer into its own dead frames, which
+ * the next register linked beneath a live one. */
+static void test_a_throw_drops_the_sjlj_frames_it_discards(void) {
+    reset();
+    run_on(0, &g_t1);
+    warp_exception_checkpoint_t* c = warp_exception_get_checkpoint();
+    c->active = 1;
+    int dead_frame;
+    c->sjlj_top = &dead_frame;
+    warp_exception_abandon(c);
+    CHECK(c->sjlj_top == NULL, "the SJLJ stack still points at a discarded frame");
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_switched_out_thread_keeps_its_checkpoint),
         WASMOS_TEST_CASE(test_a_migrated_thread_finds_its_checkpoint),
         WASMOS_TEST_CASE(test_without_a_thread_each_cpu_has_its_own),
+        WASMOS_TEST_CASE(test_a_throw_abandons_the_statics_it_was_initializing),
+        WASMOS_TEST_CASE(test_a_throw_drops_the_sjlj_frames_it_discards),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_warp_exception_checkpoint: ok\n");

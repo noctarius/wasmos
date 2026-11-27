@@ -296,7 +296,7 @@ TESTS = [
     (RUN, 'test_warp_compat_sync', []),
     (SANXX, 'test_warp_compat_sync_tsan', [*WARP_COMPAT_SYNC, '-fsanitize=thread', '-g', '-O1', 'test_warp_mem_tracking_spin_tsan.o']),
     (RUN, 'test_warp_compat_sync_tsan', []),
-    (CC, 'test_warp_exception_checkpoint', [*C11, '-Wno-unused-parameter', *HOST_ARCH_DEFS, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SMP=1', '-DWASMOS_WASM_RUNTIME_WARP', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('tests/unit'), R('tests/unit/test_warp_exception_checkpoint.c'), R('src/kernel/warp/exception_checkpoint.c')]),
+    (CC, 'test_warp_exception_checkpoint', [*C11, '-Wno-unused-parameter', *HOST_ARCH_DEFS, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SMP=1', '-DWASMOS_WASM_RUNTIME_WARP', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('tests/unit'), '-iquote', R('src/kernel'), R('tests/unit/test_warp_exception_checkpoint.c'), R('src/kernel/warp/exception_checkpoint.c'), R('tests/unit/stubs_kpanic.c')]),
     (RUN, 'test_warp_exception_checkpoint', []),
     (CC, 'test_warp_driver_ring3_call_policy', [*C11, "-I" + R('src/kernel/include'), R('tests/unit/test_warp_driver_ring3_call_policy.c'), R('src/kernel/warp_driver_ring3_call_policy.c')]),
     (RUN, 'test_warp_driver_ring3_call_policy', []),

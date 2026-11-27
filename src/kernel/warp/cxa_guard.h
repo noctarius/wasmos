@@ -18,9 +18,15 @@
  * wait spins with preemption enabled: an initializer that blocks costs the
  * waiters CPU time, not progress.  abort returns the guard to 0, and the next
  * acquire runs the initializer again.  An initializer that reaches its own
- * guard deadlocks, as the ABI permits. */
+ * guard deadlocks, as the ABI permits.
+ *
+ * A WARP throw longjmps to the exception checkpoint without unwinding, so an
+ * initializer that throws never reaches abort.  The holder's checkpoint therefore
+ * records every guard it holds BUSY (warp_exception_note_guard), and throw
+ * delivery returns those guards to 0 (warp_exception_abandon). */
 
 #include "arch/arch_cpu.h"
+#include "warp_exception.h"
 
 #define WARP_CXA_GUARD_BUSY 0x100ULL
 #define WARP_CXA_GUARD_DONE 0x1ULL
@@ -30,6 +36,7 @@ static inline int warp_cxa_guard_acquire(unsigned long long* g) {
         unsigned long long expected = 0;
         if (__atomic_compare_exchange_n(
                 g, &expected, WARP_CXA_GUARD_BUSY, 0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE)) {
+            warp_exception_note_guard(g);
             return 1;
         }
         if (expected == WARP_CXA_GUARD_DONE) {
@@ -40,10 +47,12 @@ static inline int warp_cxa_guard_acquire(unsigned long long* g) {
 }
 
 static inline void warp_cxa_guard_release(unsigned long long* g) {
+    warp_exception_drop_guard(g);
     __atomic_store_n(g, WARP_CXA_GUARD_DONE, __ATOMIC_RELEASE);
 }
 
 static inline void warp_cxa_guard_abort(unsigned long long* g) {
+    warp_exception_drop_guard(g);
     __atomic_store_n(g, 0ULL, __ATOMIC_RELEASE);
 }
 

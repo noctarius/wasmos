@@ -1,27 +1,40 @@
 #pragma once
 /* compat/functional — freestanding stub of <functional>
  *
- * Provides std::function<R(Args...)> and nothing else — no std::bind, no
- * std::ref/cref, no std::less/plus and no std::hash.
+ * Provides std::function<R(Args...)> as a type that can be named and converted
+ * to, never called — no std::bind, no std::ref/cref, no std::less/plus and no
+ * std::hash.
  *
  * FunctionRef.hpp is the only WARP source that includes <functional>, and it
- * names std::function solely inside a std::is_convertible constraint on its
- * constructor.  It never stores or calls one; FunctionRef exists precisely to
- * avoid std::function's dynamic allocation.  So the type only has to exist and
- * be nameable, which is why the full hosted std::function (RTTI, type erasure,
- * heap allocation) is not needed here.
+ * names std::function solely inside the constraint on its constructor,
+ * is_convertible<F&&, std::function<R(Args...)>>.  It never stores or calls
+ * one; FunctionRef exists precisely to avoid std::function's dynamic
+ * allocation.  The hosted std::function (type erasure, heap allocation) is
+ * therefore not provided.
  *
- * This std::function is not usable as a callable wrapper: its converting
- * constructor accepts any F and stores nothing, so the constraint in
- * FunctionRef.hpp is satisfied unconditionally rather than checking the
- * signature (see the is_convertible note in compat/type_traits).  Actually
- * invoking one hangs — operator() cannot return a value it never captured, so
- * it loops forever instead of returning garbage.  Storing a callable in a
- * std::function is a silent no-op at construction; only the eventual call
- * reveals it. */
+ * The converting constructor is constrained as the standard's is: it accepts an
+ * F that is callable with Args... and whose result converts to R (any result
+ * when R is void), so the FunctionRef constraint admits exactly the callables
+ * a hosted build admits.  The constructor stores nothing, and operator() is
+ * deleted: invoking a std::function is a compile error. */
 #include "type_traits"
 
 namespace std {
+
+namespace wasmos_function_detail {
+
+template <typename...> struct make_void { using type = void; };
+
+template <typename Void, typename R, typename F, typename... Args>
+struct is_invocable_r : false_type {};
+
+template <typename R, typename F, typename... Args>
+struct is_invocable_r<typename make_void<decltype(declval<F&>()(declval<Args>()...))>::type,
+                      R, F, Args...>
+    : integral_constant<bool, is_void<R>::value ||
+                                  is_convertible<decltype(declval<F&>()(declval<Args>()...)), R>::value> {};
+
+} // namespace wasmos_function_detail
 
 template<class>
 class function;
@@ -30,11 +43,11 @@ template<class R, class... Args>
 class function<R(Args...)> {
 public:
     function() noexcept = default;
-    template<class F>
+    template<class F,
+             class = enable_if_t<wasmos_function_detail::is_invocable_r<
+                 void, R, typename decay<F>::type, Args...>::value>>
     function(F) noexcept {}
-    /* Spins forever rather than returning an uninitialised R.  Unreachable in
-     * the kernel: nothing here ever holds a callable to dispatch to. */
-    R operator()(Args...) const { for(;;){} } // unreachable in kernel
+    R operator()(Args...) const = delete;
 };
 
 } // namespace std

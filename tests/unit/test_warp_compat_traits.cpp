@@ -103,11 +103,48 @@ static void test_is_convertible_rejects_explicit_only_conversions(void) {
     CHECK(to_void_pointer, "a pointer is not convertible to const void*");
 }
 
+/* Regression: 2026-11-27-warp-compat-function-any -- std::function's converting
+ * constructor accepted any F, so FunctionRef's constructor constraint
+ * (is_convertible<F&&, std::function<R(Args...)>>, libs/warp FunctionRef.hpp)
+ * admitted a callable of any signature, and a non-callable as well. */
+static void test_function_accepts_only_a_matching_callable(void) {
+    auto takes_int = [](int) {};
+    auto takes_struct = [](NotAnInt) {};
+    auto returns_int = [](int v) { return v; };
+    auto returns_struct = [](int) { return NotAnInt{}; };
+    using VoidOfInt = std::function<void(int)>;
+    using IntOfInt = std::function<int(int)>;
+    constexpr bool matching = std::is_convertible<decltype(takes_int)&&, VoidOfInt>::value;
+    constexpr bool discarded_result =
+        std::is_convertible<decltype(returns_int)&&, VoidOfInt>::value;
+    constexpr bool wrong_argument = std::is_convertible<decltype(takes_struct)&&, VoidOfInt>::value;
+    constexpr bool wrong_result = std::is_convertible<decltype(returns_struct)&&, IntOfInt>::value;
+    constexpr bool not_callable = std::is_convertible<NotAnInt&&, VoidOfInt>::value;
+    constexpr bool null = std::is_convertible<decltype(nullptr), VoidOfInt>::value;
+    CHECK(matching, "a matching lambda is not convertible to std::function");
+    CHECK(discarded_result, "a lambda whose result a void function discards is refused");
+    CHECK(!wrong_argument, "a lambda with the wrong argument type is convertible");
+    CHECK(!wrong_result, "a lambda with an unconvertible result is convertible");
+    CHECK(!not_callable, "a non-callable object is convertible to std::function");
+    CHECK(!null, "nullptr selects the converting constructor");
+}
+
+/* Regression: 2026-11-27-warp-compat-function-spin -- invoking a std::function
+ * looped forever, because the wrapper stores no callable to dispatch to. */
+static void test_a_function_cannot_be_invoked(void) {
+    constexpr bool callable = is_callable<std::function<void(int)>, int>::value;
+    constexpr bool const_callable = is_callable<const std::function<int()>>::value;
+    CHECK(!callable, "std::function::operator() is callable and never returns");
+    CHECK(!const_callable, "const std::function::operator() is callable and never returns");
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_type_without_limits_has_no_max),
         WASMOS_TEST_CASE(test_every_integer_type_has_its_real_limits),
         WASMOS_TEST_CASE(test_is_convertible_rejects_explicit_only_conversions),
+        WASMOS_TEST_CASE(test_function_accepts_only_a_matching_callable),
+        WASMOS_TEST_CASE(test_a_function_cannot_be_invoked),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_warp_compat_traits: ok\n");

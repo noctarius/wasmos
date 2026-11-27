@@ -41,8 +41,10 @@ void arch_warp_r3_write_hc_stub(uint8_t* dst, uint32_t syscall_nr);
  *          registers untouched and returns the result.
  *   +0x20  entry stub (WARP_R3_ENTRY_TRAMPOLINE): records the user stack
  *          pointer at WARP_R3_STACK_BASE + 64 and jumps to the address stored
- *          at WARP_R3_STACK_BASE + 56, preserving the argument registers.
- * Each stub fits in its 16 bytes. */
+ *          at WARP_R3_STACK_BASE + 56, preserving the argument registers and
+ *          the return-address register.
+ * The first two stubs fit in their 16 bytes; the entry stub is the last and may
+ * run on towards the end of the page. */
 void arch_warp_r3_write_return_page(uint8_t* page);
 
 /* One ring-3 call into a JIT wrapper. */

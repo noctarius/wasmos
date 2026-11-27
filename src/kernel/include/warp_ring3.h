@@ -22,7 +22,8 @@
 #include <stdint.h>
 #include "syscall.h"
 
-/* User-mode base address (matches USER_VA_MIN in cpu_x86_64.c). */
+/* User-mode base address: the user slot of every address space, on every
+ * architecture (cpu_x86_64.c and arch/aarch64/vm_layout.h use the same slot). */
 #define USER_VA_MIN 0x0000008000000000ULL
 
 /* VA regions. */
@@ -37,15 +38,13 @@
 #define WARP_R3_STACK_PAGES (WARP_R3_STACK_SIZE / 4096ULL)
 #define WARP_R3_STACK_TOP (WARP_R3_STACK_BASE + WARP_R3_STACK_SIZE)
 
-/* User VA of HC stub N (8 bytes per stub). */
-#define WARP_R3_HC_VA(n) (WARP_R3_HC_TRAMPOLINE + (uint64_t)(n) * 8ULL)
-
 /* Syscall IDs. WASMOS_SYSCALL_WARP_RETURN is defined in syscall.h enum.
- * A ring-3 host call arrives as int 0x80 with syscall number WARP_HC_SYSCALL_BASE + N,
- * where N is the host call's position in abi/hostcalls.yaml.  The base sits above the
- * ordinary syscall numbers so the two namespaces cannot collide.  WARP_HC_MAX bounds both
- * the accepted N and the number of 8-byte stubs written into the trampoline page — 128
- * stubs is 1 KiB, which is why one 4 KiB page suffices. */
+ * A ring-3 host call arrives as a syscall with number WARP_HC_SYSCALL_BASE + N, where N
+ * is the host call's position in abi/hostcalls.yaml.  The base sits above the ordinary
+ * syscall numbers so the two namespaces cannot collide.  WARP_HC_MAX bounds both the
+ * accepted N and the number of stubs written into the trampoline page; at up to 16 bytes
+ * a stub (WARP_R3_HC_STUB_BYTES, arch/warp_ring3_arch.h), 128 stubs fit in one 4 KiB
+ * page. */
 #define WARP_HC_SYSCALL_BASE 0x100U
 #define WARP_HC_MAX 128U
 
@@ -85,14 +84,13 @@ void warp_r3_teardown(uint64_t user_root, uint64_t stack_phys);
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Service one ring-3 host call.  Called from the int 0x80 handler with hc_id = the
+/* Service one ring-3 host call.  Called from the syscall handler with hc_id = the
  * syscall number minus WARP_HC_SYSCALL_BASE, i.e. the host call's ordinal in
- * abi/hostcalls.yaml, and `frame` = the syscall_frame_t the entry stub pushed.  Arguments
- * come from RDI, RSI, RDX, RCX, R8, R9 and, beyond six, the guest stack reached through
- * the user RSP stored immediately after the frame.  Returns the host call's 32-bit result
- * for the handler to place in the guest's RAX; an unknown hc_id is handled by the
- * generated dispatch table, not here.  Runs on the kernel stack with the guest's CR3
- * still loaded. */
+ * abi/hostcalls.yaml, and `frame` = the syscall_frame_t of that syscall.  Argument i is
+ * arch_warp_r3_hostcall_arg(frame, i) (arch/warp_ring3_arch.h).  Returns the host call's
+ * 32-bit result for the handler to place in the guest's result register; an unknown
+ * hc_id is handled by the generated dispatch table, not here.  Runs on the kernel stack
+ * with the guest's page-table root still loaded. */
 uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame);
 #ifdef __cplusplus
 }

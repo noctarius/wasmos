@@ -63,6 +63,7 @@ extern "C" {
 #include "policy.h"
 #include "linmem_slots.h"
 #include "paging.h"
+#include "arch/warp_ring3_arch.h"
 #include "hostcall_dma.h"
 #include "phys_map.h"
 #include "framebuffer.h"
@@ -3137,9 +3138,9 @@ extern "C" void wasm3_release_pid(uint32_t pid) {
 // Each R3_LINK entry uses the HC trampoline stub for that HC ID as the `ptr`.
 // When WARP's JIT code in ring-3 calls a DYNAMIC_LINK function, it loads the
 // ptr from the basedata indirection table (at user VA linMem - offset) and
-// calls it.  The ptr is the user-space HC stub address.  The stub fires
-// `int 0x80` with RAX = WARP_HC_SYSCALL_BASE + hc_id; the kernel dispatches
-// to warp_ring3_dispatch(hc_id, frame).
+// calls it.  The ptr is the user-space HC stub address.  The stub raises
+// syscall WARP_HC_SYSCALL_BASE + hc_id; the kernel dispatches to
+// warp_ring3_dispatch(hc_id, frame).
 //
 // R3_LINK uses __COUNTER__ to assign sequential HC IDs matching the
 // WASMOS_SYMBOLS expansion order. g_r3_sym_counter_base must be declared
@@ -3154,7 +3155,7 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
             vb::function_traits<vb::remove_noexcept_t<decltype(fnc)>>::getSignature(),             \
             reinterpret_cast<void const*>(WARP_R3_HC_TRAMPOLINE +                                  \
                                           (uint64_t)(__COUNTER__ - g_r3_sym_counter_base - 1) *    \
-                                              8ULL)                                                \
+                                              WARP_R3_HC_STUB_BYTES)                               \
     }
     static vb::NativeSymbol syms[] = {WASMOS_SYMBOLS(R3_LINK)};
 #undef R3_LINK
@@ -3164,13 +3165,13 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
 // ---------------------------------------------------------------------------
 // Ring-3 hostcall dispatch
 //
-// Called from syscall_dispatch when a ring-3 int 0x80 fires with
-// RAX in [WARP_HC_SYSCALL_BASE, WARP_HC_SYSCALL_BASE + WARP_HC_MAX).
-// hc_id = RAX - WARP_HC_SYSCALL_BASE (== HC index in WASMOS_SYMBOLS order).
+// Called from syscall_dispatch when a ring-3 host-call stub raises a syscall
+// numbered in [WARP_HC_SYSCALL_BASE, WARP_HC_SYSCALL_BASE + WARP_HC_MAX).
+// hc_id = number - WARP_HC_SYSCALL_BASE (== HC index in WASMOS_SYMBOLS order).
 //
-// Arguments from ring-3 registers (SysV: RDI, RSI, RDX, RCX, R8, R9) are
-// in the saved syscall_frame_t.  For HC_IPC_SEND (9 args), extra args come
-// from the user stack (arch_syscall_user_sp).
+// Arguments are read through arch_warp_r3_hostcall_arg (arch/warp_ring3_arch.h),
+// which knows the architecture's native calling convention: registers first,
+// then the caller's user stack.
 // ctx_ is always the last argument, passed by the JIT from the DYNAMIC_LINK
 // basedata slot (which holds the kernel WarpCallContext* set by warp_bind_module).
 // ---------------------------------------------------------------------------
@@ -3180,18 +3181,7 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void) {
 #include "wasmos_ring3_dispatch.inc"
 
 extern "C" uint32_t warp_ring3_dispatch(uint32_t hc_id, void* frame_ptr) {
-    const syscall_frame_t* frame = static_cast<const syscall_frame_t*>(frame_ptr);
-    /* Arguments past the sixth live on the caller's user stack, past
-     * [user_sp+0]. */
-    uint64_t user_rsp = arch_syscall_user_sp(frame);
-    return warp_ring3_dispatch_table(hc_id,
-                                     arch_syscall_arg(frame, 0),
-                                     arch_syscall_arg(frame, 1),
-                                     arch_syscall_arg(frame, 2),
-                                     arch_syscall_arg(frame, 3),
-                                     arch_syscall_arg(frame, 4),
-                                     arch_syscall_arg(frame, 5),
-                                     user_rsp);
+    return warp_ring3_dispatch_table(hc_id, static_cast<const syscall_frame_t*>(frame_ptr));
 }
 #endif /* WASMOS_WASM_RUNTIME_WARP */
 

@@ -26,6 +26,8 @@ ARCH = {
             "arch/x86_64/pci_cfg_x86_64.c",
             "arch/x86_64/timer_x86_64.c",
         ],
+        # Compiled with the WARP glue, only when WARP is the runtime.
+        "warp": ["arch/x86_64/warp_ring3_x86_64.c"],
         "ldscript": "arch/x86_64/linker.ld",
         "core": True,
     },
@@ -249,7 +251,7 @@ def build(b):
     if warp:
         objs = kernel.compile(b.srcs(*core), flags=b.exports["monocypher"]["include"])
         kwarp = b.toolchain("kernel-warp")
-        objs += kwarp.compile(b.srcs(*WARP_GLUE))
+        objs += kwarp.compile(b.srcs(*WARP_GLUE, *target.get("warp", [])))
         objs += kwarp.compile([b.root / "libs/warp" / s for s in WARP_LIB])
     else:
         wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
@@ -284,7 +286,7 @@ def build(b):
             b.index(src, [tc.cc, *tc.cflags, *wasm3_inc])
     else:
         tc = b.toolchain("kernel-warp", overrides=other).tc
-        for src in b.srcs(*WARP_GLUE):
+        for src in b.srcs(*WARP_GLUE, *target.get("warp", [])):
             cxx = src.suffix == ".cpp"
             b.index(
                 src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]

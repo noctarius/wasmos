@@ -700,8 +700,9 @@ Source: `architecture/13-runtime-and-packaging.md`,
   (`FIXME(smp-warp)` at `warp_runtime_enter`, `src/kernel/warp/shim.cpp`); reserve
   overlay windows against real heap growth (`link.cpp`); write-combining
   PAT for framebuffer/scanout (`link.cpp:2145`); enable W^X once kernel paging
-  supports per-4K remap (`MemUtils::setPermissionRX`,
-  `src/kernel/warp/mem_utils_kernel.cpp`). Provide a supported
+  supports per-4K remap, and define `MemUtils::setPermissionRX`/`RW`/`RWX`
+  (`src/kernel/warp/mem_utils_kernel.cpp`), which are deliberately undefined until
+  then. Provide a supported
   alternative to the vendored-runtime-pointer shim without modifying `libs/warp`.
 - [ ] [FEATURE][P2] Make WARP multithreaded WASM either functional (locate the owner module
   bytes so VM threads run under WARP — `src/kernel/warp_driver.cpp:952`
@@ -896,10 +897,16 @@ Source: `architecture/13-runtime-and-packaging.md`,
   implicit-conversion built-in. `std::function` accepts only a callable whose
   signature matches, and its `operator()` is deleted
   (`test_warp_compat_traits`). `compat/sstream`, `compat/sys/mman.h`,
-  `compat/unistd.h` and `warp/posix_kernel.c` are removed: nothing in the kernel
-  build included or linked them, so `mprotect`, `posix_memalign`, `realloc`,
-  `sigaction` and the rest are now an undefined-symbol link error instead of a
-  call that silently does less. `free` moved to `warp/linker_stubs.cpp`.
+  `compat/unistd.h` and `warp/posix_kernel.c` are removed, and `compat/cstdlib`,
+  `compat/sys/signal.h` and `compat/errno.h` no longer declare `realloc`,
+  `sigaction` or `errno`: nothing in the kernel build included, linked or read
+  them, so a use of `mprotect`, `posix_memalign`, `realloc`, `sigaction`,
+  `errno` and the rest is now a compile error instead of a call that silently
+  does less. `free` moved to `warp/linker_stubs.cpp`. The same false W^X
+  success was in `MemUtils::setPermissionRX`/`RW`/`RWX`, which returned 0
+  without changing anything; nothing calls them, so they are left undefined and a
+  reference fails the kernel link (the W^X feature itself is the P2 entry
+  below).
 - [x] [BUG][P1] Resolve the `std::terminate` ODR violation. `compat/exception`
   only declares it; the one definition is `warp/cxx_abi.cpp`'s, which panics
   with `std_terminate_panic` whichever translation unit calls it.

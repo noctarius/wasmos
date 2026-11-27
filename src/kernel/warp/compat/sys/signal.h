@@ -2,16 +2,14 @@
 /* compat/sys/signal.h — freestanding signal stub for bare-metal kernel.
  *
  * Provides sig_atomic_t, sigset_t, a three-field siginfo_t, struct sigaction,
- * SIGSEGV/SIGFPE/SIGBUS, SA_SIGINFO, and a declaration of sigaction().
+ * SIGSEGV/SIGFPE/SIGBUS and SA_SIGINFO: types and constants only.
  * compat/csignal re-exports the types from here into namespace std.
  *
- * sigaction() is the only function, and it is declared and defined nowhere:
- * the kernel has no signal delivery, so a call to it is an undefined-symbol
- * link error rather than a registration that appears to succeed for a handler
- * that can never run.  Everything else POSIX would give you —
+ * No function is declared, sigaction() included: the kernel has no signal
+ * delivery, so a call to it is a compile error rather than a registration that
+ * appears to succeed for a handler that can never run.  The same holds for
  * sigemptyset/sigaddset, sigprocmask, pthread_sigmask, kill, raise, sigaltstack
- * and the SIG_DFL/SIG_IGN dispositions — is absent, so reaching for one is a
- * compile error.
+ * and the SIG_DFL/SIG_IGN dispositions.
  *
  * The types exist because WasmModule.cpp includes this header through
  * <csignal>; the signal paths themselves are dead in this build.  WARP uses
@@ -23,7 +21,7 @@
  * real fault in JIT code lands in the kernel's own #PF/#GP handlers.
  *
  * A WARP path that installs a handler, which these checks keep out of the
- * compiled sources, fails the kernel link on sigaction. */
+ * compiled sources, fails to compile on the call to sigaction. */
 
 #include <stdint.h>
 
@@ -58,14 +56,3 @@ struct sigaction {
     int sa_flags;
     sigset_t sa_mask;
 };
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Declaration only; see the header comment. */
-int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact);
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif

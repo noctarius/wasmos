@@ -1,8 +1,8 @@
 #pragma once
 /* compat/cerrno — freestanding shadow of <cerrno>
  *
- * Whole content: it includes compat/errno.h, which supplies the errno macro
- * (a constant 0 — see that file for what that costs) and the E* constants.
+ * Whole content: it includes compat/errno.h, which supplies the E* constants
+ * and, deliberately, no errno (see that file).
  *
  * Included by only one WARP source, utils/ExecutableMemory.cpp, which the
  * kernel build does not compile, so nothing in the kernel currently depends on
@@ -10,6 +10,5 @@
 
 #include "errno.h"
 
-/* The errno macro and integer constants are intentionally left in the global
- * namespace (matching the POSIX / C standard convention).  Nothing in WARP
- * uses std::errno, so no namespace std re-export is needed. */
+/* The integer constants stay in the global namespace, matching the POSIX / C
+ * convention; there is nothing to re-export into std. */

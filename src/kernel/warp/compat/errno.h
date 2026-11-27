@@ -1,22 +1,17 @@
 #pragma once
 /* compat/errno.h — freestanding errno stub for bare-metal kernel.
  *
- * Provides the POSIX error-number constants listed below plus an errno macro.
+ * Provides the POSIX error-number constants listed below and no errno.
  * compat/cerrno is a one-line wrapper around this file.
  *
- * The kernel has no per-thread errno cell, so errno expands to the literal 0
- * (no error).  Nothing in the kernel sets it, and no WARP translation unit in
- * the kernel build reads it — the one WARP source that does,
- * utils/ExecutableMemory.cpp, is not compiled here.  The constants exist so
- * that WARP code naming them compiles with the Linux values.
+ * The kernel has no per-thread errno cell, so errno is not defined: reading,
+ * assigning or taking the address of it is a compile error.  No WARP
+ * translation unit in the kernel build names it — the one WARP source that
+ * does, utils/ExecutableMemory.cpp, is not compiled here.  The constants exist
+ * so that WARP code naming them compiles with the Linux values.
  *
- * Consequences of the constant-zero errno, both of which are compile-time
- * failures rather than silent misbehaviour:
- *   - `errno = ENOMEM` expands to `0 = 12`, which is a hard error ("expression
- *     is not assignable"), not a warning.
- *   - `&errno` and any other lvalue use fail the same way.
- * A reader that only tests errno compiles and always sees success, which is the
- * one silent case; add real per-CPU storage before letting WARP branch on it. */
+ * TODO: give errno real per-thread storage before compiling a WARP source that
+ * reads it; until then such a source does not build. */
 
 /* Common POSIX error numbers, with the Linux/glibc values. */
 #define EPERM 1    /* Operation not permitted */
@@ -35,7 +30,3 @@
 #define ENOSPC 28  /* No space left on device */
 #define ENOSYS 38  /* Function not implemented */
 #define ENOTSUP 95 /* Operation not supported */
-
-/* errno is always 0 in the freestanding kernel context.  Read-only: this is an
- * rvalue, so it can be compared but never assigned or address-taken. */
-#define errno 0

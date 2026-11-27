@@ -700,7 +700,8 @@ Source: `architecture/13-runtime-and-packaging.md`,
   (`FIXME(smp-warp)` at `warp_runtime_enter`, `src/kernel/warp/shim.cpp`); reserve
   overlay windows against real heap growth (`link.cpp`); write-combining
   PAT for framebuffer/scanout (`link.cpp:2145`); enable W^X once kernel paging
-  supports per-4K remap (`src/kernel/warp/posix_kernel.c:97`). Provide a supported
+  supports per-4K remap (`MemUtils::setPermissionRX`,
+  `src/kernel/warp/mem_utils_kernel.cpp`). Provide a supported
   alternative to the vendored-runtime-pointer shim without modifying `libs/warp`.
 - [ ] [FEATURE][P2] Make WARP multithreaded WASM either functional (locate the owner module
   bytes so VM threads run under WARP — `src/kernel/warp_driver.cpp:952`
@@ -886,16 +887,19 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `freeAlignedMemory` unmaps the whole mapping from it, `reallocAlignedMemory`
   frees through it, and `allocVirtualMemory` is a plain mapping that
   `freeVirtualMemory` releases (`test_warp_aot_host_mem`).
-- [ ] [BUG][P1] Replace the WARP C++ compat stubs that return silently wrong values
-  with either a correct implementation or a hard failure. Each compiles and
-  links, produces no diagnostic, and yields a wrong answer:
-  `numeric_limits<T>::max()` returns 0 for an unspecialised T
-  (`compat/limits`); `std::function::operator()` loops forever
-  (`compat/functional`); `sstream::str()` always returns `""`;
-  `is_convertible` maps to `__is_constructible`, making
-  `FunctionRef`'s signature constraint unconditional (`compat/type_traits`);
-  `mprotect` no-ops returning 0, so a W^X request appears to succeed, and
-  `posix_memalign` ignores its alignment (`warp/posix_kernel.c`).
+- [x] [BUG][P1] Replace the WARP C++ compat stubs that return silently wrong values
+  with either a correct implementation or a hard failure.
+  `numeric_limits<T>` has no primary definition, so an unspecialised T is a
+  compile error, and the specialisations name the fundamental integer types, so
+  `size_t` and `uint64_t` resolve on every target (on Darwin `size_t` fell
+  through to the zero answer). `is_convertible` is the compiler's
+  implicit-conversion built-in. `std::function` accepts only a callable whose
+  signature matches, and its `operator()` is deleted
+  (`test_warp_compat_traits`). `compat/sstream`, `compat/sys/mman.h`,
+  `compat/unistd.h` and `warp/posix_kernel.c` are removed: nothing in the kernel
+  build included or linked them, so `mprotect`, `posix_memalign`, `realloc`,
+  `sigaction` and the rest are now an undefined-symbol link error instead of a
+  call that silently does less. `free` moved to `warp/linker_stubs.cpp`.
 - [x] [BUG][P1] Resolve the `std::terminate` ODR violation. `compat/exception`
   only declares it; the one definition is `warp/cxx_abi.cpp`'s, which panics
   with `std_terminate_panic` whichever translation unit calls it.

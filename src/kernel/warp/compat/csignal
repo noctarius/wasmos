@@ -3,9 +3,8 @@
  *
  * Pulls in compat/sys/signal.h and re-exports the four names WARP's signal
  * headers spell with a std:: qualifier.  The signal numbers, SA_SIGINFO and
- * sigaction() itself stay in the global namespace; see compat/sys/signal.h for
- * which of those have a real kernel definition (only sigaction, a no-op in
- * src/kernel/warp/posix_kernel.c).
+ * sigaction() itself stay in the global namespace; sigaction is declared there
+ * and defined nowhere (see compat/sys/signal.h).
  *
  * The WARP sources that include <csignal> — utils/RAIISignalHandler.{hpp,cpp}
  * and utils/SignalFunctionWrapper_unix.cpp — implement the SIGSEGV-based

@@ -4,8 +4,12 @@
  * Provides:
  *   - Minimal RTTI typeinfo vtables for __cxxabiv1 — the catch clauses in
  *     WARP's own sources need these emitted somewhere at link time.
- *   - malloc / memchr — standard library functions WARP or its dependencies
- *     call directly.
+ *   - malloc / free / memchr — standard library functions WARP or its
+ *     dependencies call directly.  No other POSIX function is defined for
+ *     WARP: realloc, posix_memalign, mmap, mprotect, sigaction and the rest
+ *     are at most declared by a compat header, so a reference to one is an
+ *     undefined-symbol link error rather than a call that silently does less
+ *     than POSIX promises.
  *   - wasm3_* stubs — kernel_init_runtime.c and process.c reference wasm3
  *     symbols; in WARP mode they are never called but must link.
  *
@@ -18,7 +22,7 @@ extern "C" {
 }
 
 // ---------------------------------------------------------------------------
-// malloc / memchr — backed by kernel allocator / built-in
+// malloc / free / memchr — backed by kernel allocator / built-in
 // (Exception unwinding stubs live in cxx_abi.cpp to avoid duplicates.)
 // ---------------------------------------------------------------------------
 
@@ -26,10 +30,15 @@ extern "C" {
 
 /* malloc for WARP's dependencies, backed by the kernel slab.  Bounded by the slab's
  * largest class, so a large request returns nullptr rather than falling back to pages;
- * the WARP module allocator (warp/shim.cpp) is the one that handles large blocks.  The
- * matching free() is in warp/posix_kernel.c. */
+ * the WARP module allocator (warp/shim.cpp) is the one that handles large blocks. */
 void* malloc(size_t size) {
     return kalloc_small(size);
+}
+
+/* Frees a block from malloc above.  A null pointer is a no-op.  This is also the
+ * kernel-wide free() in a WARP build (poll.c calls it). */
+void free(void* ptr) {
+    kfree_small(ptr);
 }
 
 /* memchr over exactly `n` bytes, comparing against the low 8 bits of `c`; returns a

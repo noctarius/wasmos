@@ -468,10 +468,8 @@ src_db, out_db, root = sys.argv[1], sys.argv[2], os.path.abspath(sys.argv[3])
 host_sysroot = sys.argv[4] if len(sys.argv) > 4 else ""
 
 # Host build tools are build-time tooling with little lint value, so exclude
-# them from clang-tidy entirely (dropped from the sanitized DB below). posix_kernel.c
-# is a POSIX host shim that happens to live under src/kernel/warp; only the build
-# system knows it is host-side, hence the explicit entry.
-HOST_TOOLS = ("scripts/", "src/tools/", "src/kernel/warp/posix_kernel.c")
+# them from clang-tidy entirely (dropped from the sanitized DB below).
+HOST_TOOLS = ("scripts/", "src/tools/")
 
 # WASM userland with no linker.metadata of its own: the freestanding libc, the
 # wasm libsys variant and libui are all compiled for wasm32 by the real build and

@@ -10,8 +10,7 @@
  *     PRESENT | WRITE | no-NX, so they are already RWX.
  *   - virt = phys | KERNEL_HIGHER_HALF_BASE (valid for phys < 512 MB).
  *
- * mprotect is a no-op: all JIT pages remain RWX.  A future W^X hardening
- * pass can use paging_map_4k to split large pages and flip permissions. */
+ * W^X is not enforced: all JIT pages remain RWX (see setPermissionRX below). */
 
 #include <cstddef>
 #include <cstdint>
@@ -570,6 +569,9 @@ void freePagedMemory(uint8_t* ptr, size_t) noexcept {
         pfa_free_pages(phys, pages);
 }
 
+/* TODO: flip JIT pages to RX/RW through paging_map_4k (splitting the large page
+ * that covers them) so WARP code is never writable and executable at once; until
+ * then a code page stays RWX and an overwrite of JIT code is not caught. */
 int32_t setPermissionRWX(uint8_t*, size_t) noexcept {
     return 0;
 }

@@ -5,13 +5,10 @@
  * compat/cerrno is a one-line wrapper around this file.
  *
  * The kernel has no per-thread errno cell, so errno expands to the literal 0
- * (no error).  Nothing in the kernel sets it: the POSIX stubs in
- * src/kernel/warp/posix_kernel.c report failure through their return value
- * (MAP_FAILED from mmap, EINVAL/ENOMEM returned directly by posix_memalign) and
- * never touch errno.  No WARP translation unit in the kernel build reads errno
- * either — the one WARP source that does, utils/ExecutableMemory.cpp, is not
- * compiled here.  The constants exist so that WARP code and posix_kernel.c
- * agree on the numeric values.
+ * (no error).  Nothing in the kernel sets it, and no WARP translation unit in
+ * the kernel build reads it — the one WARP source that does,
+ * utils/ExecutableMemory.cpp, is not compiled here.  The constants exist so
+ * that WARP code naming them compiles with the Linux values.
  *
  * Consequences of the constant-zero errno, both of which are compile-time
  * failures rather than silent misbehaviour:
@@ -21,8 +18,7 @@
  * A reader that only tests errno compiles and always sees success, which is the
  * one silent case; add real per-CPU storage before letting WARP branch on it. */
 
-/* Common POSIX error numbers.  Values match Linux/glibc so that a WARP source
- * comparing against its own copy of these names agrees with posix_kernel.c. */
+/* Common POSIX error numbers, with the Linux/glibc values. */
 #define EPERM 1    /* Operation not permitted */
 #define ENOENT 2   /* No such file or directory */
 #define ESRCH 3    /* No such process */

@@ -16,15 +16,16 @@
  * <cstdlib> does; <stddef.h> is included below only for the declarations.  A
  * source wanting std::size_t must include <cstddef>.
  *
- * The three allocators are the real kernel allocator, not stubs, so pointers
- * from malloc/realloc are usable memory and may be freed.  A use of a function
- * that is not declared here is a compile error at the call site. */
+ * malloc and free are the real kernel slab allocator, not stubs, so a pointer
+ * from malloc is usable memory and may be freed.  realloc is declared and
+ * defined nowhere: a reference to it is an undefined-symbol link error.  A use
+ * of a function that is not declared here is a compile error at the call site. */
 
 #include <stddef.h>
 
 extern "C" {
-    /* Declared here, defined against the kernel slab allocator: malloc in
-     * warp/linker_stubs.cpp, realloc and free in warp/posix_kernel.c. */
+    /* malloc and free are defined against the kernel slab allocator in
+     * warp/linker_stubs.cpp; realloc has no definition. */
     void *malloc(size_t size);
     void *realloc(void *ptr, size_t size);
     void  free(void *ptr);

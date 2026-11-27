@@ -103,13 +103,14 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
 // Helpers
 // ---------------------------------------------------------------------------
 
-/* Stack fence handed to every ring-0 WARP entry point.  WARP's
- * ACTIVE_STACK_OVERFLOW_CHECK compares RSP against this with a SIGNED jle, and a kernel
- * RSP near 0xFFFFFFFF8... is signed ~-2 GiB, so a fence at signed ~-4 GiB never trips.
- * It is therefore a disabling value, not a real guard: ring-0 WARP code gets no stack
+/* Stack fence handed to every ring-0 WARP entry point: the bottom of the canonical
+ * higher half.  WARP's ACTIVE_STACK_OVERFLOW_CHECK traps when the stack pointer is at
+ * or below it, comparing SIGNED on x86_64 (jle) and UNSIGNED on aarch64 (b.ls); every
+ * kernel stack is above this address under both comparisons, so it never trips.  It
+ * is therefore a disabling value, not a real guard: ring-0 WARP code gets no stack
  * overflow detection.  The ring-3 path replaces it with a genuine fence inside the user
  * stack (see warp_r3_patch_basedata). */
-static const uint8_t* const k_stack_fence = reinterpret_cast<const uint8_t*>(0xFFFFFFFF00000000ULL);
+static const uint8_t* const k_stack_fence = reinterpret_cast<const uint8_t*>(0xFFFF800000000000ULL);
 
 /* The driver's vb::WasmModule, stored type-erased in the C struct.  Undefined for a
  * driver whose wasm_module is null; every caller checks driver->active first. */

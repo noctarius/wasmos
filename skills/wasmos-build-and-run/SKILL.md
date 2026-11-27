@@ -74,6 +74,9 @@ All of it comes from `ARCHES` in `scripts/buildgen/toolchains.py`.
 `configs/aarch64_wasm3_single_defconfig` is the arm64 tree: one core, wasm3,
 gated by `run-qemu-test` and the QEMU batteries like an x86_64 tree (tests that
 need x86 hardware or topology skip with `requires_arch`).
+`configs/aarch64_warp_single_defconfig` builds WARP for aarch64, JIT only (the
+bundled AOT code is x86_64), and stops at the first WARP module until its ring-3
+hooks (`src/kernel/arch/aarch64/warp_ring3_aarch64.c`) are implemented.
 `run-qemu-bringup-test` (boot to `[test] preempt ok`) is the gate for an
 architecture whose kernel cannot reach the CLI yet. An aarch64 guest runs under HVF on Apple Silicon, KVM on
 an aarch64 Linux host that has it, TCG elsewhere. aarch64 has no COM2:

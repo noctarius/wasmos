@@ -26,8 +26,22 @@ ARCH = {
             "arch/x86_64/pci_cfg_x86_64.c",
             "arch/x86_64/timer_x86_64.c",
         ],
-        # Compiled with the WARP glue, only when WARP is the runtime.
-        "warp": ["arch/x86_64/warp_ring3_x86_64.c"],
+        # Compiled with the WARP glue, only when WARP is the runtime. The SJLJ
+        # unwinder is dormant (WARP compiles with Dwarf -fexceptions) and its
+        # _Unwind_FunctionContext layout is the x86_64 one.
+        "warp": ["arch/x86_64/warp_ring3_x86_64.c", "warp/sjlj_unwind.cpp"],
+        # WARP's code generator for this architecture (libs/warp/src/...).
+        "warp_backend": [
+            f"src/core/compiler/backend/x86_64/x86_64_{s}.cpp"
+            for s in (
+                "assembler",
+                "backend",
+                "call_dispatch",
+                "cc",
+                "instruction",
+                "relpatchobj",
+            )
+        ],
         "ldscript": "arch/x86_64/linker.ld",
         "core": True,
     },
@@ -49,6 +63,22 @@ ARCH = {
             "arch/aarch64/msi_aarch64.c",
             "arch/aarch64/platform_aarch64.c",
             "arch/aarch64/smp_aarch64.c",
+        ],
+        "warp": [
+            "arch/aarch64/warp_ring3_aarch64.c",
+            "arch/aarch64/warp_jmp_aarch64.S",
+        ],
+        "warp_backend": [
+            f"src/core/compiler/backend/aarch64/aarch64_{s}.cpp"
+            for s in (
+                "assembler",
+                "aux",
+                "backend",
+                "call_dispatch",
+                "cc",
+                "instruction",
+                "relpatchobj",
+            )
         ],
         "ldscript": "arch/aarch64/linker.ld",
         "core": True,
@@ -146,11 +176,10 @@ WARP_GLUE = [
     "warp/iostream_stubs.cpp",
     "warp/ring3_trampolines.c",
     "warp/linker_stubs.cpp",
-    "warp/sjlj_unwind.cpp",
 ]
 
-# Vendored WARP sources (libs/warp is a git subtree; never edited here). Kconfig
-# offers WARP on x86_64 only, the one backend listed here.
+# Vendored WARP sources (libs/warp is a git subtree; never edited here), without
+# the code generator, which is per architecture (ARCH[...]["warp_backend"]).
 WARP_LIB = [
     "src/WasmModule/WasmModule.cpp",
     "src/core/runtime/Runtime.cpp",
@@ -162,12 +191,6 @@ WARP_LIB = [
     "src/utils/VirtualMemoryAllocator.cpp",
     "src/core/compiler/Compiler.cpp",
     "src/core/compiler/backend/BackendBase.cpp",
-    "src/core/compiler/backend/x86_64/x86_64_assembler.cpp",
-    "src/core/compiler/backend/x86_64/x86_64_backend.cpp",
-    "src/core/compiler/backend/x86_64/x86_64_call_dispatch.cpp",
-    "src/core/compiler/backend/x86_64/x86_64_cc.cpp",
-    "src/core/compiler/backend/x86_64/x86_64_instruction.cpp",
-    "src/core/compiler/backend/x86_64/x86_64_relpatchobj.cpp",
     "src/core/compiler/common/Common.cpp",
     "src/core/compiler/common/CommonRegsPos.cpp",
     "src/core/compiler/common/MemWriter.cpp",
@@ -251,8 +274,15 @@ def build(b):
     if warp:
         objs = kernel.compile(b.srcs(*core), flags=b.exports["monocypher"]["include"])
         kwarp = b.toolchain("kernel-warp")
-        objs += kwarp.compile(b.srcs(*WARP_GLUE, *target.get("warp", [])))
-        objs += kwarp.compile([b.root / "libs/warp" / s for s in WARP_LIB])
+        # Assembly takes the kernel profile's flags; kernel-warp carries C/C++ only.
+        warp_arch = target.get("warp", [])
+        objs += kernel.compile(b.srcs(*[s for s in warp_arch if s.endswith(".S")]))
+        objs += kwarp.compile(
+            b.srcs(*WARP_GLUE, *[s for s in warp_arch if not s.endswith(".S")])
+        )
+        objs += kwarp.compile(
+            [b.root / "libs/warp" / s for s in WARP_LIB + target["warp_backend"]]
+        )
     else:
         wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
         wasm3_lib = ["-Wno-unused-variable"]
@@ -286,7 +316,8 @@ def build(b):
             b.index(src, [tc.cc, *tc.cflags, *wasm3_inc])
     else:
         tc = b.toolchain("kernel-warp", overrides=other).tc
-        for src in b.srcs(*WARP_GLUE, *target.get("warp", [])):
+        warp_arch = [s for s in target.get("warp", []) if not s.endswith(".S")]
+        for src in b.srcs(*WARP_GLUE, *warp_arch):
             cxx = src.suffix == ".cpp"
             b.index(
                 src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]

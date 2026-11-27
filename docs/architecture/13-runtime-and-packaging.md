@@ -681,7 +681,7 @@ layer in `src/kernel/warp/`:
 | File                   | Purpose                                                                                                          |
 |------------------------|------------------------------------------------------------------------------------------------------------------|
 | `compat/`              | nearly 30 freestanding C++14 standard-library headers (type_traits, tuple, array, mutex, atomic, exception, …)         |
-| `cxx_abi.cpp`          | Exception ABI: `__cxa_throw` longjmps to a per-CPU `__builtin_setjmp` checkpoint — no Dwarf/SJLJ unwinder needed |
+| `cxx_abi.cpp`          | Exception ABI: `__cxa_throw` longjmps to a per-thread `__builtin_setjmp` checkpoint — no Dwarf/SJLJ unwinder needed |
 | `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, xfer buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)       |
 | `shim.cpp`             | Two-tier kernel allocator (slab ≤ 112 bytes, page allocator for larger blocks), `operator new/delete`            |
 | `mem_utils_kernel.cpp` | `vb::MemUtils` + `ExecutableMemory` backed by `pfa_alloc_pages` — no `<iostream>` or pthreads                    |
@@ -694,10 +694,13 @@ layer in `src/kernel/warp/`:
 #### Exception boundary
 
 WARP throws C++ exceptions internally.  These are contained within the
-`warp_driver` layer via a per-CPU `__builtin_setjmp` checkpoint:
+`warp_driver` layer via a `__builtin_setjmp` checkpoint
+(`include/warp_exception.h`). The checkpoint belongs to the calling thread, not
+the CPU: a ring-0 WARP call can block in a host call and resume on another CPU,
+and must land on its own checkpoint when WARP throws.
 
 ```c
-WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
+warp_exception_checkpoint_t *ckpt = warp_exception_get_checkpoint();
 ckpt->active = 1;
 if (__builtin_setjmp(ckpt->jbuf)) {
     /* WARP threw — log and return error */
@@ -708,6 +711,18 @@ ckpt->active = 0;
 
 `__cxa_throw` checks `ckpt->active` and calls `__builtin_longjmp` if set.  No
 exception ever propagates into C kernel code.
+
+#### Concurrency
+
+Several CPUs can be inside WARP at once: `warp_runtime_enter` takes no lock,
+because a lock around a WARP call would be held across its blocking IPC waits.
+State shared between modules carries its own synchronisation instead — the
+allocation tracking table and ring-3 linear-memory publication
+(`mem_utils_kernel.cpp`), the small-block pool and per-pid configuration
+(`shim.cpp`), `std::mutex` (`compat/mutex`, a kernel spinlock) and the
+function-local static guards (`cxa_guard.h`). One `WasmModule` is driven by one
+thread at a time, under its driver's lock. `libs/warp` itself has not been
+audited for shared mutable state (`FIXME(smp-warp)` at `warp_runtime_enter`).
 
 #### Memory model
 

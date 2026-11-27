@@ -5,7 +5,7 @@
  * the single-pass JIT compiler, and runs the compiled code in ring 3.
  *
  * Exception strategy: try/catch requires a working C++ unwinder, so the
- * per-CPU warp_exception_checkpoint from cxx_abi.cpp is used instead.  Each call into
+ * per-thread exception checkpoint (include/warp_exception.h) is used instead.  Each call into
  * WARP arms a __builtin_setjmp checkpoint first; __cxa_throw longjmps directly back to
  * it, so an exception never propagates through kernel call frames — and nothing between
  * the throw and the checkpoint is unwound.  The WARP_CALL macro below packages that
@@ -23,6 +23,7 @@ extern "C" {
 #include "serial.h"
 #include "process.h"
 #include "thread.h"
+#include "warp_exception.h"
 #include "sync/spinlock.h"
 #include "ipc.h"
 #include "string.h"
@@ -66,25 +67,16 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
 #endif
 
 // ---------------------------------------------------------------------------
-// Exception checkpoint helpers (defined in cxx_abi.cpp)
+// Exception checkpoint (include/warp_exception.h)
 // ---------------------------------------------------------------------------
 
-/* Per-CPU catch point for a WARP C++ exception, defined in warp/cxx_abi.cpp and
- * mirrored here (the layouts must stay identical).  `jbuf` is a 5-slot
- * __builtin_setjmp buffer; `active` gates whether __cxa_throw longjmps into it or
- * panics.  Exactly one checkpoint per CPU, so checkpoints do not nest: arming a second
- * one overwrites the first, and the code below always disarms (`active = 0`) before
- * returning through a path that could throw again.  A checkpoint armed on one CPU is
- * only usable while execution stays on that CPU. */
-struct WarpExceptionCheckpoint {
-    void* jbuf[5];
-    int active;
-};
-/* This CPU's checkpoint.  The pointer is stable for the CPU, not for the thread. */
-extern "C" WarpExceptionCheckpoint* warp_exception_get_checkpoint(void);
+/* Checkpoints do not nest: arming a second one on the same thread overwrites the
+ * first, and the code below always disarms (`active = 0`) before returning through a
+ * path that could throw again.  The checkpoint belongs to the calling thread, so it
+ * survives the thread blocking inside the call and resuming on another CPU. */
 
 /* WARP_CALL(err_ret, expr):
- *   - Arms this CPU's exception checkpoint.
+ *   - Arms the calling thread's exception checkpoint.
  *   - Evaluates `expr`, then disarms the checkpoint.
  *   - If __cxa_throw fires anywhere inside `expr`, it longjmps back here and the macro
  *     RETURNS `err_ret` from the ENCLOSING function — it does not resume after the
@@ -95,7 +87,7 @@ extern "C" WarpExceptionCheckpoint* warp_exception_get_checkpoint(void);
  * their own recovery between the longjmp landing and the return. */
 #define WARP_CALL(err_ret, expr)                                                                   \
     do {                                                                                           \
-        WarpExceptionCheckpoint* _ckpt = warp_exception_get_checkpoint();                          \
+        warp_exception_checkpoint_t* _ckpt = warp_exception_get_checkpoint();                      \
         _ckpt->active = 1;                                                                         \
         if (__builtin_setjmp(_ckpt->jbuf)) {                                                       \
             klog_write("[warp-driver] WARP exception caught\n");                                   \
@@ -163,7 +155,7 @@ static KernelLogger g_logger;
  * before returning.  Returns 0 on success, -1 if WARP threw — in which case the CR3 is
  * NOT restored here, since the longjmp bypasses the restore. */
 static int warp_driver_start_module(vb::WasmModule* mod, uint64_t user_root) {
-    WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
+    warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
     if (__builtin_setjmp(ckpt->jbuf) != 0) {
         klog_write("[warp-driver] exception during start\n");
@@ -264,7 +256,7 @@ static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
     (void)user_root;
     (void)stack_phys;
 #endif
-    WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
+    warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
     if (__builtin_setjmp(ckpt->jbuf)) {
         klog_write("[warp-driver] exception during export call\n");
@@ -433,7 +425,7 @@ static __attribute__((noinline)) void r3_do_iretq(uint64_t rip, uint64_t rsp, ui
 static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
     vb::Span<char const> name_span(name, __builtin_strlen(name));
     uint8_t const* kernel_fn = nullptr;
-    WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
+    warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
     if (__builtin_setjmp(ckpt->jbuf)) {
         ckpt->active = 0;
@@ -466,7 +458,7 @@ static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
  *
  * The checkpoint covers the whole guest execution, from the setjmp to WARP_RETURN.  It
  * is NOT the C++ exception checkpoint — that one (warp_exception_get_checkpoint) is
- * per-CPU and is armed here only around warp_r3_resolve_export; the guest itself leaves
+ * armed here only around warp_r3_resolve_export; the guest itself leaves
  * through the return trampoline or faults, it does not unwind into this frame.
  *
  * Between arming t->warp_r3_active and the IRET nothing may block, reschedule, or
@@ -687,7 +679,7 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
         warp_runtime_leave(prev);
         return -1;
     }
-    WarpExceptionCheckpoint* ckpt = warp_exception_get_checkpoint();
+    warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
 
     /* AOT path: try loading a pre-compiled binary if one was embedded in the
      * .wap.  On failure — a WARP exception, or a stale blob whose imports do not

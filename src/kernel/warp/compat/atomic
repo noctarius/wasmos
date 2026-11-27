@@ -11,9 +11,9 @@
  * LinearMemoryAllocator's pagedMemoryLimit_ are only loaded, stored and
  * assigned.  No compiled WARP source performs an atomic read-modify-write.
  *
- * Unlike compat/mutex, this is NOT a no-op stub: every operation lowers to a
- * clang __atomic built-in and is genuinely atomic, so it stays correct if WARP
- * is ever run on more than one CPU.  Two deliberate deviations:
+ * Every operation lowers to a clang __atomic built-in and is genuinely atomic,
+ * so it is correct with WARP running on more than one CPU.  Two deliberate
+ * deviations:
  *   - the memory_order argument is ignored and every operation is issued as
  *     __ATOMIC_SEQ_CST.  That is strictly stronger than what the caller asked
  *     for, so it can cost performance but never correctness.

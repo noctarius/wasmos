@@ -16,10 +16,10 @@ from wasmos_rules import lang_available
 
 C11 = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-error=c23-extensions"]
 
-# Entry kinds. CC/CXX/SAN build a binary (SAN: sanitizer build, through the
-# platform SDK compiler on macOS); RUN executes one; CHECK is a compile-only
-# assertion run as a step.
-CC, CXX, SAN, RUN, CHECK = "cc", "cxx", "san", "run", "check"
+# Entry kinds. CC/CXX/SAN/SANXX build a binary (SAN and SANXX: sanitizer
+# builds of C and C++, through the platform SDK compiler on macOS); RUN executes
+# one; CHECK is a compile-only assertion run as a step.
+CC, CXX, SAN, SANXX, RUN, CHECK = "cc", "cxx", "san", "sanxx", "run", "check"
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,6 +42,54 @@ HOST_ARCH_DEFS = ["-DWASMOS_ARCH_AARCH64=1"] if _ARCH in ("arm64", "aarch64") el
 
 # Linker flag that drops unreferenced sections (ld64 vs GNU/lld spelling).
 DEAD_STRIP = "-Wl,-dead_strip" if platform.system() == "Darwin" else "-Wl,--gc-sections"
+
+# The WARP allocation tracking table (src/kernel/warp/mem_utils_kernel.cpp) on
+# the host, built against the vendored vb::MemUtils header; the plain and the
+# ThreadSanitizer arm share it.
+WARP_MEM_TRACKING = [
+    "-std=c++17",
+    "-Wall",
+    "-Wno-unused-parameter",
+    "-Wno-unused-const-variable",
+    "-Wno-macro-redefined",
+    "-Wno-c++20-extensions",
+    "-pthread",
+    "-DWASMOS_WASM_RUNTIME_WARP",
+    "-DWASMOS_HOST_TEST_SMP=1",
+    "-DVB_POSIX",
+    "-DVB_WIN32_OR_POSIX",
+    "-include",
+    R("src/libc/include/wasmos_cast.h"),
+    "-iquote",
+    R("src/kernel"),
+    "-iquote",
+    R("src/kernel/include"),
+    "-iquote",
+    R("abi/generated/c"),
+    "-iquote",
+    R("tests/unit"),
+    "-I",
+    R("libs/warp"),
+    R("tests/unit/test_warp_mem_tracking.cpp"),
+    R("src/kernel/warp/mem_utils_kernel.cpp"),
+]
+
+# The WARP backend's freestanding C++ synchronization (src/kernel/warp/compat
+# and warp/cxx_abi.cpp) on the host; the plain and the ThreadSanitizer arm
+# share it.
+WARP_COMPAT_SYNC = [
+    *HOST_ARCH_DEFS,
+    "-std=c++17",
+    "-Wall",
+    "-pthread",
+    "-iquote",
+    R("src/kernel"),
+    "-iquote",
+    R("src/kernel/include"),
+    "-iquote",
+    R("tests/unit"),
+    R("tests/unit/test_warp_compat_sync.cpp"),
+]
 
 # Suites in run order.
 # fmt: off
@@ -238,6 +286,18 @@ TESTS = [
     (RUN, 'test_ipc_concurrency_tsan', []),
     (SAN, 'test_ipc_concurrency_asan', ['-std=c11', '-Wall', '-pthread', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-g', '-O1', '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_TEST_NTHREADS=8', '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), R('tests/unit/test_ipc_concurrency.c'), R('src/kernel/ipc.c'), R('src/kernel/idtable.c'), R('tests/unit/stubs_kpanic.c'), R('src/kernel/poll.c'), R('src/kernel/sched_event.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_ipc_concurrency_asan', []),
+    (CC, 'test_warp_mem_tracking_spin.o', [*C11, '-O1', '-iquote', R('src/kernel/include'), '-c', R('tests/unit/stubs_spinlock.c')]),
+    (CXX, 'test_warp_mem_tracking', [*WARP_MEM_TRACKING, '-O1', 'test_warp_mem_tracking_spin.o']),
+    (RUN, 'test_warp_mem_tracking', []),
+    (SAN, 'test_warp_mem_tracking_spin_tsan.o', [*C11, '-fsanitize=thread', '-g', '-O1', '-iquote', R('src/kernel/include'), '-c', R('tests/unit/stubs_spinlock.c')]),
+    (SANXX, 'test_warp_mem_tracking_tsan', [*WARP_MEM_TRACKING, '-fsanitize=thread', '-g', '-O1', 'test_warp_mem_tracking_spin_tsan.o']),
+    (RUN, 'test_warp_mem_tracking_tsan', []),
+    (CXX, 'test_warp_compat_sync', [*WARP_COMPAT_SYNC, '-O1', 'test_warp_mem_tracking_spin.o']),
+    (RUN, 'test_warp_compat_sync', []),
+    (SANXX, 'test_warp_compat_sync_tsan', [*WARP_COMPAT_SYNC, '-fsanitize=thread', '-g', '-O1', 'test_warp_mem_tracking_spin_tsan.o']),
+    (RUN, 'test_warp_compat_sync_tsan', []),
+    (CC, 'test_warp_exception_checkpoint', [*C11, '-Wno-unused-parameter', *HOST_ARCH_DEFS, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SMP=1', '-DWASMOS_WASM_RUNTIME_WARP', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('tests/unit'), '-iquote', R('src/kernel'), R('tests/unit/test_warp_exception_checkpoint.c'), R('src/kernel/warp/exception_checkpoint.c'), R('tests/unit/stubs_kpanic.c')]),
+    (RUN, 'test_warp_exception_checkpoint', []),
     (CC, 'test_warp_driver_ring3_call_policy', [*C11, "-I" + R('src/kernel/include'), R('tests/unit/test_warp_driver_ring3_call_policy.c'), R('src/kernel/warp_driver_ring3_call_policy.c')]),
     (RUN, 'test_warp_driver_ring3_call_policy', []),
     (CC, 'test_kernel_sync_primitives', [*C11, '-DWASMOS_TEST_USE_REAL_SPINLOCK_DECLS', '-pthread', "-I" + R('tests/unit/include'), "-I" + R('src/kernel/include'), R('tests/unit/test_kernel_sync_primitives.c'), R('src/kernel/sync_mutex.c'), R('src/kernel/sync_semaphore.c')]),
@@ -294,9 +354,10 @@ TESTS = [
 # fmt: on
 
 
-def _host_sdk_compiler():
-    """Sanitizer builds use the platform SDK's clang on macOS, whose runtime
-    libraries match the system; elsewhere the configured clang."""
+def _host_sdk_compiler(driver="clang"):
+    """Sanitizer builds use the platform SDK's clang (or clang++, as `driver`)
+    on macOS, whose runtime libraries match the system; elsewhere the
+    configured compiler."""
     if platform.system() == "Darwin":
         try:
             sdk = subprocess.run(
@@ -305,7 +366,7 @@ def _host_sdk_compiler():
                 text=True,
                 check=True,
             ).stdout.strip()
-            return ["xcrun", "clang", "-isysroot", sdk]
+            return ["xcrun", driver, "-isysroot", sdk]
         except (OSError, subprocess.CalledProcessError):
             pass
     return None
@@ -418,6 +479,7 @@ def as_test(b, name, files):
 def build(b):
     clang, clangxx = b.tools["clang"], b.tools["clangxx"]
     san_cc = _host_sdk_compiler() or [clang]
+    san_cxx = _host_sdk_compiler("clang++") or [clangxx]
     steps, built = [], []
     unit = ROOT / "tests/unit"
 
@@ -464,8 +526,8 @@ def build(b):
         )
         built.append(ipc_call_test)
     for kind, name, args in TESTS:
-        if kind in (CC, CXX, SAN):
-            cc = {CC: [clang], CXX: [clangxx], SAN: san_cc}[kind]
+        if kind in (CC, CXX, SAN, SANXX):
+            cc = {CC: [clang], CXX: [clangxx], SAN: san_cc, SANXX: san_cxx}[kind]
             # Objects an earlier entry built (e.g. test_warp_link_ipc.o) are
             # named by bare build-directory path.
             local = [a for a in args if a in built]
@@ -478,7 +540,7 @@ def build(b):
             built.append(name)
             # Indexed with the configured clang: `xcrun clang` is not a
             # compiler path a tool can replay.
-            _index_sources(b, [clangxx] if kind == CXX else [clang], args)
+            _index_sources(b, [clangxx] if kind in (CXX, SANXX) else [clang], args)
         elif kind == RUN:
             # A suite whose toolchain is unavailable built no binary.
             if name in built:

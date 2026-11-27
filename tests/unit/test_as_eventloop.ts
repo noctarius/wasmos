@@ -827,6 +827,68 @@ function testArmingTwiceKeepsTheWaiter(): i32 {
     return 0;
 }
 
+// ---------------------------------------------------------------- case 18
+
+/**
+ * Two requests landing in one pump turn are each served exactly once, by a
+ * coroutine that takes messages the way the rtc, keyboard, mouse and serial
+ * drivers do: await nextMessage(), re-arm, then read the message through the
+ * awaited value.
+ *
+ * Regression: 2026-11-27-rearm-overwrites-message. The first request settled
+ * the future and the second was deferred; re-arming took the deferred one into
+ * the same record the awaited value pointed at, so the driver served the second
+ * request twice and never answered the first. A `date` whose request was the
+ * first one waited forever for the rtc's reply, and the shell behind it stopped
+ * answering (boot-and-init on x86_64_warp_smp, 14 cascading CLI failures).
+ */
+class DriverStyleTask extends Task {
+    served: StaticArray<i32> = new StaticArray<i32>(8);
+    count: i32 = 0;
+
+    constructor(private loop: EventLoop) {
+        super();
+    }
+
+    resume(out: Box): i32 {
+        while (this.loop.nextMessage().await(out) != 1 /* AWAIT_PENDING */) {
+            this.loop.rearmMessage();
+            const msg = changetype<IpcMessage>(out.value);
+            if (this.count < this.served.length) {
+                unchecked((this.served[this.count] = msg.arg0));
+            }
+            this.count++;
+        }
+        return TASK_YIELDED;
+    }
+}
+
+function testBurstServesEveryMessageOnce(): i32 {
+    const loop = freshLoop();
+    const runtime = new Runtime();
+    const coroutine = new Coroutine();
+    const task = new DriverStyleTask(loop);
+    if (runtime.asyncStart(coroutine, task) === null) return 1901;
+    if (runtime.run() != 1) return 1902;
+    if (task.count != 0) return 1903;
+
+    plant(SELF, TYPE_OTHER, 0, PEER, 31, 0, 0, 0);
+    plant(SELF, TYPE_OTHER, 0, PEER, 32, 0, 0, 0);
+    if (loop.poll(8) != 2) return 1904;
+    runtime.run();
+    if (task.count != 2) return 1905;
+    if (unchecked(task.served[0]) != 31) return 1906;
+    if (unchecked(task.served[1]) != 32) return 1907;
+
+    /* The loop is armed again and the next message reaches the task. */
+    plant(SELF, TYPE_OTHER, 0, PEER, 33, 0, 0, 0);
+    if (loop.poll(8) != 1) return 1908;
+    runtime.run();
+    if (task.count != 3) return 1909;
+    if (unchecked(task.served[2]) != 33) return 1910;
+    return 0;
+}
+
 /** 0 if every case passed, else the failing case's marker. */
 // ---------------------------------------------------------------- health
 
@@ -882,6 +944,7 @@ export function runTests(): i32 {
         testReceiveCannotPark,
         testMessageFuture,
         testArmingTwiceKeepsTheWaiter,
+        testBurstServesEveryMessageOnce,
         testHealthProbeIsAnswered,
     ];
     return runShuffled(cases);

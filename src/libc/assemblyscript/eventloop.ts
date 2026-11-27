@@ -529,9 +529,16 @@ export class EventLoop {
         return this.messageFuture;
     }
 
-    /** Arm for the message after the one just taken. */
+    /**
+     * Release the message just taken, so the next nextMessage() arms for the
+     * one after it. Leaves the future pending and unarmed: a message arriving
+     * before that call is deferred, and messageRecord keeps the message just
+     * taken until then. The awaited value points at messageRecord, so a caller
+     * may re-arm first and read the message afterwards.
+     */
     rearmMessage(): void {
-        this.armMessage();
+        this.messageFuture.init(this.messagePromise);
+        this.messageArmed = false;
     }
 
     private armMessage(): void {

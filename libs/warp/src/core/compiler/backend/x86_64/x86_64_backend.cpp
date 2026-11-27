@@ -2600,6 +2600,12 @@ void Backend::emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t 
   }
 }
 
+void Backend::executeAtomicBarrierAfterLoad() const {
+}
+
+void Backend::executeAtomicBarrierBeforeStore() const {
+}
+
 void Backend::executeAtomicFence() const {
   as_.INSTR(MFENCE_t).setR4RM(REG::A)();
 }

@@ -241,6 +241,14 @@ public:
   void executeAtomicFence() const;
 
   ///
+  /// @brief Barrier after a threads-proposal atomic load, so no later access is ordered before it; not implemented on this backend (throws)
+  void executeAtomicBarrierAfterLoad() const;
+
+  ///
+  /// @brief Barrier before a threads-proposal atomic store, so no earlier access is ordered after it; not implemented on this backend (throws)
+  void executeAtomicBarrierBeforeStore() const;
+
+  ///
   /// @brief Produces machine code for a memory copy instruction.
   /// @pre dst src size should be should be i32.
   /// @post stack will be handled correctly.

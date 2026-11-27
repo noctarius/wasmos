@@ -2216,9 +2216,11 @@ void Frontend::parseCodeSection() {
       // exactly its natural alignment; an effective address that is not naturally aligned traps
       // (TrapCode::UNALIGNED_ATOMIC). Each is lowered to the plain access of the same width plus ordering:
       // - a load is emitted at its program position instead of being deferred, after every pending side-effect
-      //   instruction below it, so no load of the program is moved across it;
-      // - a store is followed by a full barrier, which orders it before every later access (the store-load order a
-      //   plain store does not give even on x86_64);
+      //   instruction below it, so no load of the program is moved across it, and is followed by the backend's
+      //   after-load barrier (nothing on x86_64, DMB on aarch64), so no later access is ordered before it;
+      // - a store is preceded by the backend's before-store barrier (nothing on x86_64, DMB on aarch64) and
+      //   followed by a full barrier, which orders it before every later access (the store-load order a plain
+      //   store does not give even on x86_64);
       // - atomic.fence is the full barrier alone.
       // Plain stores are never deferred, so stores before an atomic access stay before it.
       case OPCode::ATOMIC_FENCE: {
@@ -2258,6 +2260,7 @@ void Frontend::parseCodeSection() {
           compiler_.backend_.emitAtomicAlignmentCheck(addrElem, offset, sizeLog2);
           static_cast<void>(common_.pushDeferredAction(StackElement::action(plainOpcode, 1U, offset)));
           static_cast<void>(common_.condenseValentBlockBelow(stack_.end()));
+          compiler_.backend_.executeAtomicBarrierAfterLoad();
         }
         break;
       }
@@ -2286,6 +2289,7 @@ void Frontend::parseCodeSection() {
           Stack::iterator const valueElem{common_.condenseValentBlockBelow(stack_.end())};
           Stack::iterator const addrElem{common_.condenseValentBlockBelow(valueElem)};
           compiler_.backend_.emitAtomicAlignmentCheck(addrElem, offset, sizeLog2);
+          compiler_.backend_.executeAtomicBarrierBeforeStore();
           compiler_.backend_.executeLinearMemoryStore(plainOpcode, offset);
           compiler_.backend_.executeAtomicFence();
         }

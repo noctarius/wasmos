@@ -248,12 +248,24 @@ public:
   void executeLinearMemoryStore(OPCode const opcode, uint32_t const offset);
 
   ///
-  /// @brief Alignment check of a threads-proposal atomic access; not implemented on this backend (throws)
-  void emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2) const;
+  /// @brief Traps with TrapCode::UNALIGNED_ATOMIC unless addrElem + offset is a multiple of (1 << sizeLog2)
+  ///
+  /// @param addrElem Condensed address operand of the atomic access; it is lifted to a register in place
+  /// @param offset Immediate offset of the access
+  /// @param sizeLog2 Log2 of the access size in bytes
+  void emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2);
 
   ///
-  /// @brief Full memory barrier for threads-proposal atomics; not implemented on this backend (throws)
+  /// @brief Emits a full memory barrier (DMB ISH): every load and store before it is observed before any after it
   void executeAtomicFence() const;
+
+  ///
+  /// @brief Barrier after a threads-proposal atomic load, so no later access is ordered before it (DMB ISH: the weakly ordered memory model needs it for sequential consistency)
+  void executeAtomicBarrierAfterLoad() const;
+
+  ///
+  /// @brief Barrier before a threads-proposal atomic store, so no earlier access is ordered after it (DMB ISH)
+  void executeAtomicBarrierBeforeStore() const;
 
   ///
   /// @brief Produces machine code for a memory copy instruction

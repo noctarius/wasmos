@@ -2442,8 +2442,18 @@ Source: `architecture/25-diagnostics-status.md`,
   `-iquote`/`-include` arguments and the quoted includes of every listed
   source (or give each suite a depfile), with a regression test that a header
   edit rebuilds the suite.
-- [ ] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
-  (`test_app_churn`: "run N: date produced no result"). Not a supervisor
+- [x] [BUG][P2] Find why a `date` request to the rtc goes unanswered on WARP SMP
+  (`test_app_churn`: "run N: date produced no result"). Root cause: the
+  AssemblyScript `EventLoop.rearmMessage()` settled the message future from the
+  deferred ring at once, copying the next message into the `messageRecord` the
+  awaited value still pointed at. With two requests dispatched in one pump turn
+  (`POLL_BUDGET` 8), a driver that re-arms before reading (rtc, keyboard, mouse,
+  serial) served the second request twice and dropped the first. Re-arming now
+  leaves the future unarmed until the next `nextMessage()`
+  (Regression: 2026-11-27-rearm-overwrites-message in
+  `tests/unit/test_as_eventloop.ts`). The same stall cascaded into 14 "never
+  echoed" CLI failures on main (run 45886701973, boot-and-init x86_64_warp_smp).
+  The investigation notes follow. Not a supervisor
   regression: it reproduces on `f35dc70c`, before the supervisor merge (1 in 7
   runs), as on `df536c7e` (1 in 15). Not WARP-only either: wasm3_smp batteries
   hit it twice in four runs on the supervisor branches (`2ca66919` run 58, the

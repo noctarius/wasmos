@@ -161,8 +161,11 @@ uint64_t linmem_slot_va(uint32_t slot) {
  * allocated frames, mapping each into the CURRENT root and zeroing it.  Page
  * indices are relative to va_base, which is the slot base from linmem_slot_va.
  *
- * Frames are allocated one at a time and are not contiguous.  Each mapped frame
- * becomes the slot's to free through linmem_slot_decommit.
+ * Frames are allocated one at a time and are not contiguous, all at or above
+ * WASMOS_BUFFER_PHYS_LIMIT: linear memory stays out of the transfer-buffer zone
+ * so a zero-fill through the direct map never lands on a live buffer
+ * (memory.h).  Each mapped frame becomes the slot's to free through
+ * linmem_slot_decommit.
  *
  * Returns 0 when the whole range is committed, -1 on the first frame that cannot
  * be allocated or mapped.  The failure is PARTIAL: pages already committed
@@ -174,7 +177,7 @@ uint64_t linmem_slot_va(uint32_t slot) {
 int linmem_slot_commit(uint64_t va_base, uint64_t from_page, uint64_t to_page) {
     for (uint64_t p = from_page; p < to_page; ++p) {
         uint64_t va = va_base + p * LINMEM_PAGE_SIZE;
-        uint64_t phys = pfa_alloc_pages(1);
+        uint64_t phys = pfa_alloc_pages_above(1, WASMOS_BUFFER_PHYS_LIMIT);
         if (!phys) {
             return -1;
         }

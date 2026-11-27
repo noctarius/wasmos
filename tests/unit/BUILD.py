@@ -200,6 +200,8 @@ TESTS = [
     (RUN, 'test_mm_regions', []),
     (CC, 'test_physmem', [*C11, '-DWASMOS_PHYSMEM_TEST_SEAMS=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_physmem.c'), R('src/kernel/physmem.c'), R('tests/unit/stubs_kpanic.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_physmem', []),
+    (CC, 'test_linmem_slots', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_linmem_slots.c'), R('src/kernel/linmem_slots.c'), R('tests/unit/stubs_spinlock.c')]),
+    (RUN, 'test_linmem_slots', []),
     (CC, 'test_pm_shutdown', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), R('tests/unit/test_pm_shutdown.c'), R('src/kernel/process_manager_shutdown.c'), R('src/kernel/shutdown_order.c')]),
     (RUN, 'test_pm_shutdown', []),
     (CC, 'test_pm_caps', [*C11, '-DWASMOS_HOST_TEST_SMP=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('src/drivers/include'), R('tests/unit/test_pm_caps.c'), R('src/kernel/process_manager_caps.c')]),

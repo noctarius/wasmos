@@ -377,10 +377,10 @@ Source: `architecture/06-memory-management.md`,
 - [x] [BUG][P1] Pass `MEM_REGION_FLAG_*` to `paging_map_4k`, not raw `PT_FLAG_*`.
   Already done in 8df20d7f: `mmio.c`, `lapic.c` and `ioapic.c` map with
   `MEM_REGION_FLAG_DEVICE`, which `paging_map_4k` turns into PCD|PWT.
-- [ ] [BUG][P1] Apply the buffer/WARP physical-zone floor in `linmem_slot_commit`. It
-  calls `pfa_alloc_pages` with no floor, so slot-backed linear memory falls
-  outside the guarded zone that `memory.h` and `physmem.h` still describe as an
-  invariant (`src/kernel/linmem_slots.c:105`).
+- [x] [BUG][P1] Apply the buffer/WARP physical-zone floor in `linmem_slot_commit`.
+  It takes every frame from `pfa_alloc_pages_above(1, WASMOS_BUFFER_PHYS_LIMIT)`,
+  so slot-backed linear memory of both backends stays out of the transfer-buffer
+  zone (`test_linmem_slots`).
 - [x] [BUG][P1] Serialize the capability table. Done in 9b875143: `g_cap_lock`
   covers every writer, and checks decide on a copy taken under it. The one
   check-then-act left -- the DMA budget, tested at reserve and charged only

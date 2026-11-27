@@ -29,6 +29,12 @@ namespace std {
  * is a compile error. */
 template<class T> struct numeric_limits;
 
+/* A cv-qualified T answers as T, as the standard specifies.  For an unknown T
+ * the derivation from an incomplete base is itself a compile error. */
+template<class T> struct numeric_limits<const T> : numeric_limits<T> {};
+template<class T> struct numeric_limits<volatile T> : numeric_limits<T> {};
+template<class T> struct numeric_limits<const volatile T> : numeric_limits<T> {};
+
 #define WASMOS_NLIM_UINT(T, MAX) \
 template<> struct numeric_limits<T> { \
     static constexpr T max() noexcept { return (T)(MAX); } \

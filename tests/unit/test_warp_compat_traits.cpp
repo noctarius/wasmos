@@ -84,11 +84,44 @@ static void test_every_integer_type_has_its_real_limits(void) {
     CHECK(std::numeric_limits<int8_t>::min() == -128, "int8_t min");
     CHECK(std::numeric_limits<int32_t>::min() == -__INT_MAX__ - 1, "int32_t min");
     CHECK(std::numeric_limits<unsigned short>::max() == 0xFFFFu, "unsigned short max");
-    CHECK(std::numeric_limits<char>::max() == __SCHAR_MAX__ ||
-              std::numeric_limits<char>::max() == 0xFF,
-          "char max");
+#ifdef __CHAR_UNSIGNED__
+    CHECK(std::numeric_limits<char>::max() == __SCHAR_MAX__ * 2 + 1, "unsigned char max");
+    CHECK(std::numeric_limits<char>::min() == 0, "unsigned char min");
+#else
+    CHECK(std::numeric_limits<char>::max() == __SCHAR_MAX__, "signed char max");
+    CHECK(std::numeric_limits<char>::min() == -__SCHAR_MAX__ - 1, "signed char min");
+#endif
     CHECK(std::numeric_limits<unsigned long>::is_integer, "unsigned long is_integer");
     CHECK(std::numeric_limits<double>::max() == __DBL_MAX__, "double max");
+}
+
+/* Review of PR #94 -- numeric_limits had no cv-qualified forwarding
+ * specialisations, so numeric_limits<const size_t> (decltype of a const
+ * variable, or a template parameter deduced as const) did not compile, although
+ * the standard defines it as numeric_limits<size_t>. */
+static void test_cv_qualified_types_have_the_unqualified_limits(void) {
+    constexpr bool const_has = has_max<const size_t>::value;
+    constexpr bool volatile_has = has_max<volatile int>::value;
+    constexpr bool cv_has = has_max<const volatile uint8_t>::value;
+    CHECK(const_has, "numeric_limits<const size_t> does not compile");
+    CHECK(volatile_has, "numeric_limits<volatile int> does not compile");
+    CHECK(cv_has, "numeric_limits<const volatile uint8_t> does not compile");
+}
+
+/* cv_max<T> is 0 when numeric_limits<T>::max() does not compile, so a missing
+ * specialisation is a failing case rather than a build break. */
+template <typename T, typename = void> struct cv_max {
+    static constexpr unsigned long long value = 0;
+};
+template <typename T>
+struct cv_max<T, typename make_void<decltype(std::numeric_limits<T>::max())>::type> {
+    static constexpr unsigned long long value = std::numeric_limits<T>::max();
+};
+
+static void test_cv_qualified_limits_equal_the_unqualified_ones(void) {
+    CHECK(cv_max<const size_t>::value == __SIZE_MAX__, "numeric_limits<const size_t>::max()");
+    CHECK(cv_max<const volatile uint8_t>::value == 0xFFu,
+          "numeric_limits<const volatile uint8_t>::max()");
 }
 
 /* Regression: 2026-11-27-warp-compat-is-convertible -- is_convertible<From, To>
@@ -142,6 +175,8 @@ int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_a_type_without_limits_has_no_max),
         WASMOS_TEST_CASE(test_every_integer_type_has_its_real_limits),
+        WASMOS_TEST_CASE(test_cv_qualified_types_have_the_unqualified_limits),
+        WASMOS_TEST_CASE(test_cv_qualified_limits_equal_the_unqualified_ones),
         WASMOS_TEST_CASE(test_is_convertible_rejects_explicit_only_conversions),
         WASMOS_TEST_CASE(test_function_accepts_only_a_matching_callable),
         WASMOS_TEST_CASE(test_a_function_cannot_be_invoked),

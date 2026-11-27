@@ -3,8 +3,9 @@
  *
  * Provides an ostream class with a catch-all operator<< and the manipulator
  * overload, plus endl and flush.  compat/iostream builds std::cout/std::cerr on
- * it (the objects are defined in warp/iostream_stubs.cpp) and compat/sstream
- * derives stringstream from it.
+ * it (the objects are defined in warp/iostream_stubs.cpp).  There is no
+ * <sstream>: a string built by insertion would come back empty, so including
+ * it is a compile error.
  *
  * EVERY INSERTION IS DISCARDED.  operator<< accepts any T and returns *this
  * without formatting or emitting anything, and endl/flush are identity

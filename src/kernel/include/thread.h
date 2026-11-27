@@ -116,10 +116,10 @@ typedef struct thread {
      * hostcall (e.g. blocking IPC), yield, and later resume/migrate to a
      * different CPU, so this state must travel with the thread rather than live
      * in cpu_local.  Set just before the ring-3 IRET and consumed by the
-     * WARP_RETURN syscall handler via __builtin_longjmp. */
-    uint64_t warp_r3_old_cr3; /* CR3 to restore when the ring-3 call returns */
-    uint8_t warp_r3_active;   /* 1 while a ring-3 call is in progress */
-    void* warp_r3_jbuf[5];    /* setjmp checkpoint for WARP_RETURN */
+     * WARP_RETURN syscall handler via warp_longjmp. */
+    uint64_t warp_r3_old_cr3;    /* CR3 to restore when the ring-3 call returns */
+    uint8_t warp_r3_active;      /* 1 while a ring-3 call is in progress */
+    warp_jmp_buf_t warp_r3_jbuf; /* warp_setjmp checkpoint for WARP_RETURN */
     /* This thread's C++ exception checkpoint (warp_exception.h).  A ring-0 WARP
      * call runs with preemption enabled and can block in a host call, so the
      * checkpoint armed before it must stay with the thread across a switch and a

@@ -4,8 +4,8 @@
  *   WARP throws C++ exceptions internally.  The standard Dwarf/SJLJ unwinding
  *   infrastructure is bypassed entirely in favour of a per-thread "throw
  *   checkpoint" (include/warp_exception.h).  Before each WARP call, warp_driver.cpp
- *   arms a __builtin_setjmp buffer in it.  If __cxa_throw is reached it
- *   calls __builtin_longjmp to that checkpoint — effectively implementing a
+ *   arms a warp_setjmp buffer in it.  If __cxa_throw is reached it
+ *   calls warp_longjmp to that checkpoint — effectively implementing a
  *   zero-infrastructure catch-all at the driver boundary.
  *
  *   Benefits: no Dwarf tables, no SJLJ register/unregister overhead, no LSDA
@@ -60,7 +60,7 @@ extern "C" __attribute__((noreturn)) void __cxa_throw(void* obj, void* type_info
     warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     if (ckpt->active) {
         warp_exception_abandon(ckpt);
-        __builtin_longjmp(ckpt->jbuf, 1);
+        warp_longjmp(ckpt->jbuf);
     }
     klog_write("[warp] uncaught C++ exception — kernel panic\n");
     kpanic("uncaught_cpp_exception", 0ULL, 0ULL);

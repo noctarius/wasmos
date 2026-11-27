@@ -509,7 +509,7 @@ uint64_t syscall_dispatch(syscall_frame_t* frame) {
         thread_t* r3t = cpu_local()->current_thread;
         if (r3t && r3t->warp_r3_active) {
             r3t->warp_r3_active = 0;
-            __builtin_longjmp(r3t->warp_r3_jbuf, 1);
+            warp_longjmp(r3t->warp_r3_jbuf);
         }
         arch_syscall_set_result(frame, (uint64_t)-1);
         return 0;

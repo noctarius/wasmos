@@ -17,12 +17,11 @@ config WASMOS_ARCH_X86_64
 config WASMOS_ARCH_AARCH64
     bool "aarch64 (QEMU virt, edk2)"
     help
-      arm64 port under wasm3, booting to the CLI and gated by
-      run-qemu-test and the QEMU batteries, on one core or (WASMOS_SMP)
-      several brought up through PSCI CPU_ON. WARP builds for aarch64 but
-      does not run yet: its ring-3 entry and linear-memory window are
-      x86_64-only. The interrupt controller choice (PIC/LAPIC/IOAPIC) is
-      x86_64's.
+      arm64 port, booting to the CLI and gated by run-qemu-test and the
+      QEMU batteries under both runtimes, on one core or (WASMOS_SMP)
+      several brought up through PSCI CPU_ON. WARP runs on aarch64 JIT-only
+      (the bundled AOT code is x86_64). The interrupt controller choice
+      (PIC/LAPIC/IOAPIC) is x86_64's.
 
 endchoice
 

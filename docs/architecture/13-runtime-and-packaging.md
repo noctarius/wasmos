@@ -685,8 +685,7 @@ layer in `src/kernel/warp/`:
 | `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, xfer buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)       |
 | `shim.cpp`             | Two-tier kernel allocator (slab ≤ 112 bytes, page allocator for larger blocks), `operator new/delete`            |
 | `mem_utils_kernel.cpp` | `vb::MemUtils` + `ExecutableMemory` backed by `pfa_alloc_pages` — no `<iostream>` or pthreads                    |
-| `posix_kernel.c`       | `mmap`/`mprotect`/`munmap` → `pfa_alloc_pages` + higher-half mapping                                             |
-| `linker_stubs.cpp`     | `malloc`, `memchr`, wasm3 symbol stubs, RTTI vtables                                                             |
+| `linker_stubs.cpp`     | `malloc`, `free`, `memchr`, wasm3 symbol stubs, RTTI vtables; no other POSIX function is defined                 |
 
 `src/kernel/warp_driver.cpp` implements the full `wasm_driver_t` API using
 `vb::WasmModule` as the backing runtime.

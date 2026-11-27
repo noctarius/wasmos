@@ -1,8 +1,8 @@
 #pragma once
 /* compat/cstdlib — freestanding shadow of <cstdlib>
  *
- * Provides malloc, realloc, free and abort, in the global namespace and
- * re-exported into std.  Deliberately omitted: exit, atexit, getenv, the
+ * Provides malloc, free and abort, in the global namespace and re-exported
+ * into std.  Deliberately omitted: realloc, exit, atexit, getenv, the
  * str-to-number conversions, qsort/bsearch and rand — a bare-metal kernel has
  * no process to exit and no environment, and no compiled WARP source calls any
  * of them.  The four WARP sources that include <cstdlib> (Runtime.cpp,
@@ -16,17 +16,16 @@
  * <cstdlib> does; <stddef.h> is included below only for the declarations.  A
  * source wanting std::size_t must include <cstddef>.
  *
- * The three allocators are the real kernel allocator, not stubs, so pointers
- * from malloc/realloc are usable memory and may be freed.  A use of a function
- * that is not declared here is a compile error at the call site. */
+ * malloc and free are the real kernel slab allocator, not stubs, so a pointer
+ * from malloc is usable memory and may be freed.  The kernel defines no realloc
+ * for WARP (the slab does not record a block's size), so it is not declared:
+ * like every other omitted function, a use is a compile error at the call site. */
 
 #include <stddef.h>
 
 extern "C" {
-    /* Declared here, defined against the kernel slab allocator: malloc in
-     * warp/linker_stubs.cpp, realloc and free in warp/posix_kernel.c. */
+    /* Defined against the kernel slab allocator in warp/linker_stubs.cpp. */
     void *malloc(size_t size);
-    void *realloc(void *ptr, size_t size);
     void  free(void *ptr);
 
     /* abort() panics (src/kernel/libc.c); it never returns. */
@@ -35,7 +34,6 @@ extern "C" {
 
 namespace std {
     using ::malloc;
-    using ::realloc;
     using ::free;
     using ::abort;
 } // namespace std

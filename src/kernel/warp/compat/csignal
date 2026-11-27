@@ -2,10 +2,9 @@
 /* compat/csignal — freestanding shadow of <csignal>
  *
  * Pulls in compat/sys/signal.h and re-exports the four names WARP's signal
- * headers spell with a std:: qualifier.  The signal numbers, SA_SIGINFO and
- * sigaction() itself stay in the global namespace; see compat/sys/signal.h for
- * which of those have a real kernel definition (only sigaction, a no-op in
- * src/kernel/warp/posix_kernel.c).
+ * headers spell with a std:: qualifier.  The signal numbers and SA_SIGINFO
+ * stay in the global namespace.  std::sigaction names the struct: no
+ * sigaction() function is declared (see compat/sys/signal.h).
  *
  * The WARP sources that include <csignal> — utils/RAIISignalHandler.{hpp,cpp}
  * and utils/SignalFunctionWrapper_unix.cpp — implement the SIGSEGV-based
@@ -15,9 +14,8 @@
  * reachable, via WasmModule.cpp, without any of its inline bodies being used.
  *
  * signal(), raise(), sigprocmask() and pthread_sigmask() are absent.  Code that
- * starts depending on them fails to compile here, which is the safer outcome:
- * the kernel has no signal delivery, so a handler registered through the
- * sigaction() stub is accepted and then never fires. */
+ * starts depending on them fails to compile here, as does a call to sigaction():
+ * the kernel has no signal delivery, so a registered handler could never fire. */
 
 #include "sys/signal.h"
 

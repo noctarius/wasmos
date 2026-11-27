@@ -2,21 +2,17 @@
 /* compat/sys/signal.h — freestanding signal stub for bare-metal kernel.
  *
  * Provides sig_atomic_t, sigset_t, a three-field siginfo_t, struct sigaction,
- * SIGSEGV/SIGFPE/SIGBUS, SA_SIGINFO, and a declaration of sigaction().
+ * SIGSEGV/SIGFPE/SIGBUS and SA_SIGINFO: types and constants only.
  * compat/csignal re-exports the types from here into namespace std.
  *
- * sigaction() is the only function, and it is backed by a real definition in
- * src/kernel/warp/posix_kernel.c.  Everything POSIX would also give you —
+ * No function is declared, sigaction() included: the kernel has no signal
+ * delivery, so a call to it is a compile error rather than a registration that
+ * appears to succeed for a handler that can never run.  The same holds for
  * sigemptyset/sigaddset, sigprocmask, pthread_sigmask, kill, raise, sigaltstack
- * and the SIG_DFL/SIG_IGN dispositions — is absent, so reaching for one is a
- * compile error rather than a call that quietly does nothing.
+ * and the SIG_DFL/SIG_IGN dispositions.
  *
- * THE HANDLER IS NEVER CALLED.  The kernel has no signal delivery mechanism at
- * all: sigaction() discards act, leaves oldact untouched, and returns 0, so a
- * caller sees a successful registration for a handler that can never run.  A
- * caller may rely on the registration call succeeding and on nothing else.
- *
- * That is safe because the signal paths are dead in this build.  WARP uses
+ * The types exist because WasmModule.cpp includes this header through
+ * <csignal>; the signal paths themselves are dead in this build.  WARP uses
  * SIGSEGV/SIGFPE/SIGBUS handlers for stack-overflow and linear-memory bounds
  * recovery; the kernel compiles WARP with ACTIVE_STACK_OVERFLOW_CHECK=1 and
  * LINEAR_MEMORY_BOUNDS_CHECKS=1, which select the explicit checks instead, and
@@ -24,9 +20,8 @@
  * utils/SignalFunctionWrapper_unix.cpp) are not compiled into the kernel.  A
  * real fault in JIT code lands in the kernel's own #PF/#GP handlers.
  *
- * The consequence of that arrangement being disturbed is silent: turning either
- * check off would leave WARP believing it had a handler installed, and the
- * fault would reach the kernel exception path unfiltered. */
+ * A WARP path that installs a handler, which these checks keep out of the
+ * compiled sources, fails to compile on the call to sigaction. */
 
 #include <stdint.h>
 
@@ -61,15 +56,3 @@ struct sigaction {
     int sa_flags;
     sigset_t sa_mask;
 };
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* No-op implementation — declared here, defined in
- * src/kernel/warp/posix_kernel.c. */
-int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact);
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif

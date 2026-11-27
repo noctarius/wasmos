@@ -20,12 +20,12 @@
  * compat/utility, where the standard puts them, because compat/tuple and
  * compat/array need them without pulling <utility> in.
  *
- * Most of these traits are exact.  Five are approximations that answer for the
+ * Most of these traits are exact.  Four are approximations that answer for the
  * cases WARP asks about and quietly give a wrong answer outside them, which is
  * the risk to watch: a trait that lies produces a silently different template
- * instantiation, not a diagnostic.  They are common_type, is_convertible,
- * is_signed/is_unsigned, make_unsigned/make_signed and is_function; each
- * carries a note at its definition below.
+ * instantiation, not a diagnostic.  They are common_type, is_signed/is_unsigned,
+ * make_unsigned/make_signed and is_function; each carries a note at its
+ * definition below.
  *
  * Missing traits (is_trivially_destructible, is_nothrow_*, aligned_storage,
  * result_of/invoke_result, is_assignable, ...) fail loudly at the point of use.
@@ -358,16 +358,16 @@ struct is_base_of : integral_constant<bool, __is_base_of(Base, Derived)> {};
 template <typename T, typename... Args>
 struct is_constructible : integral_constant<bool, __is_constructible(T, Args...)> {};
 
-// APPROXIMATION: is_convertible<From,To> answers "is To constructible from
-// From", which also accepts explicit constructors that implicit conversion
-// would reject.  Its one WARP caller is FunctionRef.hpp's constructor
-// constraint, is_convertible<F&&, std::function<R(Args...)>>; compat/functional
-// gives std::function a constructor template accepting any F, so that
-// constraint is satisfied unconditionally here.  A callable with the wrong
-// signature is therefore admitted by the constraint and diagnosed later, at the
-// point the wrapper is invoked, instead of being SFINAE'd out.
+// is_convertible<From,To>: From converts to To implicitly (copy-initialisation),
+// which excludes explicit constructors and conversion operators.  Clang names
+// the built-in __is_convertible from 19 on and __is_convertible_to before,
+// deprecating the old name once the new one exists.
 template <typename From, typename To>
-struct is_convertible : integral_constant<bool, __is_constructible(To, From)> {};
+#if __has_builtin(__is_convertible)
+struct is_convertible : integral_constant<bool, __is_convertible(From, To)> {};
+#else
+struct is_convertible : integral_constant<bool, __is_convertible_to(From, To)> {};
+#endif
 
 // ---------------------------------------------------------------------------
 // add_lvalue_reference / add_rvalue_reference (used by forward)

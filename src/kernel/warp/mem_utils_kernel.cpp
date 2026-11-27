@@ -10,8 +10,8 @@
  *     PRESENT | WRITE | no-NX, so they are already RWX.
  *   - virt = phys | KERNEL_HIGHER_HALF_BASE (valid for phys < 512 MB).
  *
- * mprotect is a no-op: all JIT pages remain RWX.  A future W^X hardening
- * pass can use paging_map_4k to split large pages and flip permissions. */
+ * W^X is not enforced: all JIT pages remain RWX (see setPermissionRX below,
+ * which is deliberately left undefined). */
 
 #include <cstddef>
 #include <cstdint>
@@ -460,9 +460,8 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
  * contracts are upstream's, and the notes below record only where this implementation
  * deviates.
  *
- * setPermissionRWX / setPermissionRX / setPermissionRW are no-ops returning 0: every
- * page this allocator hands out is already RWX and stays RWX, so a caller cannot rely
- * on W^X here.  uncommitVirtualMemory is a no-op: nothing is ever decommitted, so
+ * setPermissionRWX / setPermissionRX / setPermissionRW are not defined (see below).
+ * uncommitVirtualMemory is a no-op: nothing is ever decommitted, so
  * committed memory is only reclaimed when the whole allocation is freed.
  * clearInstructionCache is a no-op because x86_64 keeps the instruction cache coherent
  * with the data cache.  getStackInfo returns a zero-filled struct — the kernel hands
@@ -570,15 +569,15 @@ void freePagedMemory(uint8_t* ptr, size_t) noexcept {
         pfa_free_pages(phys, pages);
 }
 
-int32_t setPermissionRWX(uint8_t*, size_t) noexcept {
-    return 0;
-}
-int32_t setPermissionRX(uint8_t*, size_t) noexcept {
-    return 0;
-}
-int32_t setPermissionRW(uint8_t*, size_t) noexcept {
-    return 0;
-}
+/* setPermissionRWX / setPermissionRX / setPermissionRW are not defined: every page
+ * this allocator hands out is RWX and stays RWX, so a permission change cannot be
+ * honoured, and a reference to one fails the kernel link instead of reporting a W^X
+ * change that did not happen.  Nothing compiled into the kernel calls them; the
+ * caller upstream, utils/ExecutableMemory.cpp, is replaced by the ExecutableMemory
+ * below.
+ * TODO: flip JIT pages to RX/RW through paging_map_4k (splitting the large page that
+ * covers them) and define these; until then a code page stays writable and an
+ * overwrite of JIT code is not caught. */
 
 void memcpyAndClearInstrCache(uint8_t* dest, uint8_t const* src, size_t n) noexcept {
     __builtin_memcpy(dest, src, n);

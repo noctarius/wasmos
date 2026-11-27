@@ -360,13 +360,11 @@ Source: `architecture/06-memory-management.md`,
   (`src/kernel/process.c:2492` `TODO(memory-rss)`; `architecture/06`:507-512).
 - [ ] [CLEANUP][P3] Wire the kernel-thread trampoline into PM launch policy and delete the
   legacy trampoline (`src/kernel/process.c:1503,1771`).
-- [ ] [BUG][P1] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug: the case passes
-  `ctx5` (== `a4`, the `stats` param) as the kernel ctx, but a 5-param host call
-  needs ctx in `a5` (R9) — there is no `ctx6`, so the hand-written case silently
-  reused `ctx5`. Ring-3 `proc_info_stats` therefore gets a garbage ctx (a user
-  offset) → wrong `warp_mem` resolution. The generated dispatch computes
-  `ctx = a<arity>` and fixes it; fix lands when the ring-3 dispatch is swapped in.
-  Found during host-call dispatch codegen (`src/kernel/warp/link.cpp:3130`).
+- [x] [BUG][P1] Fix the `warp_ring3_dispatch` `proc_info_stats` ctx bug. Fixed in
+  1870887f1, which replaced the hand-written cases with the generated
+  `wasmos_ring3_dispatch.inc`: `emit_ring3_dispatch` passes ctx as the
+  (arity+1)-th argument, so `HC_PROC_INFO_STATS` (five parameters) takes it from
+  `a5`. Confirmed against the generated table; no hand-written case remains.
 - [ ] [FEATURE][P2] Extend DMA isolation to an IOMMU domain model (VT-d/AMD-Vi) and add
   non-coherent cache-maintenance hooks before targeting non-coherent hardware
   (`architecture/12`:88,618,625).
@@ -379,10 +377,10 @@ Source: `architecture/06-memory-management.md`,
 - [x] [BUG][P1] Pass `MEM_REGION_FLAG_*` to `paging_map_4k`, not raw `PT_FLAG_*`.
   Already done in 8df20d7f: `mmio.c`, `lapic.c` and `ioapic.c` map with
   `MEM_REGION_FLAG_DEVICE`, which `paging_map_4k` turns into PCD|PWT.
-- [ ] [BUG][P1] Apply the buffer/WARP physical-zone floor in `linmem_slot_commit`. It
-  calls `pfa_alloc_pages` with no floor, so slot-backed linear memory falls
-  outside the guarded zone that `memory.h` and `physmem.h` still describe as an
-  invariant (`src/kernel/linmem_slots.c:105`).
+- [x] [BUG][P1] Apply the buffer/WARP physical-zone floor in `linmem_slot_commit`.
+  It takes every frame from `pfa_alloc_pages_above(1, WASMOS_BUFFER_PHYS_LIMIT)`,
+  so slot-backed linear memory of both backends stays out of the transfer-buffer
+  zone (`test_linmem_slots`).
 - [x] [BUG][P1] Serialize the capability table. Done in 9b875143: `g_cap_lock`
   covers every writer, and checks decide on a copy taken under it. The one
   check-then-act left -- the DMA budget, tested at reserve and charged only
@@ -883,11 +881,11 @@ Source: `architecture/13-runtime-and-packaging.md`,
   list, nothing calls its API, and no rule emits the
   `_binary_chardev_server_wasm_*` symbols it references
   (`src/kernel/wasm_chardev.c:8` `FIXME(chardev-dead)`).
-- [ ] [BUG][P1] Fix `freeAlignedMemory` in the AOT host shim. It reads a size header at
-  `ptr - sizeof(size_t)` that `allocAlignedMemory` never writes, so it faults or
-  `munmap`s a garbage length (`src/tools/warp_aot/host_mem_utils.cpp:141`).
-
-
+- [x] [BUG][P1] Fix `freeAlignedMemory` in the AOT host shim. `allocAlignedMemory`
+  now maps a header page carrying the mapping's length in front of each block,
+  `freeAlignedMemory` unmaps the whole mapping from it, `reallocAlignedMemory`
+  frees through it, and `allocVirtualMemory` is a plain mapping that
+  `freeVirtualMemory` releases (`test_warp_aot_host_mem`).
 - [ ] [BUG][P1] Replace the WARP C++ compat stubs that return silently wrong values
   with either a correct implementation or a hard failure. Each compiles and
   links, produces no diagnostic, and yields a wrong answer:
@@ -898,10 +896,9 @@ Source: `architecture/13-runtime-and-packaging.md`,
   `FunctionRef`'s signature constraint unconditional (`compat/type_traits`);
   `mprotect` no-ops returning 0, so a W^X request appears to succeed, and
   `posix_memalign` ignores its alignment (`warp/posix_kernel.c`).
-- [ ] [BUG][P1] Resolve the `std::terminate` ODR violation: an inline definition in
-  `warp/compat/exception` and an out-of-line one in `warp/cxx_abi.cpp`. It
-  links, but which one runs depends on whether the translation unit saw the
-  compat header.
+- [x] [BUG][P1] Resolve the `std::terminate` ODR violation. `compat/exception`
+  only declares it; the one definition is `warp/cxx_abi.cpp`'s, which panics
+  with `std_terminate_panic` whichever translation unit calls it.
 - [ ] [BUG][P1] Make `realloc(ptr, 0)` free and return NULL in the wasm3 shim. It
   currently returns 0 without freeing -- neither the C contract nor
   leak-free (`src/kernel/wasm3/shim.c`).
@@ -1707,6 +1704,17 @@ tail.
   one shared async runner (`virtio_blk` alone), notifying every one of them would
   have added roughly a minute to every halt.
 
+- [ ] [BUG][P2] A WARP SMP app can start with its linear memory still a legacy
+  contiguous block and then fail the ring-3 dual map: `[warp] r3 linmem: no
+  tracked allocation for the base`, `dual-map failed`, start failed. Seen once
+  in CI (PR #91, networking battery, x86_64_warp_smp: fs-init, so the
+  supervisor halted the boot); six local boots of the same tree were clean.
+  No `has no slot` line preceded it, so the first grow never claimed the
+  reserve hint (`warp_linmem_reserve_claim` in `shim.cpp` keys it on
+  `cpu_local()->wasm3_heap_bound_pid`), and the legacy block was missing from
+  `g_mmap_table`, which is unsynchronised and drops an allocation that finds no
+  free slot (`mem_utils_kernel.cpp`). Either way the block should never reach
+  ring 3 unslotted.
 - [ ] [BUG][P2] `run-qemu-test` flakes roughly 1 run in 3 on the WARP build, in
   TWO distinct shapes. Both were seen while landing WFS work that reaches no boot
   artifact (no app target, no manifest, no device-manager rule, absent from

@@ -32,6 +32,12 @@ static size_t round_up_page(size_t n) {
     return (n + ps - 1) & ~(ps - 1);
 }
 
+/* Whether an aligned block of `size` bytes is representable: the size rounded
+ * up to a page plus the header page must not wrap size_t. */
+static bool aligned_block_fits(size_t size) {
+    return size <= SIZE_MAX - 2 * host_page_size();
+}
+
 } // namespace
 
 /* -----------------------------------------------------------------------
@@ -131,21 +137,34 @@ void clearInstructionCache(uint8_t*, size_t) VB_NOEXCEPT {
     /* x86-64: no-op. */
 }
 
-uint8_t* allocAlignedMemory(size_t size, size_t /*alignment*/) {
-    size = round_up_page(size);
-    MmapMemory m = allocPagedMemory(size);
+/* An aligned block is one anonymous mapping: a header page carrying the
+ * mapping's total length, then the page-rounded block the caller gets. The
+ * header is what lets freeAlignedMemory, which WARP calls with the pointer
+ * alone, release the whole mapping. Alignment up to the host page size is
+ * honoured by construction; a larger one throws std::bad_alloc (WARP asks for
+ * the page size only), and so does a size that cannot be rounded and given its
+ * header page without wrapping. */
+uint8_t* allocAlignedMemory(size_t size, size_t alignment) {
+    size_t ps = host_page_size();
+    if (alignment > ps || !aligned_block_fits(size))
+        throw std::bad_alloc();
+    size_t total = round_up_page(size) + ps;
+    MmapMemory m = allocPagedMemory(total);
     if (!m.ptr)
         throw std::bad_alloc();
-    return m.ptr;
+    *reinterpret_cast<size_t*>(m.ptr) = total;
+    return m.ptr + ps;
 }
 
-/* Grow or shrink a page allocation. Returns `old` unchanged when the rounded
- * sizes match, so the caller cannot assume the pointer moved or that it did not.
- * Otherwise it allocates, copies min(oldSz, newSz) bytes and frees the original,
- * which means shrinking discards the tail. alignment is ignored: every mapping
- * is already page-aligned, which is at least as strict as anything WARP asks
- * for. Throws std::bad_alloc if the new mapping fails, leaving `old` valid. */
+/* Grow or shrink an aligned block from allocAlignedMemory. Returns `old`
+ * unchanged when the rounded sizes match, so the caller cannot assume the
+ * pointer moved or that it did not. Otherwise it allocates, copies
+ * min(oldSz, newSz) bytes and releases the original with freeAlignedMemory,
+ * which means shrinking discards the tail. Throws std::bad_alloc if the new
+ * block cannot be allocated, leaving `old` valid. */
 uint8_t* reallocAlignedMemory(uint8_t* old, size_t oldSz, size_t newSz, size_t alignment) {
+    if (!aligned_block_fits(newSz))
+        throw std::bad_alloc();
     newSz = round_up_page(newSz);
     if (oldSz == newSz)
         return old;
@@ -153,27 +172,27 @@ uint8_t* reallocAlignedMemory(uint8_t* old, size_t oldSz, size_t newSz, size_t a
     if (old) {
         size_t copy = oldSz < newSz ? oldSz : newSz;
         memcpy(n, old, copy);
-        freePagedMemory(old, oldSz);
+        freeAlignedMemory(old);
     }
     return n;
 }
 
-/* FIXME: this reads a size header that allocAlignedMemory never writes.
- * allocAlignedMemory returns a bare mmap base, so ptr - sizeof(size_t) lands in
- * the preceding (usually unmapped) page: the load faults, or munmap is handed a
- * garbage length. Either allocAlignedMemory has to prepend the header this
- * assumes, or the sizes have to be tracked in a side table. warp_aot survives
- * only because WARP does not reach this path before the process exits. */
+/* Releases a block from allocAlignedMemory or reallocAlignedMemory: the header
+ * page in front of it holds the length of the whole mapping. */
 void freeAlignedMemory(void* ptr) VB_NOEXCEPT {
     if (!ptr)
         return;
-    size_t* hdr = static_cast<size_t*>(ptr) - 1;
-    size_t sz = *hdr;
-    munmap(hdr, sz);
+    uint8_t* base = static_cast<uint8_t*>(ptr) - host_page_size();
+    munmap(base, *reinterpret_cast<size_t*>(base));
 }
 
+/* A plain anonymous mapping, read-write from the start (see commitVirtualMemory
+ * below); freeVirtualMemory unmaps it with the size the caller passes back. */
 void* allocVirtualMemory(size_t size) {
-    return allocAlignedMemory(size, host_page_size());
+    MmapMemory m = allocPagedMemory(size);
+    if (!m.ptr)
+        throw std::bad_alloc();
+    return m.ptr;
 }
 
 void freeVirtualMemory(void* ptr, size_t size) VB_NOEXCEPT {

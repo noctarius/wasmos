@@ -21,7 +21,8 @@
 
 /* Physical address boundary between the low buffer zone and the WARP linear-memory zone.
  * Transfer-buffer backing is allocated below this limit (pfa_alloc_pages_below).
- * WARP linear memory pages are allocated at or above this limit (pfa_alloc_pages_above).
+ * Linear memory pages, under either backend, are allocated at or above this limit
+ * (pfa_alloc_pages_above; linmem_slot_commit for slot-backed linear memory).
  * This prevents WARP's ensureLinearSize zero-fill from aliasing active buffer pages
  * via the kernel direct map (phys | KERNEL_HIGHER_HALF_BASE). */
 #define WASMOS_BUFFER_PHYS_LIMIT (64ULL * 1024ULL * 1024ULL) /* 64 MiB */

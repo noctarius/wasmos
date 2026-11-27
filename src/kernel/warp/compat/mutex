@@ -10,14 +10,15 @@
  * a use of any of them is a compile error at the call site.
  *
  * std::mutex is a kernel spinlock (sync/spinlock.h), because several CPUs can be
- * inside WARP at once (warp_runtime_enter in warp/shim.cpp).  lock() spins and
- * returns with interrupts masked and preemption disabled on the holding CPU;
- * try_lock() is the bare exchange and changes neither.  unlock() releases the
- * way the current hold was taken, so the two acquisitions pair with the one
- * release.  A section under the lock therefore must not block or yield: the
- * WARP sections are a linear-memory reallocation, which takes only leaf
- * spinlocks and the frame allocator.  Recursive acquisition deadlocks, as for
- * any kernel spinlock. */
+ * inside WARP at once (warp_runtime_enter in warp/shim.cpp).  It is the noirq
+ * flavour: lock(), try_lock() and unlock() leave interrupts and preemption as
+ * they are, so the three pair with each other and a holder that is preempted is
+ * resumed while others spin.  The interrupt-masking flavour would not fit the
+ * section WARP guards, a linear-memory reallocation that can copy the whole old
+ * block or commit and zero many pages (warp_krealloc in warp/shim.cpp), which is
+ * milliseconds with timer and device interrupts held off.  No interrupt handler
+ * takes the lock, and the section does not block.  Recursive acquisition
+ * deadlocks, as for any kernel spinlock. */
 
 extern "C" {
 #include "sync/spinlock.h"
@@ -37,32 +38,14 @@ public:
     mutex(const mutex &) = delete;
     mutex &operator=(const mutex &) = delete;
 
-    void lock() noexcept {
-        ksync_spinlock_lock(&_lock);
-        _held_by_try = false;
-    }
+    void lock() noexcept { ksync_spinlock_lock_noirq(&_lock); }
 
-    void unlock() noexcept {
-        if (_held_by_try) {
-            _held_by_try = false;
-            ksync_spinlock_unlock_noirq(&_lock);
-        } else {
-            ksync_spinlock_unlock(&_lock);
-        }
-    }
+    void unlock() noexcept { ksync_spinlock_unlock_noirq(&_lock); }
 
-    bool try_lock() noexcept {
-        if (!ksync_spinlock_try_lock(&_lock)) {
-            return false;
-        }
-        _held_by_try = true;
-        return true;
-    }
+    bool try_lock() noexcept { return ksync_spinlock_try_lock(&_lock) != 0; }
 
 private:
     ksync_spinlock_t _lock{};
-    /* Written and read only by the holder. */
-    bool _held_by_try = false;
 };
 
 // ---------------------------------------------------------------------------

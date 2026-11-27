@@ -891,8 +891,8 @@ Source: `architecture/13-runtime-and-packaging.md`,
   links, produces no diagnostic, and yields a wrong answer:
   `numeric_limits<T>::max()` returns 0 for an unspecialised T
   (`compat/limits`); `std::function::operator()` loops forever
-  (`compat/functional`); `sstream::str()` always returns `""`; `compat/mutex`
-  locks nothing; `is_convertible` maps to `__is_constructible`, making
+  (`compat/functional`); `sstream::str()` always returns `""`;
+  `is_convertible` maps to `__is_constructible`, making
   `FunctionRef`'s signature constraint unconditional (`compat/type_traits`);
   `mprotect` no-ops returning 0, so a W^X request appears to succeed, and
   `posix_memalign` ignores its alignment (`warp/posix_kernel.c`).

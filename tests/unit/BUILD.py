@@ -74,6 +74,22 @@ WARP_MEM_TRACKING = [
     R("src/kernel/warp/mem_utils_kernel.cpp"),
 ]
 
+# The WARP backend's freestanding C++ synchronization (src/kernel/warp/compat
+# and warp/cxx_abi.cpp) on the host; the plain and the ThreadSanitizer arm
+# share it.
+WARP_COMPAT_SYNC = [
+    "-std=c++17",
+    "-Wall",
+    "-pthread",
+    "-iquote",
+    R("src/kernel"),
+    "-iquote",
+    R("src/kernel/include"),
+    "-iquote",
+    R("tests/unit"),
+    R("tests/unit/test_warp_compat_sync.cpp"),
+]
+
 # Suites in run order.
 # fmt: off
 TESTS = [
@@ -275,6 +291,10 @@ TESTS = [
     (SAN, 'test_warp_mem_tracking_spin_tsan.o', [*C11, '-fsanitize=thread', '-g', '-O1', '-iquote', R('src/kernel/include'), '-c', R('tests/unit/stubs_spinlock.c')]),
     (SANXX, 'test_warp_mem_tracking_tsan', [*WARP_MEM_TRACKING, '-fsanitize=thread', '-g', '-O1', 'test_warp_mem_tracking_spin_tsan.o']),
     (RUN, 'test_warp_mem_tracking_tsan', []),
+    (CXX, 'test_warp_compat_sync', [*WARP_COMPAT_SYNC, '-O1', 'test_warp_mem_tracking_spin.o']),
+    (RUN, 'test_warp_compat_sync', []),
+    (SANXX, 'test_warp_compat_sync_tsan', [*WARP_COMPAT_SYNC, '-fsanitize=thread', '-g', '-O1', 'test_warp_mem_tracking_spin_tsan.o']),
+    (RUN, 'test_warp_compat_sync_tsan', []),
     (CC, 'test_warp_driver_ring3_call_policy', [*C11, "-I" + R('src/kernel/include'), R('tests/unit/test_warp_driver_ring3_call_policy.c'), R('src/kernel/warp_driver_ring3_call_policy.c')]),
     (RUN, 'test_warp_driver_ring3_call_policy', []),
     (CC, 'test_kernel_sync_primitives', [*C11, '-DWASMOS_TEST_USE_REAL_SPINLOCK_DECLS', '-pthread', "-I" + R('tests/unit/include'), "-I" + R('src/kernel/include'), R('tests/unit/test_kernel_sync_primitives.c'), R('src/kernel/sync_mutex.c'), R('src/kernel/sync_semaphore.c')]),

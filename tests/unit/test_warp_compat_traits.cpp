@@ -1,0 +1,102 @@
+/* test_warp_compat_traits.cpp - what the WARP backend's freestanding <limits>,
+ * <type_traits> and <functional> (src/kernel/warp/compat) answer.
+ *
+ * Built the way the kernel builds WARP: C++14, -nostdinc++, and the compat
+ * directory on the include path, so <limits> below is the compat header and no
+ * host C++ library is visible. Every trait answer is captured as a constexpr bool
+ * and checked at run time, so a wrong answer is a failing case, not a build
+ * break. */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <functional>
+#include <limits>
+#include <type_traits>
+
+#include "test_shuffle.h"
+
+#define CHECK(cond, msg)                                                                           \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, msg);                          \
+            abort();                                                                               \
+        }                                                                                          \
+    } while (0)
+
+namespace {
+
+template <typename...> struct make_void {
+    using type = void;
+};
+
+/* has_max<T>: numeric_limits<T>::max() names a usable function. */
+template <typename T, typename = void> struct has_max : std::false_type {};
+template <typename T>
+struct has_max<T, typename make_void<decltype(std::numeric_limits<T>::max())>::type>
+    : std::true_type {};
+
+/* is_callable<F, Args...>: an F lvalue can be called with Args. */
+template <typename Void, typename F, typename... Args> struct is_callable_impl : std::false_type {};
+template <typename F, typename... Args>
+struct is_callable_impl<
+    typename make_void<decltype(std::declval<F&>()(std::declval<Args>()...))>::type, F, Args...>
+    : std::true_type {};
+template <typename F, typename... Args> struct is_callable : is_callable_impl<void, F, Args...> {};
+
+struct OnlyExplicit {
+    explicit OnlyExplicit(int) {}
+};
+
+struct NotAnInt {};
+
+enum class Colour : unsigned char { Red };
+
+} // namespace
+
+/* Regression: 2026-11-27-warp-compat-limits-zero -- the unspecialised
+ * numeric_limits<T> answered max() == min() == 0 for every type without a
+ * specialisation, with no diagnostic. A "rest of the span" sentinel or an
+ * all-ones register mask built from max() silently became 0. */
+static void test_a_type_without_limits_has_no_max(void) {
+    constexpr bool long_double = has_max<long double>::value;
+    constexpr bool enumeration = has_max<Colour>::value;
+    constexpr bool pointer = has_max<int*>::value;
+    CHECK(!long_double, "numeric_limits<long double>::max() exists and answers 0");
+    CHECK(!enumeration, "numeric_limits<enum>::max() exists and answers 0");
+    CHECK(!pointer, "numeric_limits<int*>::max() exists and answers 0");
+}
+
+/* The specialisations were keyed on the fixed-width macros (__UINT64_TYPE__ ...),
+ * which name one of long and long long per target. The other one fell through to
+ * the zero answer: on a target where size_t is unsigned long and uint64_t is
+ * unsigned long long, numeric_limits<size_t>::max() was 0. */
+static void test_every_integer_type_has_its_real_limits(void) {
+    CHECK(std::numeric_limits<unsigned long>::max() == ~0ul, "unsigned long max");
+    CHECK(std::numeric_limits<unsigned long long>::max() == ~0ull, "unsigned long long max");
+    CHECK(std::numeric_limits<long>::max() == __LONG_MAX__, "long max");
+    CHECK(std::numeric_limits<long>::min() == -__LONG_MAX__ - 1, "long min");
+    CHECK(std::numeric_limits<long long>::max() == __LONG_LONG_MAX__, "long long max");
+    CHECK(std::numeric_limits<size_t>::max() == __SIZE_MAX__, "size_t max");
+    CHECK(std::numeric_limits<uint64_t>::max() == 0xFFFFFFFFFFFFFFFFull, "uint64_t max");
+    CHECK(std::numeric_limits<uint32_t>::max() == 0xFFFFFFFFu, "uint32_t max");
+    CHECK(std::numeric_limits<uint8_t>::max() == 0xFFu, "uint8_t max");
+    CHECK(std::numeric_limits<int8_t>::min() == -128, "int8_t min");
+    CHECK(std::numeric_limits<int32_t>::min() == -__INT_MAX__ - 1, "int32_t min");
+    CHECK(std::numeric_limits<unsigned short>::max() == 0xFFFFu, "unsigned short max");
+    CHECK(std::numeric_limits<char>::max() == __SCHAR_MAX__ ||
+              std::numeric_limits<char>::max() == 0xFF,
+          "char max");
+    CHECK(std::numeric_limits<unsigned long>::is_integer, "unsigned long is_integer");
+    CHECK(std::numeric_limits<double>::max() == __DBL_MAX__, "double max");
+}
+
+int main(void) {
+    static const wasmos_test_void_case_t cases[] = {
+        WASMOS_TEST_CASE(test_a_type_without_limits_has_no_max),
+        WASMOS_TEST_CASE(test_every_integer_type_has_its_real_limits),
+    };
+    (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
+    printf("test_warp_compat_traits: ok\n");
+    return 0;
+}

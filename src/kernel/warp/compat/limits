@@ -1,43 +1,33 @@
 #pragma once
 /* compat/limits — freestanding shadow of <limits>
  *
- * Provides numeric_limits<T> with max(), min() and is_integer, specialised for
- * the eight fixed-width integer types plus float and double.  WARP asks only
- * for max(): Span.hpp uses numeric_limits<size_t>::max() as the "rest of the
- * span" sentinel, Frontend.cpp compares against numeric_limits<uint8_t>::max(),
- * and RegMask.hpp builds its all-ones mask from numeric_limits<Type>::max().
- * All three land on a specialisation below.
+ * Provides numeric_limits<T> with max(), min() and is_integer for every
+ * standard integer type (char, the signed/unsigned char, short, int, long and
+ * long long pairs) plus float and double.  WARP asks only for max():
+ * Span.hpp uses numeric_limits<size_t>::max() as the "rest of the span"
+ * sentinel, Frontend.cpp compares against numeric_limits<uint8_t>::max(), and
+ * RegMask.hpp builds its all-ones mask from numeric_limits<Type>::max().
  *
- * The specialisations are written against the compiler type macros
- * (__UINT8_TYPE__ etc.) rather than the <cstdint> typedefs so that there is
- * exactly one specialisation per underlying type — writing both uint8_t and
- * unsigned char, or both size_t and uint64_t, would be a redefinition.
+ * The specialisations name the fundamental types, not the <cstdint> typedefs:
+ * each typedef is an alias of exactly one of them, which differs by target
+ * (uint64_t is unsigned long on x86_64-elf and unsigned long long on Darwin),
+ * so covering the fundamental types covers every typedef on every target
+ * without a redefinition.  The bounds come from the compiler's limit macros.
  *
- * Two deviations that matter:
- *   - min() for the floating-point specialisations is __FLT_MIN__/__DBL_MIN__,
- *     the smallest positive normal value.  That is what the standard's
- *     numeric_limits<float>::min() means, so it is correct — but it is NOT the
- *     most negative float.  There is no lowest(), which is the name for that.
- *   - the primary template below is the dangerous one; see its comment.
- * Everything else the real header carries (digits, epsilon, infinity,
- * quiet_NaN, is_signed, is_specialized, radix, ...) is absent and fails to
- * compile at the point of use. */
+ * min() for the floating-point specialisations is __FLT_MIN__/__DBL_MIN__, the
+ * smallest positive normal value, as the standard defines it; it is NOT the
+ * most negative value, and there is no lowest().  Everything else the real
+ * header carries (digits, epsilon, infinity, quiet_NaN, is_signed,
+ * is_specialized, radix, ...) is absent and fails to compile at the point of
+ * use. */
 
 namespace std {
 
-/* CAUTION: the unspecialised primary template is not "no answer", it is a
- * wrong answer.  For any type without a specialisation below — an enum, a
- * pointer, long double, a class type — max() and min() both return a
- * value-initialised T, i.e. zero, and is_integer is false.  Nothing diagnoses
- * this: a sentinel built from numeric_limits<T>::max() silently becomes 0, so
- * a "rest of the range" default turns into an empty range and an all-ones mask
- * turns into an all-zeroes mask.  Add a specialisation for any new type before
- * using it here. */
-template<class T> struct numeric_limits {
-    static constexpr T max() noexcept { return T(); }
-    static constexpr T min() noexcept { return T(); }
-    static constexpr bool is_integer = false;
-};
+/* The primary template is declared and never defined: numeric_limits<T> for a
+ * type without a specialisation below (bool, long double, wchar_t, an enum, a
+ * pointer, a class type) is an incomplete type, and naming one of its members
+ * is a compile error. */
+template<class T> struct numeric_limits;
 
 #define WASMOS_NLIM_UINT(T, MAX) \
 template<> struct numeric_limits<T> { \
@@ -52,14 +42,21 @@ template<> struct numeric_limits<T> { \
     static constexpr bool is_integer = true; \
 };
 
-WASMOS_NLIM_UINT(__UINT8_TYPE__,  0xFFu)
-WASMOS_NLIM_UINT(__UINT16_TYPE__, 0xFFFFu)
-WASMOS_NLIM_UINT(__UINT32_TYPE__, 0xFFFFFFFFu)
-WASMOS_NLIM_UINT(__UINT64_TYPE__, 0xFFFFFFFFFFFFFFFFull)
-WASMOS_NLIM_SINT(__INT8_TYPE__,   0x7F)
-WASMOS_NLIM_SINT(__INT16_TYPE__,  0x7FFF)
-WASMOS_NLIM_SINT(__INT32_TYPE__,  0x7FFFFFFF)
-WASMOS_NLIM_SINT(__INT64_TYPE__,  0x7FFFFFFFFFFFFFFFll)
+WASMOS_NLIM_UINT(unsigned char,      __SCHAR_MAX__ * 2u + 1u)
+WASMOS_NLIM_UINT(unsigned short,     __SHRT_MAX__ * 2u + 1u)
+WASMOS_NLIM_UINT(unsigned int,       __INT_MAX__ * 2u + 1u)
+WASMOS_NLIM_UINT(unsigned long,      __LONG_MAX__ * 2ul + 1ul)
+WASMOS_NLIM_UINT(unsigned long long, __LONG_LONG_MAX__ * 2ull + 1ull)
+WASMOS_NLIM_SINT(signed char,        __SCHAR_MAX__)
+WASMOS_NLIM_SINT(short,              __SHRT_MAX__)
+WASMOS_NLIM_SINT(int,                __INT_MAX__)
+WASMOS_NLIM_SINT(long,               __LONG_MAX__)
+WASMOS_NLIM_SINT(long long,          __LONG_LONG_MAX__)
+#ifdef __CHAR_UNSIGNED__
+WASMOS_NLIM_UINT(char,               __SCHAR_MAX__ * 2u + 1u)
+#else
+WASMOS_NLIM_SINT(char,               __SCHAR_MAX__)
+#endif
 
 #undef WASMOS_NLIM_UINT
 #undef WASMOS_NLIM_SINT

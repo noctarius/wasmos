@@ -805,7 +805,7 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
     if (wasmos_app_compiled_for(
             desc, ARCH_ELF_MACHINE, &params.compiled_bytes, &params.compiled_size) != 0 &&
         desc->compiled_count > 0) {
-        klog_printf("[wasmos-app] %s: no AOT binary for this architecture; compiling at load\n",
+        klog_printf("[wasmos-app] no AOT binary for this architecture, compiling %s at load\n",
                     instance->name);
     }
     params.entry_export = 0;

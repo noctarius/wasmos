@@ -182,9 +182,11 @@ what keeps a binary for one architecture from executing on another.
 `wasmos_app_parse` refuses a zero tag, a zero size and a tag listed twice;
 `wasmos_app_compiled_for` selects by tag, and `wasmos_app_start` asks for
 `ARCH_ELF_MACHINE`. A package with binaries but none for this architecture
-starts from its bytecode and logs `<name>: no AOT binary for this
-architecture; compiling at load`, so a WASM package runs on every
-architecture and AOT only changes how fast it starts.
+starts from its bytecode and logs `no AOT binary for this architecture,
+compiling <name> at load`, so a WASM package runs on every
+architecture and AOT only changes how fast it starts. The module's name
+never opens a kernel log line: console output is test input, and a utility's
+own errors start with `<name>:`.
 
 The manifest's `aot` key chooses what is packed: `aot = true` the tree's own
 architecture, which is all a system driver, service or utility needs since it

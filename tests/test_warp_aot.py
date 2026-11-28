@@ -11,9 +11,9 @@ if SCRIPTS not in sys.path:
 
 from qemu_test_framework import QemuSession, build_config_enabled, default_config
 
-AOT_USED = ": using AOT binary"
-AOT_FAILED = ": AOT load failed"
-NO_AOT_HERE = ": no AOT binary for this architecture"
+AOT_USED = "[warp-driver] using AOT binary for "
+AOT_FAILED = "[warp-driver] AOT load failed for "
+NO_AOT_HERE = "[wasmos-app] no AOT binary for this architecture, compiling "
 PROBE_OK = b"[test] aot-probe ok sum=5050"
 
 
@@ -88,21 +88,21 @@ class WarpAotLoadTest(unittest.TestCase):
     def test_a_fat_package_runs_from_its_own_architecture(self) -> None:
         log = self._spawn_probe("/boot/apps/aotfat")
         self.assertIn(
-            "aot-fat" + AOT_USED,
+            AOT_USED + "aot-fat",
             log,
             f"the fat package did not use its AOT binary\n--- kernel log ---\n{log[-4096:]}",
         )
-        self.assertNotIn("aot-fat" + NO_AOT_HERE, log)
+        self.assertNotIn(NO_AOT_HERE + "aot-fat", log)
         self.assertNotIn(AOT_FAILED, log)
 
     def test_a_package_without_this_architecture_runs_from_bytecode(self) -> None:
         log = self._spawn_probe("/boot/apps/aotforgn")
         self.assertIn(
-            "aot-foreign" + NO_AOT_HERE,
+            NO_AOT_HERE + "aot-foreign",
             log,
             f"no fallback was reported\n--- kernel log ---\n{log[-4096:]}",
         )
-        self.assertNotIn("aot-foreign" + AOT_USED, log)
+        self.assertNotIn(AOT_USED + "aot-foreign", log)
 
     def test_an_aot_utility_runs(self) -> None:
         start = self.session.send_command("sysinfo", timeout_s=30)

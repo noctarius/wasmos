@@ -183,22 +183,17 @@ what keeps a binary for one architecture from executing on another.
 
 An AOT binary runs as native code and skips every check WARP's compiler emits
 for the bytecode (bounds checks included), so it is trusted like a native
-image: `wasmos_app_aot_select` hands it to the runtime only when the package's
-signature is valid for the build's key
-([Capability and Policy](10-capability-and-policy.md), "Signed Packages"),
-whatever capabilities the package asks for, and then only the binary tagged
+image: `wasmos_app_aot_select` hands it to the runtime only when the package is
+signed by a trusted key -- the system key or a publisher's
+([Capability and Policy](10-capability-and-policy.md), "Signed Packages") --
+whatever capabilities it asks for, and then only the binary tagged
 `ARCH_ELF_MACHINE`. Otherwise the package starts from its bytecode and the
 WARP driver logs why: `no AOT binary for this architecture, compiling <name>
 at load`, or `AOT binary of a package not signed by a trusted key, compiling
-<name> at load`. A WASM package therefore runs on every architecture and from
-any source, and AOT only changes how fast it starts. The module's name never
-opens a kernel log line: console output is test input, and a utility's own
-errors start with `<name>:`.
-
-TODO: the build's key is the only trusted key, so a package from outside the
-build (an external app) always runs from bytecode. A second trust source -- a
-system keyring of signing keys -- is not defined yet; `wasmos_app_aot_trusted`
-(`src/kernel/wasmos_app.c`) is where it would be consulted.
+<name> at load`. A WASM package therefore runs on every architecture, and AOT
+only changes how fast it starts. The module's name never opens a kernel log
+line: console output is test input, and a utility's own errors start with
+`<name>:`.
 
 The manifest's `aot` key chooses what is packed: `aot = true` the tree's own
 architecture, which is all a system driver, service or utility needs since it
@@ -218,14 +213,29 @@ arithmetic before any pointer access.
 
 #### Signature
 
-A signed package ends in a 64-byte Ed25519 signature (RFC 8032, via
-`libs/monocypher`) over every byte before it, header included, and nothing may
-follow it: a blob with bytes after the signature, or a `signature_size` other
-than 0 or 64, does not parse. Parsing only locates the signature;
-`wasmos_app_signature_valid` checks it against the public key compiled into the
-kernel, and only when the package asks for a capability beyond `ipc.basic`.
-What a valid signature earns is the capability policy's business
-([Capability and Policy](10-capability-and-policy.md), "Signed Packages").
+A signed package ends in a signature record, and nothing may follow it; the
+header's `signature_size` is the record's whole length (0 for an unsigned
+package):
+
+```
+u16  algorithm       1 = Ed25519 (RFC 8032), 2 = RSA-PSS with SHA-512
+u16  signature length
+u8   key id[16]      first 16 bytes of BLAKE2b-256 over the key's DER
+                     SubjectPublicKeyInfo
+     signature       over every byte before the record, header included
+                     (RSA-PSS: over their SHA-512 digest)
+```
+
+The head is not signed: the algorithm and key id only say which key to check,
+and naming the wrong ones makes verification fail. A record whose length
+disagrees with `signature_size`, of an unknown algorithm, or of a length the
+algorithm does not have, does not parse. Parsing only locates the record;
+`wasmos_app_trust` looks the key id up among the keys the kernel trusts and
+verifies against that key alone. What each trust level earns is the capability
+policy's business ([Capability and Policy](10-capability-and-policy.md),
+"Signed Packages"). `make_wasmos_app` signs with Ed25519; the key id comes from
+the same SubjectPublicKeyInfo that `make_wasmos_app --pubkey-pem` writes, so a
+key read from PEM and a package name it alike.
 
 #### Flag Bits
 

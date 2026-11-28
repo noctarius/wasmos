@@ -515,9 +515,14 @@ linked feature documents for rationale and rollout plans.
   `test_supervisor_unit` and, on both runtimes, `test_hostcall_ipc`.
 - Packages are signed and a manifest's privilege is checked
   (`architecture/10`, "Signed Packages"). The build signs every `.wap` with
-  Ed25519 (`libs/monocypher` 4.0.3; the `.wap` ends in the signature) using
-  `WASMOS_SIGNING_KEY` or a development seed it creates once in the build
-  directory, and compiles the public key into the kernel. A manifest
+  Ed25519 (`libs/monocypher` 4.0.3; the `.wap` ends in a signature record
+  naming the key) using `WASMOS_SIGNING_KEY` or a development seed it creates
+  once in the build directory, compiles that system key into the kernel, and
+  installs it and a second, app key as PEM in `/boot/system/keys/`. A signed
+  package no trusted key verifies is refused at spawn
+  (`WASMOS_ERR_PROC_SPAWN_UNTRUSTED`); an unsigned one starts with `ipc.basic`.
+  A publisher key's package gets `dma.buffer` at most, once the keyring (not
+  built yet) registers such keys. A manifest
   capability beyond `ipc.basic` is granted only to a package that verifies;
   a kind that acts on requests also needs the requester to hold it or
   `spawn.grant` (`capability_manifest_grant_check`), so the shell holds

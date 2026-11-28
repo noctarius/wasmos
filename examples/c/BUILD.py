@@ -49,9 +49,10 @@ def build(b):
         kernel_blob(b, "chardev_client.wasm")
     )
 
-    # One module packed three ways for tests/test_warp_aot.py: signed with an
+    # One module packed four ways for tests/test_warp_aot.py: signed with an
     # AOT binary for every architecture; signed with binaries only for the
-    # architectures other than the tree's; and unsigned, with the tree's own.
+    # architectures other than the tree's; unsigned, with the tree's own; and
+    # signed with a key the kernel does not trust.
     wap = guest(
         b,
         "aot_fat",
@@ -74,6 +75,18 @@ def build(b):
             sign=False,
         )
         install(b, "apps/aotunsig.wap", wap)
+        # Signed, but with a key this kernel does not trust: a fixed test seed,
+        # not a secret. The kernel must refuse to start it.
+        b.write_file("signing/untrusted-test-seed.hex", "5a" * 32 + "\n")
+        wap = pack(
+            b,
+            "aot_untrusted",
+            probe,
+            b.src("aot_probe/untrusted.metadata"),
+            aot=True,
+            sign=b.out / "signing/untrusted-test-seed.hex",
+        )
+        install(b, "apps/aotuntru.wap", wap)
 
     wap = guest(
         b,

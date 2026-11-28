@@ -104,11 +104,19 @@ uint32_t capability_mask_of(uint32_t context_id);
  * a spawn the kernel made).  ipc.basic is not a kind and is not asked about. */
 typedef enum {
     CAPABILITY_GRANT_OK = 0,
-    CAPABILITY_GRANT_UNKNOWN = 1,   /* not a capability kind */
-    CAPABILITY_GRANT_UNSIGNED = 2,  /* the package is not signed with the build's key */
-    CAPABILITY_GRANT_REQUESTER = 3, /* the requester holds neither the kind nor spawn.grant */
+    CAPABILITY_GRANT_UNKNOWN = 1,     /* not a capability kind */
+    CAPABILITY_GRANT_UNSIGNED = 2,    /* the package is not signed with the build's key */
+    CAPABILITY_GRANT_REQUESTER = 3,   /* the requester holds neither the kind nor spawn.grant */
+    CAPABILITY_GRANT_SYSTEM_ONLY = 4, /* a critical kind, and the image is a publisher's */
 } capability_grant_check_t;
-int capability_manifest_grant_check(capability_kind_t kind, int image_signed,
+
+/* How far the package asking for a capability is trusted (image_trust): signed by
+ * no trusted key, by the build's system key, or by a publisher's key (the build's
+ * app key, or one the keyring registered). */
+#define CAPABILITY_IMAGE_UNTRUSTED 0
+#define CAPABILITY_IMAGE_SYSTEM 1
+#define CAPABILITY_IMAGE_PUBLISHER 2
+int capability_manifest_grant_check(capability_kind_t kind, int image_trust,
                                     uint32_t requester_mask);
 
 /* Drops context_id's record -- grants and spawn profile -- when its process is

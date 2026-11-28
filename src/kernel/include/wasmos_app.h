@@ -61,9 +61,28 @@
 #define WASMOS_APP_MEM_HINT_IPC 3u
 #define WASMOS_APP_MEM_HINT_DEVICE 4u
 
-/* Byte length of a package signature: Ed25519 (RFC 8032), over every byte of the
- * package before it. */
-#define WASMOS_APP_SIGNATURE_LEN 64u
+/* The signature record that ends a signed package: a 20-byte head -- u16
+ * algorithm, u16 signature length, the 16-byte id of the signing key -- then the
+ * signature, over every byte of the package before the record.  The header's
+ * signature_size is the record's whole length.  The head is not signed: the
+ * algorithm and key id only say where to look, and naming the wrong ones makes
+ * verification fail.  A key's id is the first 16 bytes of the BLAKE2b-256 hash of
+ * its DER SubjectPublicKeyInfo, so the keyring and the packer derive it alike. */
+#define WASMOS_APP_SIG_HEAD_LEN 20u
+#define WASMOS_APP_SIG_KEY_ID_LEN 16u
+/* Ed25519 (RFC 8032), over the signed bytes themselves. */
+#define WASMOS_APP_SIG_ALG_ED25519 1u
+#define WASMOS_APP_SIG_ED25519_LEN 64u
+/* RSA-PSS with SHA-512, over the SHA-512 digest of the signed bytes. */
+#define WASMOS_APP_SIG_ALG_RSA_PSS_SHA512 2u
+#define WASMOS_APP_SIG_RSA_MIN_LEN 256u
+#define WASMOS_APP_SIG_RSA_MAX_LEN 512u
+
+/* How far a package is trusted (wasmos_app_trust). */
+#define WASMOS_APP_TRUST_UNSIGNED 0u  /* no signature: bytecode, ipc.basic only */
+#define WASMOS_APP_TRUST_SYSTEM 1u    /* the build's system key: everything */
+#define WASMOS_APP_TRUST_PUBLISHER 2u /* another trusted key: AOT, ipc.basic only */
+#define WASMOS_APP_TRUST_INVALID 3u   /* a signature no trusted key verifies: refused */
 
 /* Capacities of the fixed-size tables in wasmos_app_desc_t.  A header count above any of
  * these makes wasmos_app_parse reject the whole package rather than truncate — a
@@ -152,11 +171,15 @@ typedef struct {
         const uint8_t* bytes;
         uint32_t size;
     } compiled[WASMOS_APP_MAX_COMPILED];
-    /* The package's Ed25519 signature (WASMOS_APP_SIGNATURE_LEN bytes, the last in
-     * the blob) and the length of what it signs: every byte before it.  NULL and 0
-     * for an unsigned package.  Parsing locates the signature; whether it is valid
-     * is wasmos_app_signature_valid's question. */
+    /* The package's signature record (WASMOS_APP_SIG_*): the signature's bytes, their
+     * length and algorithm, the signing key's id, and the length of what it signs,
+     * every byte before the record.  signature is NULL and signed_size 0 for an
+     * unsigned package.  Parsing locates the record; whether it verifies is
+     * wasmos_app_trust's question. */
     const uint8_t* signature;
+    uint32_t signature_len;
+    uint16_t signature_alg;
+    uint8_t signature_key_id[WASMOS_APP_SIG_KEY_ID_LEN];
     uint32_t signed_size;
     const uint8_t* name;
     uint32_t name_len;
@@ -267,7 +290,7 @@ struct wasmos_subsystem_ops {
  * itself).  `image_name` is the package's name, borrowed and not NUL-terminated,
  * for the granter's log line. */
 typedef struct {
-    uint8_t image_signed;
+    uint8_t image_trust; /* CAPABILITY_IMAGE_* */
     uint32_t requester_cap_mask;
     const uint8_t* image_name;
     uint32_t image_name_len;
@@ -281,11 +304,25 @@ typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const 
                                                uint32_t name_len, uint32_t flags,
                                                const wasmos_app_grant_ctx_t* ctx);
 
-/* 1 when the package carries a signature (wasmos_app_desc_t.signature) that is a valid
- * Ed25519 signature, by the key compiled into this kernel
- * (wasmos_image_signing_pubkey), over every byte before it; 0 otherwise, including for
- * an unsigned package.  Hashes the whole package, so it costs time proportional to
- * its size. */
+/* How far the package is trusted, WASMOS_APP_TRUST_*.  A signature is looked up by
+ * its key id among the keys this kernel trusts -- the build's system key, the one
+ * compiled in -- and verified against that key alone; an
+ * unknown key, an algorithm this kernel cannot check, or a signature that does not
+ * verify is INVALID.  Hashes the whole package, so it costs time proportional to
+ * its size: call it once per decision.
+ * TODO: keys registered by the keyring service (which yield
+ * WASMOS_APP_TRUST_PUBLISHER), RSA-PSS signatures (which the keyring verifies) and
+ * the per-package allowlist are not consulted yet. */
+uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc);
+
+/* 0 when the package may be started, -1 (logged) when its signature is verified by no
+ * trusted key (WASMOS_APP_TRUST_INVALID).  An unsigned package is admitted: it runs
+ * from bytecode with ipc.basic only.  The process manager calls this before creating
+ * the process, so the requester learns of the refusal. */
+int wasmos_app_admit(const wasmos_app_desc_t* desc);
+
+/* 1 when wasmos_app_trust is WASMOS_APP_TRUST_SYSTEM: signed with the build's system
+ * key, the only signature that lets a manifest grant itself privilege. */
 int wasmos_app_signature_valid(const wasmos_app_desc_t* desc);
 
 /* A started package.  Unlike wasmos_app_desc_t this owns its data: name and entry are
@@ -333,11 +370,12 @@ int wasmos_app_compiled_for(const wasmos_app_desc_t* desc, uint16_t machine, con
 #define WASMOS_APP_AOT_OTHER_ARCH 2u /* none is for this machine */
 #define WASMOS_APP_AOT_UNTRUSTED 3u  /* the package's signature is not trusted */
 
-/* The AOT binary a package may run as native code on ELF machine `machine`:
+/* The AOT binary a package of trust level `trust` (wasmos_app_trust) may run as
+ * native code on ELF machine `machine`: only SYSTEM and PUBLISHER packages qualify.
  * *bytes and *size are set for WASMOS_APP_AOT_SELECTED and cleared otherwise,
  * and the status says why.  The package then runs from its bytecode, so every
  * status but SELECTED costs start-up time, never correctness. */
-uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint16_t machine,
+uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint32_t trust, uint16_t machine,
                                const uint8_t** bytes, uint32_t* size);
 
 /* Index into info's boot module table of the WASMOS-APP whose embedded app name

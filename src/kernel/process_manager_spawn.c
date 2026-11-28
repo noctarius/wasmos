@@ -60,7 +60,8 @@ typedef enum {
     PM_SPAWN_INTERNAL_ERR_SEND = -1010,
     PM_SPAWN_INTERNAL_ERR_BOUNDS = -1011,
     PM_SPAWN_INTERNAL_ERR_BAD_REPLY = -1012,
-    PM_SPAWN_INTERNAL_ERR_EMPTY_PATH = -1013
+    PM_SPAWN_INTERNAL_ERR_EMPTY_PATH = -1013,
+    PM_SPAWN_INTERNAL_ERR_UNTRUSTED = -1014
 } pm_spawn_internal_error_t;
 
 /* --- PM's per-operation transfer buffers ----------------------------------
@@ -492,6 +493,9 @@ static int pm_spawn_module(uint32_t parent_pid, uint32_t requester_cap_mask, uin
         klog_write("[pm] spawn_module parse failed\n");
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
+    if (wasmos_app_admit(&desc) != 0) {
+        return PM_SPAWN_INTERNAL_ERR_UNTRUSTED;
+    }
     if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
         klog_write("[pm] spawn_module subsystem resolve failed\n");
         return PM_SPAWN_INTERNAL_ERR_BINDING;
@@ -630,6 +634,9 @@ static int pm_spawn_from_buffer(uint32_t parent_pid, uint32_t requester_cap_mask
     uint8_t require_explicit_ready = 0;
     if (wasmos_app_parse(blob, blob_size, &desc) != 0) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
+    }
+    if (wasmos_app_admit(&desc) != 0) {
+        return PM_SPAWN_INTERNAL_ERR_UNTRUSTED;
     }
     if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
         return PM_SPAWN_INTERNAL_ERR_BINDING;
@@ -1345,7 +1352,8 @@ int pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t* msg) 
          * one happened leaves a caller guessing. */
         klog_printf("[pm] spawn failed rc=%d\n", spawn_rc);
         pm_xfer_release(&pmbuf);
-        return WASMOS_ERR_PROC_PM_SPAWN_FAILED;
+        return spawn_rc == PM_SPAWN_INTERNAL_ERR_UNTRUSTED ? WASMOS_ERR_PROC_SPAWN_UNTRUSTED
+                                                           : WASMOS_ERR_PROC_PM_SPAWN_FAILED;
     }
     pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
@@ -1885,7 +1893,8 @@ int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t* msg) {
                     (unsigned)kmem_early_arena_count(),
                     (unsigned)kmem_early_arena_max_request());
         pm_xfer_release(&pmbuf);
-        return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+        return sfb_rc == PM_SPAWN_INTERNAL_ERR_UNTRUSTED ? WASMOS_ERR_PROC_SPAWN_UNTRUSTED
+                                                         : WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
     }
     pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
@@ -2090,19 +2099,21 @@ int pm_handle_spawn_watched(uint32_t pm_context_id, const ipc_message_t* msg) {
             return resolve_rc;
         }
         const uint8_t* blob = (const uint8_t*)pm_xfer_owner_ptr(&pmbuf);
+        int sfb_rc = PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
         if (wasmos_app_parse(blob, resolved.blob_size, &desc) != 0 ||
-            pm_spawn_from_buffer(caller->pid,
-                                 requester_cap_mask,
-                                 blob,
-                                 resolved.blob_size,
-                                 resolved.args_len > 0u ? resolved.args : 0,
-                                 resolved.args_len,
-                                 req.tty,
-                                 &pid) != 0) {
+            (sfb_rc = pm_spawn_from_buffer(caller->pid,
+                                           requester_cap_mask,
+                                           blob,
+                                           resolved.blob_size,
+                                           resolved.args_len > 0u ? resolved.args : 0,
+                                           resolved.args_len,
+                                           req.tty,
+                                           &pid)) != 0) {
             pm_xfer_release(&pmbuf);
             ipc_owed_cancel(on_ready);
             ipc_owed_cancel(on_exit);
-            return WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
+            return sfb_rc == PM_SPAWN_INTERNAL_ERR_UNTRUSTED ? WASMOS_ERR_PROC_SPAWN_UNTRUSTED
+                                                             : WASMOS_ERR_PROC_SPAWN_SPAWN_FAILED;
         }
     }
 

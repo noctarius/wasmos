@@ -67,6 +67,7 @@ pub const WASMOS_ERR_PROC_SPAWN_BAD_CAPS: i32 = -0x0001000F; // the capability d
 pub const WASMOS_ERR_PROC_SPAWN_CAPS_APPLY: i32 = -0x00010010; // the kernel refused the parsed capability profile for the new child, which was killed before it ran
 pub const WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED: i32 = -0x00010011; // the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created
 pub const WASMOS_ERR_PROC_SPAWN_NO_MODULE: i32 = -0x00010012; // the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created
+pub const WASMOS_ERR_PROC_SPAWN_UNTRUSTED: i32 = -0x00010013; // the package is signed, but no key this kernel trusts verifies the signature (altered, or signed by an unknown key); no child was created. An unsigned package is not refused
 pub const WASMOS_ERR_PROC_PM_BUSY: i32 = -0x00020001; // PM already has an incompatible in-flight operation
 pub const WASMOS_ERR_PROC_PM_BAD_ENDPOINT: i32 = -0x00020002; // source endpoint owner lookup failed
 pub const WASMOS_ERR_PROC_PM_NO_CALLER: i32 = -0x00020003; // source endpoint owner has no live process
@@ -422,6 +423,7 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_PROC_SPAWN_CAPS_APPLY => "the kernel refused the parsed capability profile for the new child, which was killed before it ran",
         WASMOS_ERR_PROC_SPAWN_GRANT_NOT_AUTHORIZED => "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created",
         WASMOS_ERR_PROC_SPAWN_NO_MODULE => "the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created",
+        WASMOS_ERR_PROC_SPAWN_UNTRUSTED => "the package is signed, but no key this kernel trusts verifies the signature (altered, or signed by an unknown key); no child was created. An unsigned package is not refused",
         WASMOS_ERR_PROC_PM_BUSY => "PM already has an incompatible in-flight operation",
         WASMOS_ERR_PROC_PM_BAD_ENDPOINT => "source endpoint owner lookup failed",
         WASMOS_ERR_PROC_PM_NO_CALLER => "source endpoint owner has no live process",

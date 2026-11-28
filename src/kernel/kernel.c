@@ -200,7 +200,7 @@ static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* nam
     if (!ctx || capability_kind_from_name(name, name_len, &kind) != 0) {
         return -1;
     }
-    int check = capability_manifest_grant_check(kind, ctx->image_signed, ctx->requester_cap_mask);
+    int check = capability_manifest_grant_check(kind, ctx->image_trust, ctx->requester_cap_mask);
     if (check != CAPABILITY_GRANT_OK) {
         char cap[32] = "?";
         char image[64] = "?";
@@ -211,6 +211,8 @@ static int wasmos_capability_grant(uint32_t owner_context_id, const uint8_t* nam
                     image,
                     check == CAPABILITY_GRANT_UNSIGNED
                         ? "the image is not signed with this build's key"
+                    : check == CAPABILITY_GRANT_SYSTEM_ONLY
+                        ? "only the system key grants it, and the image is a publisher's"
                         : "the requester holds neither it nor spawn.grant");
         return -1;
     }

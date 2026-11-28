@@ -19,6 +19,14 @@
 #define EM_AARCH64 183u
 /* An Ed25519 signature (RFC 8032), and the seed and public key it is made from. */
 #define SIGNATURE_LEN 64u
+/* The signature record that ends a signed package (WASMOS_APP_SIG_* in
+ * src/kernel/include/wasmos_app.h): u16 algorithm, u16 signature length, the
+ * 16-byte key id, then the signature over every byte before the record. This
+ * packer signs with Ed25519 only. */
+#define SIG_HEAD_LEN 20u
+#define SIG_KEY_ID_LEN 16u
+#define SIG_ALG_ED25519 1u
+#define SIG_RECORD_ED25519_LEN (SIG_HEAD_LEN + SIGNATURE_LEN)
 #define SEED_LEN 32u
 #define PUBKEY_LEN 32u
 
@@ -103,7 +111,9 @@
  *                            defaults to "NATIVE" or "WASM".
  *   region_count             Number of wasmos_region_entry_t records, written
  *                            after the capability table and before the mem hints.
- *   signature_size           0 for an unsigned package, else SIGNATURE_LEN: an
+ *   signature_size           0 for an unsigned package, else the length of the
+ *                            signature record (SIG_HEAD_LEN + signature) that
+ *                            ends the package; its signature is
  *                            Ed25519 signature over every byte before it (this
  *                            header included), which ends the package.
  */
@@ -121,7 +131,7 @@ typedef struct __attribute__((packed)) {
     uint32_t compiled_count; /* WARP AOT binaries after the payload; 0 if none */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
     uint32_t region_count;   /* declared register windows */
-    uint32_t signature_size; /* 0, or SIGNATURE_LEN: the signature that ends the package */
+    uint32_t signature_size; /* 0, or the length of the signature record ending the package */
 } wasmos_app_header_t;
 
 /* One declared register window, carrying no trailing name. Its position in the
@@ -871,9 +881,29 @@ static int load_key_pair(const char* seed_path, uint8_t secret[64], uint8_t pub[
     return 0;
 }
 
+/* DER SubjectPublicKeyInfo of an Ed25519 key (RFC 8410): this fixed prefix, then
+ * the 32-byte key. */
+static const uint8_t ED25519_SPKI_PREFIX[12] = {
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00};
+
+static void ed25519_spki(const uint8_t pub[PUBKEY_LEN], uint8_t der[44]) {
+    memcpy(der, ED25519_SPKI_PREFIX, sizeof(ED25519_SPKI_PREFIX));
+    memcpy(der + sizeof(ED25519_SPKI_PREFIX), pub, PUBKEY_LEN);
+}
+
+/* A key's id: the first SIG_KEY_ID_LEN bytes of BLAKE2b-256 over its DER
+ * SubjectPublicKeyInfo, the form the keyring reads it in from PEM. */
+static void ed25519_key_id(const uint8_t pub[PUBKEY_LEN], uint8_t id[SIG_KEY_ID_LEN]) {
+    uint8_t der[44];
+    uint8_t hash[32];
+    ed25519_spki(pub, der);
+    crypto_blake2b(hash, sizeof(hash), der, sizeof(der));
+    memcpy(id, hash, SIG_KEY_ID_LEN);
+}
+
 /* Sign the package just written at `path`, whose header already says
- * signature_size = SIGNATURE_LEN: sign every byte of the file and append the
- * signature. */
+ * signature_size = SIG_RECORD_ED25519_LEN: sign every byte of the file and
+ * append the record (algorithm, length, key id, signature). */
 static int sign_package(const char* path, const char* seed_path) {
     uint8_t secret[64];
     uint8_t pub[PUBKEY_LEN];
@@ -897,12 +927,15 @@ static int sign_package(const char* path, const char* seed_path) {
         fprintf(stderr, "%s: cannot read back for signing\n", path);
         return -1;
     }
-    uint8_t sig[SIGNATURE_LEN];
-    crypto_ed25519_sign(sig, secret, data, (size_t)size);
+    uint8_t record[SIG_RECORD_ED25519_LEN];
+    uint16_t head[2] = {SIG_ALG_ED25519, SIGNATURE_LEN};
+    memcpy(record, head, sizeof(head));
+    ed25519_key_id(pub, record + 4);
+    crypto_ed25519_sign(record + SIG_HEAD_LEN, secret, data, (size_t)size);
     crypto_wipe(secret, sizeof(secret));
     free(data);
     f = fopen(path, "ab");
-    ok = f && fwrite(sig, 1, sizeof(sig), f) == sizeof(sig);
+    ok = f && fwrite(record, 1, sizeof(record), f) == sizeof(record);
     if (f) {
         ok &= fclose(f) == 0;
     }
@@ -913,11 +946,22 @@ static int sign_package(const char* path, const char* seed_path) {
     return 0;
 }
 
-/* Write the public key of a seed as the C definition the kernel compiles in:
- * the key a package's signature is checked against. */
+static void emit_c_array(FILE* f, const char* name, const uint8_t* bytes, uint32_t len) {
+    fprintf(f, "const uint8_t %s[%u] = {", name, len);
+    for (uint32_t i = 0; i < len; ++i) {
+        fprintf(f, "%s0x%02x", i ? ", " : "", bytes[i]);
+    }
+    fprintf(f, "};\n");
+}
+
+/* Write the public key and key id of the build's system seed as the C
+ * definitions the kernel compiles in (src/kernel/wasmos_app.c, wasmos_app_trust):
+ * the one key whose signature lets a manifest grant itself privilege. Every other
+ * key reaches the kernel through the keyring (--pubkey-pem). */
 static int emit_pubkey_c(const char* seed_path, const char* out_path) {
     uint8_t secret[64];
     uint8_t pub[PUBKEY_LEN];
+    uint8_t id[SIG_KEY_ID_LEN];
     if (load_key_pair(seed_path, secret, pub) != 0) {
         return 1;
     }
@@ -928,15 +972,49 @@ static int emit_pubkey_c(const char* seed_path, const char* out_path) {
         return 1;
     }
     fprintf(f,
-            "/* GENERATED by make_wasmos_app --pubkey-c from the build's signing seed.\n"
-            " * The Ed25519 key a package must be signed with to be granted a\n"
-            " * privileged capability (src/kernel/capability.c). */\n"
-            "#include <stdint.h>\n\n"
-            "const uint8_t wasmos_image_signing_pubkey[32] = {");
-    for (uint32_t i = 0; i < PUBKEY_LEN; ++i) {
-        fprintf(f, "%s0x%02x", i ? ", " : "", pub[i]);
+            "/* GENERATED by make_wasmos_app --pubkey-c from the build's system signing\n"
+            " * seed: the Ed25519 key and key id a package signature is checked against\n"
+            " * (src/kernel/wasmos_app.c, wasmos_app_trust). */\n"
+            "#include <stdint.h>\n\n");
+    emit_c_array(f, "wasmos_image_signing_pubkey", pub, PUBKEY_LEN);
+    ed25519_key_id(pub, id);
+    emit_c_array(f, "wasmos_image_signing_key_id", id, SIG_KEY_ID_LEN);
+    return fclose(f) == 0 ? 0 : 1;
+}
+
+/* Write the public key of a seed as a PEM "PUBLIC KEY" (DER SubjectPublicKeyInfo,
+ * RFC 8410), the form the keyring reads from /boot/system/keys. */
+static int emit_pubkey_pem(const char* seed_path, const char* out_path) {
+    static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    uint8_t secret[64];
+    uint8_t pub[PUBKEY_LEN];
+    uint8_t der[44];
+    if (load_key_pair(seed_path, secret, pub) != 0) {
+        return 1;
     }
-    fprintf(f, "};\n");
+    crypto_wipe(secret, sizeof(secret));
+    ed25519_spki(pub, der);
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        perror(out_path);
+        return 1;
+    }
+    fprintf(f, "-----BEGIN PUBLIC KEY-----\n");
+    for (uint32_t i = 0; i < sizeof(der); i += 3) {
+        uint32_t n = (uint32_t)der[i] << 16;
+        uint32_t left = (uint32_t)sizeof(der) - i;
+        if (left > 1) {
+            n |= (uint32_t)der[i + 1] << 8;
+        }
+        if (left > 2) {
+            n |= der[i + 2];
+        }
+        fputc(b64[(n >> 18) & 63], f);
+        fputc(b64[(n >> 12) & 63], f);
+        fputc(left > 1 ? b64[(n >> 6) & 63] : '=', f);
+        fputc(left > 2 ? b64[n & 63] : '=', f);
+    }
+    fprintf(f, "\n-----END PUBLIC KEY-----\n");
     return fclose(f) == 0 ? 0 : 1;
 }
 
@@ -965,6 +1043,9 @@ static int emit_pubkey_c(const char* seed_path, const char* out_path) {
 int main(int argc, char** argv) {
     if (argc == 4 && strcmp(argv[1], "--pubkey-c") == 0) {
         return emit_pubkey_c(argv[2], argv[3]);
+    }
+    if (argc == 4 && strcmp(argv[1], "--pubkey-pem") == 0) {
+        return emit_pubkey_pem(argv[2], argv[3]);
     }
     if (argc >= 2 && strcmp(argv[1], "--check-deps") == 0) {
         return check_deps(argc - 2, argv + 2);
@@ -1112,7 +1193,7 @@ int main(int argc, char** argv) {
         hdr.compiled_count = compiled_count;
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
         hdr.region_count = lm.region_count;
-        hdr.signature_size = sign_seed_path ? SIGNATURE_LEN : 0u;
+        hdr.signature_size = sign_seed_path ? SIG_RECORD_ED25519_LEN : 0u;
 
         wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, lm.stack_pages, 0};
         wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, lm.heap_pages, 0};
@@ -1167,9 +1248,11 @@ int main(int argc, char** argv) {
                 "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
                 "<cap_count> [<cap_name> <cap_flags>]...\n"
                 "       %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
-                "<in.warpbin>] [--sign <seed.hex>]\n"
-                "       %s --pubkey-c <seed.hex> <out.c>\n"
+                "<arch>=<in.warpbin>]... [--sign <seed.hex>]\n"
+                "       %s --pubkey-c <system-seed.hex> <out.c>\n"
+                "       %s --pubkey-pem <seed.hex> <out.pem>\n"
                 "       %s --check-deps <manifest>...\n",
+                argv[0],
                 argv[0],
                 argv[0],
                 argv[0],

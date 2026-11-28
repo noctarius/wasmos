@@ -257,14 +257,29 @@ static int capability_kind_acts_for_requester(capability_kind_t kind) {
     }
 }
 
-int capability_manifest_grant_check(capability_kind_t kind, int image_signed,
+/* The kinds an app may hold: a package signed by a publisher's key gets these and
+ * no other. Every kind not listed is critical -- hardware (io.port, irq.route,
+ * mmio.map, pci.config), control of the system or of other processes
+ * (system.control, spawn.grant, svc.control), a system role (subsystem.register,
+ * svc.class, console.owner), the firmware clock and the device and storage
+ * inventories -- and only the build's system key grants it. dma.buffer is an
+ * app's own memory for a display surface or a device it talks to through a
+ * driver, bounded by the manifest and charged to the process. */
+static int capability_kind_for_apps(capability_kind_t kind) {
+    return kind == CAP_DMA_BUFFER;
+}
+
+int capability_manifest_grant_check(capability_kind_t kind, int image_trust,
                                     uint32_t requester_mask) {
     uint32_t mask = kind_to_mask(kind);
     if (mask == 0u) {
         return CAPABILITY_GRANT_UNKNOWN;
     }
-    if (!image_signed) {
+    if (image_trust != CAPABILITY_IMAGE_SYSTEM && image_trust != CAPABILITY_IMAGE_PUBLISHER) {
         return CAPABILITY_GRANT_UNSIGNED;
+    }
+    if (image_trust == CAPABILITY_IMAGE_PUBLISHER && !capability_kind_for_apps(kind)) {
+        return CAPABILITY_GRANT_SYSTEM_ONLY;
     }
     if (capability_kind_acts_for_requester(kind) && (requester_mask & mask) == 0u &&
         (requester_mask & kind_to_mask(CAP_SPAWN_GRANT)) == 0u) {

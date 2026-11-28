@@ -252,18 +252,25 @@ static void test_signing_secret(uint8_t secret[64]) {
     crypto_ed25519_key_pair(secret, pub, seed);
 }
 
+extern const uint8_t wasmos_image_signing_key_id[WASMOS_APP_SIG_KEY_ID_LEN];
+
+#define SIG_RECORD_LEN (WASMOS_APP_SIG_HEAD_LEN + WASMOS_APP_SIG_ED25519_LEN)
+
 /* Turn the package build() left in g_blob into a signed one, as the packer does:
- * declare the signature in the header, sign every byte, append it. Returns the
- * new length. */
+ * declare the record in the header, sign every byte, append the record
+ * (algorithm, length, key id, signature). Returns the new length. */
 static uint32_t sign_blob(uint32_t len) {
     uint8_t secret[64];
     test_header_t hdr;
     memcpy(&hdr, g_blob, sizeof(hdr));
-    hdr.signature_size = WASMOS_APP_SIGNATURE_LEN;
+    hdr.signature_size = SIG_RECORD_LEN;
     memcpy(g_blob, &hdr, sizeof(hdr));
     test_signing_secret(secret);
-    crypto_ed25519_sign(&g_blob[len], secret, g_blob, len);
-    return len + WASMOS_APP_SIGNATURE_LEN;
+    uint16_t head[2] = {WASMOS_APP_SIG_ALG_ED25519, WASMOS_APP_SIG_ED25519_LEN};
+    memcpy(&g_blob[len], head, sizeof(head));
+    memcpy(&g_blob[len + 4u], wasmos_image_signing_key_id, WASMOS_APP_SIG_KEY_ID_LEN);
+    crypto_ed25519_sign(&g_blob[len + WASMOS_APP_SIG_HEAD_LEN], secret, g_blob, len);
+    return len + SIG_RECORD_LEN;
 }
 
 /* Regression: 2026-11-26-manifest-grants-itself-privilege -- nothing tied a
@@ -281,7 +288,7 @@ static int test_a_signed_package_verifies_and_an_unsigned_one_does_not(void) {
     if (wasmos_app_parse(g_blob, signed_len, &desc) != 0) {
         return __LINE__;
     }
-    if (desc.signature != &g_blob[len] || desc.signed_size != len) {
+    if (desc.signature != &g_blob[len + WASMOS_APP_SIG_HEAD_LEN] || desc.signed_size != len) {
         return __LINE__;
     }
     if (wasmos_app_signature_valid(&desc) != 1) {
@@ -293,7 +300,7 @@ static int test_a_signed_package_verifies_and_an_unsigned_one_does_not(void) {
 static int test_an_altered_package_does_not_verify(void) {
     wasmos_app_desc_t desc;
     uint32_t len = sign_blob(build(WASMOS_APP_VERSION, 0, 0, 0));
-    g_blob[len - WASMOS_APP_SIGNATURE_LEN - 1u] ^= 0x01u; /* the payload's last byte */
+    g_blob[len - SIG_RECORD_LEN - 1u] ^= 0x01u; /* the payload's last byte */
     if (wasmos_app_parse(g_blob, len, &desc) != 0 || wasmos_app_signature_valid(&desc) != 0) {
         return __LINE__;
     }

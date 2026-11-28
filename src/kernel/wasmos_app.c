@@ -3,6 +3,7 @@
  * with zero-copy pointers into the blob.  wasmos_app_start() creates the WASM
  * driver instance, grants capabilities, and prepares entry args. */
 #include "arch/arch_cpu.h"
+#include "capability.h"
 #include "klog.h"
 #include "native_driver.h"
 #include "serial.h"
@@ -13,9 +14,12 @@
 #include "monocypher-ed25519.h"
 #include <string.h>
 
-/* The Ed25519 public key packages are signed with, generated from the build's
- * signing seed (make_wasmos_app --pubkey-c; WASMOS_SIGNING_KEY in Kconfig). */
+/* The build's system signing key and its id (WASMOS_APP_SIG_*), generated from the
+ * system seed by make_wasmos_app --pubkey-c (WASMOS_SIGNING_KEY in Kconfig): the one
+ * key compiled into the kernel. Every other trusted key, the build's app key
+ * included, reaches the kernel through the keyring. */
 extern const uint8_t wasmos_image_signing_pubkey[32];
+extern const uint8_t wasmos_image_signing_key_id[WASMOS_APP_SIG_KEY_ID_LEN];
 
 /*
  * WASMOS-APP parsing is kept separate from process-manager policy so the binary
@@ -53,7 +57,7 @@ typedef struct __attribute__((packed)) {
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
     /* Declared register windows, written after the driver matches. */
     uint32_t region_count;
-    /* 0 for an unsigned package, else WASMOS_APP_SIGNATURE_LEN: the signature that
+    /* 0 for an unsigned package, else the length of the signature record that
      * ends the package, over every byte before it, this header included. */
     uint32_t signature_size;
 } wasmos_app_header_t;
@@ -569,18 +573,40 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
         off += rec.size;
     }
 
-    /* Version 11: an optional signature, which must be exactly the last bytes of
-     * the blob, so a signed package carries no byte its signature does not cover.
-     * An unsigned package's trailing bytes are not read, as before. */
+    /* An optional signature record (WASMOS_APP_SIG_*), which must be exactly the
+     * last bytes of the blob, so a signed package carries no byte its signature does
+     * not cover.  An unsigned package's trailing bytes are not read. */
     const uint8_t* signature = 0;
+    uint32_t signature_len = 0;
+    uint16_t signature_alg = 0;
     uint32_t signed_size = 0;
     if (hdr->signature_size != 0u) {
-        if (hdr->signature_size != WASMOS_APP_SIGNATURE_LEN ||
-            check_bounds(off, WASMOS_APP_SIGNATURE_LEN, blob_size) != 0 ||
-            off + WASMOS_APP_SIGNATURE_LEN != blob_size) {
+        uint16_t head[2];
+        if (hdr->signature_size < WASMOS_APP_SIG_HEAD_LEN ||
+            check_bounds(off, hdr->signature_size, blob_size) != 0 ||
+            off + hdr->signature_size != blob_size) {
             return -1;
         }
-        signature = &blob[off];
+        memcpy(head, &blob[off], sizeof(head));
+        signature_alg = head[0];
+        signature_len = head[1];
+        if (WASMOS_APP_SIG_HEAD_LEN + signature_len != hdr->signature_size) {
+            return -1;
+        }
+        if (signature_alg == WASMOS_APP_SIG_ALG_ED25519) {
+            if (signature_len != WASMOS_APP_SIG_ED25519_LEN) {
+                return -1;
+            }
+        } else if (signature_alg == WASMOS_APP_SIG_ALG_RSA_PSS_SHA512) {
+            if (signature_len < WASMOS_APP_SIG_RSA_MIN_LEN ||
+                signature_len > WASMOS_APP_SIG_RSA_MAX_LEN) {
+                return -1;
+            }
+        } else {
+            return -1;
+        }
+        memcpy(out_desc->signature_key_id, &blob[off + 4u], WASMOS_APP_SIG_KEY_ID_LEN);
+        signature = &blob[off + WASMOS_APP_SIG_HEAD_LEN];
         signed_size = off;
     }
 
@@ -596,6 +622,8 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->wasm_size = wasm_size;
     out_desc->compiled_count = compiled_count;
     out_desc->signature = signature;
+    out_desc->signature_len = signature_len;
+    out_desc->signature_alg = signature_alg;
     out_desc->signed_size = signed_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
@@ -618,23 +646,21 @@ int wasmos_app_compiled_for(const wasmos_app_desc_t* desc, uint16_t machine, con
 
 /* Whether a package's AOT code may run. AOT code executes as native code and
  * skips every check WARP's compiler would have emitted for the bytecode, so it
- * is trusted like a native image: only a package signed with the build's key
- * qualifies, whatever capabilities it asks for.
- * TODO: packages from outside the build (external apps) can only run from
- * bytecode until a second trust source -- a system keyring of signing keys --
- * is defined; this is where it would be consulted. */
-static int wasmos_app_aot_trusted(const wasmos_app_desc_t* desc) {
-    return wasmos_app_signature_valid(desc);
+ * is trusted like a native image: only a package signed by a trusted key
+ * qualifies -- the system key or a publisher's -- whatever capabilities it asks
+ * for. */
+static int wasmos_app_aot_trusted(uint32_t trust) {
+    return trust == WASMOS_APP_TRUST_SYSTEM || trust == WASMOS_APP_TRUST_PUBLISHER;
 }
 
-uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint16_t machine,
+uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint32_t trust, uint16_t machine,
                                const uint8_t** bytes, uint32_t* size) {
     *bytes = 0;
     *size = 0;
     if (desc->compiled_count == 0) {
         return WASMOS_APP_AOT_ABSENT;
     }
-    if (!wasmos_app_aot_trusted(desc)) {
+    if (!wasmos_app_aot_trusted(trust)) {
         return WASMOS_APP_AOT_UNTRUSTED;
     }
     if (wasmos_app_compiled_for(desc, machine, bytes, size) != 0) {
@@ -751,27 +777,45 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
  * a zero owner context, a name or entry that does not fit, a refused capability, an unresolvable
  * subsystem, or a failed start hook.  On failure the instance is left inactive, but capabilities
  * already granted to the context are NOT withdrawn. */
-int wasmos_app_signature_valid(const wasmos_app_desc_t* desc) {
-    if (!desc || !desc->signature || !desc->blob || desc->signed_size == 0u) {
-        return 0;
-    }
-    return crypto_ed25519_check(
-               desc->signature, wasmos_image_signing_pubkey, desc->blob, desc->signed_size) == 0
-               ? 1
-               : 0;
+/* 1 when the package's Ed25519 signature verifies against `pubkey`. */
+static int wasmos_app_ed25519_verifies(const wasmos_app_desc_t* desc, const uint8_t* pubkey) {
+    return crypto_ed25519_check(desc->signature, pubkey, desc->blob, desc->signed_size) == 0;
 }
 
-/* 1 when the package asks for any capability beyond ipc.basic, which is the only
- * one granted without regard to signature or requester. */
-static int wasmos_app_wants_privilege(const wasmos_app_desc_t* desc) {
-    static const char basic[] = "ipc.basic";
-    for (uint32_t i = 0; i < desc->cap_count; ++i) {
-        if (desc->caps[i].name_len != sizeof(basic) - 1u ||
-            memcmp(desc->caps[i].name, basic, sizeof(basic) - 1u) != 0) {
-            return 1;
-        }
+uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc) {
+    if (!desc || !desc->signature || !desc->blob || desc->signed_size == 0u) {
+        return WASMOS_APP_TRUST_UNSIGNED;
     }
-    return 0;
+    if (desc->signature_alg != WASMOS_APP_SIG_ALG_ED25519) {
+        return WASMOS_APP_TRUST_INVALID;
+    }
+    if (memcmp(desc->signature_key_id, wasmos_image_signing_key_id, WASMOS_APP_SIG_KEY_ID_LEN) ==
+        0) {
+        return wasmos_app_ed25519_verifies(desc, wasmos_image_signing_pubkey)
+                   ? WASMOS_APP_TRUST_SYSTEM
+                   : WASMOS_APP_TRUST_INVALID;
+    }
+    /* TODO: a key the keyring service registered (the build's app key, a
+     * publisher's) verifies to WASMOS_APP_TRUST_PUBLISHER; until the keyring
+     * exists, any key but the system key is unknown. */
+    return WASMOS_APP_TRUST_INVALID;
+}
+
+int wasmos_app_admit(const wasmos_app_desc_t* desc) {
+    if (wasmos_app_trust(desc) != WASMOS_APP_TRUST_INVALID) {
+        return 0;
+    }
+    char name[64];
+    if (str_copy_bytes(name, sizeof(name), desc->name, desc->name_len) != 0) {
+        name[0] = '?';
+        name[1] = '\0';
+    }
+    klog_printf("[wasmos-app] refused, signed but verified by no trusted key: %s\n", name);
+    return -1;
+}
+
+int wasmos_app_signature_valid(const wasmos_app_desc_t* desc) {
+    return wasmos_app_trust(desc) == WASMOS_APP_TRUST_SYSTEM;
 }
 
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
@@ -787,9 +831,22 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
         return -1;
     }
 
+    /* Evaluated once: it hashes the whole package. A signature that no trusted key
+     * verifies refuses the start here too, whichever path reached it; the process
+     * manager refuses such a spawn before creating the process
+     * (wasmos_app_admit). */
+    uint32_t trust = wasmos_app_trust(desc);
+    if (trust == WASMOS_APP_TRUST_INVALID) {
+        klog_printf("[wasmos-app] refused, signed but verified by no trusted key: %s\n",
+                    instance->name);
+        return -1;
+    }
+
     wasmos_app_grant_ctx_t grant_ctx = {
-        .image_signed =
-            (uint8_t)(wasmos_app_wants_privilege(desc) ? wasmos_app_signature_valid(desc) : 0),
+        .image_trust =
+            (uint8_t)(trust == WASMOS_APP_TRUST_SYSTEM      ? CAPABILITY_IMAGE_SYSTEM
+                      : trust == WASMOS_APP_TRUST_PUBLISHER ? CAPABILITY_IMAGE_PUBLISHER
+                                                            : CAPABILITY_IMAGE_UNTRUSTED),
         .requester_cap_mask = requester_cap_mask,
         .image_name = desc->name,
         .image_name_len = desc->name_len,
@@ -831,7 +888,7 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
     params.module_bytes = desc->wasm_bytes;
     params.module_size = desc->wasm_size;
     params.compiled_status = wasmos_app_aot_select(
-        desc, ARCH_ELF_MACHINE, &params.compiled_bytes, &params.compiled_size);
+        desc, trust, ARCH_ELF_MACHINE, &params.compiled_bytes, &params.compiled_size);
     params.entry_export = 0;
     params.entry_argc = 0;
     params.entry_argv = 0;

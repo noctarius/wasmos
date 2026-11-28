@@ -178,15 +178,25 @@ config QEMU_GDB_PORT
     default 1234
 
 config WASMOS_SIGNING_KEY
-    string "Package signing seed (path to a hex file)"
+    string "System package signing seed (path to a hex file)"
     default ""
     help
-      The Ed25519 seed every .wap this build packs is signed with, as a file
+      The Ed25519 seed the system's own packages are signed with, as a file
       of 32 bytes in hex. Its public key is compiled into the kernel, which
       grants a manifest's privileged capabilities only to a package signed
       with it (docs/architecture/10-capability-and-policy.md). Empty: the
       build creates a development seed in the build directory
       (signing/dev-seed.hex) once and keeps using it. Packages signed with one
-      build's key are refused privilege by a kernel built with another.
+      build's key are refused by a kernel built with another.
+
+config WASMOS_APP_SIGNING_KEY
+    string "App package signing seed (path to a hex file)"
+    default ""
+    help
+      The Ed25519 seed for apps that ask for no privilege. Its public key is
+      installed in the keyring directory as /boot/system/keys/apps.pem and is
+      NOT compiled into the kernel: it is trusted only once the keyring has
+      registered it, and a package signed with it is granted ipc.basic only.
+      Empty: a development seed is created once as signing/dev-app-seed.hex.
 
 endmenu

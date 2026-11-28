@@ -19,8 +19,9 @@ config WASMOS_ARCH_AARCH64
     help
       arm64 port under wasm3, booting to the CLI and gated by
       run-qemu-test and the QEMU batteries, on one core or (WASMOS_SMP)
-      several brought up through PSCI CPU_ON. WARP is not implemented on
-      aarch64 yet; the interrupt controller choice (PIC/LAPIC/IOAPIC) is
+      several brought up through PSCI CPU_ON. WARP builds for aarch64 but
+      does not run yet: its ring-3 entry and linear-memory window are
+      x86_64-only. The interrupt controller choice (PIC/LAPIC/IOAPIC) is
       x86_64's.
 
 endchoice
@@ -141,6 +142,7 @@ config WASMOS_PM_LIST_ARRAY_CHUNK_CAP
 
 choice
     prompt "WASM runtime backend"
+    default WASMOS_WASM_RUNTIME_WASM3 if WASMOS_ARCH_AARCH64
     default WASMOS_WASM_RUNTIME_WARP
 
 config WASMOS_WASM_RUNTIME_WASM3
@@ -150,7 +152,6 @@ config WASMOS_WASM_RUNTIME_WASM3
 
 config WASMOS_WASM_RUNTIME_WARP
     bool "WARP (JIT compiler)"
-    depends on WASMOS_ARCH_X86_64
     help
       Use the WARP single-pass JIT compiler. C++14, near-native execution speed.
       Requires the freestanding C++ ABI shim in the kernel (warp_shim.cpp).
@@ -159,11 +160,12 @@ endchoice
 
 config WASMOS_WARP_RUNTIME_LOAD_AOT
     bool "Load bundled AOT binaries at runtime"
-    default y
+    default y if WASMOS_ARCH_X86_64
     help
       When disabled, every WARP app takes the JIT path (initFromBytecode)
       without changing any packed artifact, so an AOT build and a JIT build
-      differ only in the kernel.
+      differ only in the kernel. Off by default on aarch64: the bundled AOT
+      code is x86_64, and WARP does not check a compiled binary's ISA.
 
 config WASMOS_SCHED_SMP_STRESS
     bool "Run the standalone SMP scheduler stress test"

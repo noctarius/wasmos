@@ -40,6 +40,14 @@ HOST_ASM = R(
 # arch inline (arch/arch_context.h selects on WASMOS_ARCH_AARCH64).
 HOST_ARCH_DEFS = ["-DWASMOS_ARCH_AARCH64=1"] if _ARCH in ("arm64", "aarch64") else []
 
+# The kernel's warp_setjmp/warp_longjmp for the host: the aarch64 assembly pair on
+# an arm64 host, nothing extra on x86_64 (its header maps to clang builtins).
+HOST_WARP_JMP = (
+    [R("src/kernel/arch/aarch64/warp_jmp_aarch64.S")]
+    if _ARCH in ("arm64", "aarch64")
+    else []
+)
+
 # Linker flag that drops unreferenced sections (ld64 vs GNU/lld spelling).
 DEAD_STRIP = "-Wl,-dead_strip" if platform.system() == "Darwin" else "-Wl,--gc-sections"
 
@@ -315,6 +323,8 @@ TESTS = [
     (RUN, 'test_warp_compat_sync_tsan', []),
     (CXX, 'test_warp_compat_traits', WARP_COMPAT_TRAITS),
     (RUN, 'test_warp_compat_traits', []),
+    (CC, 'test_warp_jmp', [*C11, '-O2', *HOST_ARCH_DEFS, '-iquote', R('src/kernel/include'), '-iquote', R('tests/unit'), R('tests/unit/test_warp_jmp.c'), *HOST_WARP_JMP]),
+    (RUN, 'test_warp_jmp', []),
     (CC, 'test_warp_exception_checkpoint', [*C11, '-Wno-unused-parameter', *HOST_ARCH_DEFS, '-DWASMOS_HOST_TEST_SMP=1', '-DWASMOS_SMP=1', '-DWASMOS_WASM_RUNTIME_WARP', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('libs/wasm3/source'), '-iquote', R('abi/generated/c'), '-iquote', R('tests/unit'), '-iquote', R('src/kernel'), R('tests/unit/test_warp_exception_checkpoint.c'), R('src/kernel/warp/exception_checkpoint.c'), R('tests/unit/stubs_kpanic.c')]),
     (RUN, 'test_warp_exception_checkpoint', []),
     (CC, 'test_warp_driver_ring3_call_policy', [*C11, "-I" + R('src/kernel/include'), R('tests/unit/test_warp_driver_ring3_call_policy.c'), R('src/kernel/warp_driver_ring3_call_policy.c')]),

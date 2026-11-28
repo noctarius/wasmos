@@ -4,19 +4,21 @@
 /* The WARP backend's C++ exception checkpoint (warp/cxx_abi.cpp).  WARP throws
  * C++ exceptions internally; the kernel catches every one of them at the driver
  * boundary instead of unwinding.  Before a call into WARP, warp_driver.cpp arms a
- * checkpoint with __builtin_setjmp(jbuf) and active = 1, and disarms it when the
+ * checkpoint with warp_setjmp(jbuf) and active = 1, and disarms it when the
  * call returns.  __cxa_throw longjmps to the armed checkpoint, or panics when none
  * is armed.  Nested checkpoints are not supported. */
 
 #include <stdint.h>
+
+#include "arch/warp_jmp.h"
 
 /* Depth of nested function-local static initialisation a thread may reach; one
  * more panics (warp_exception_note_guard). */
 #define WARP_EXCEPTION_MAX_GUARDS 8u
 
 typedef struct warp_exception_checkpoint {
-    void* jbuf[5]; /* __builtin_setjmp buffer */
-    int active;    /* 1 while armed */
+    warp_jmp_buf_t jbuf; /* warp_setjmp buffer (arch/warp_jmp.h) */
+    int active;          /* 1 while armed */
     /* Top of the SJLJ unwind context stack (warp/sjlj_unwind.cpp), which shares
      * the checkpoint's owner. */
     void* sjlj_top;
@@ -42,7 +44,7 @@ warp_exception_checkpoint_t* warp_exception_get_checkpoint(void);
  * skips because nothing is unwound: every guard the thread holds BUSY returns to 0,
  * so the static is initialised again on its next use rather than spun on forever,
  * and the SJLJ stack is emptied, since every frame registered since arming is
- * discarded.  __cxa_throw calls it immediately before __builtin_longjmp. */
+ * discarded.  __cxa_throw calls it immediately before warp_longjmp. */
 void warp_exception_abandon(warp_exception_checkpoint_t* ckpt);
 
 /* Record that the calling thread now holds guard `g` BUSY / no longer does.  Called

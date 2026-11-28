@@ -6,7 +6,7 @@
  *
  * Exception strategy: try/catch requires a working C++ unwinder, so the
  * per-thread exception checkpoint (include/warp_exception.h) is used instead.  Each call into
- * WARP arms a __builtin_setjmp checkpoint first; __cxa_throw longjmps directly back to
+ * WARP arms a warp_setjmp checkpoint first; __cxa_throw longjmps directly back to
  * it, so an exception never propagates through kernel call frames — and nothing between
  * the throw and the checkpoint is unwound.  The WARP_CALL macro below packages that
  * pattern, but the call sites open-code it so they can run their own recovery. */
@@ -90,7 +90,7 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     do {                                                                                           \
         warp_exception_checkpoint_t* _ckpt = warp_exception_get_checkpoint();                      \
         _ckpt->active = 1;                                                                         \
-        if (__builtin_setjmp(_ckpt->jbuf)) {                                                       \
+        if (warp_setjmp(_ckpt->jbuf)) {                                                            \
             klog_write("[warp-driver] WARP exception caught\n");                                   \
             _ckpt->active = 0;                                                                     \
             return (err_ret);                                                                      \
@@ -158,7 +158,7 @@ static KernelLogger g_logger;
 static int warp_driver_start_module(vb::WasmModule* mod, uint64_t user_root) {
     warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
-    if (__builtin_setjmp(ckpt->jbuf) != 0) {
+    if (warp_setjmp(ckpt->jbuf) != 0) {
         klog_write("[warp-driver] exception during start\n");
         ckpt->active = 0;
         return -1;
@@ -259,7 +259,7 @@ static int call_export_mod(vb::WasmModule* mod, const char* name, uint32_t argc,
 #endif
     warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
-    if (__builtin_setjmp(ckpt->jbuf)) {
+    if (warp_setjmp(ckpt->jbuf)) {
         klog_write("[warp-driver] exception during export call\n");
         ckpt->active = 0;
         return -1;
@@ -392,7 +392,7 @@ static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
     uint8_t const* kernel_fn = nullptr;
     warp_exception_checkpoint_t* ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
-    if (__builtin_setjmp(ckpt->jbuf)) {
+    if (warp_setjmp(ckpt->jbuf)) {
         ckpt->active = 0;
         return 0;
     }
@@ -497,11 +497,21 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     t->warp_r3_old_cr3 = paging_get_current_root_table();
     paging_switch_root(user_root);
 
+    /* The interrupt state the call starts in. The jump back lands from the
+     * WARP_RETURN syscall, which runs with interrupts masked (an x86_64 interrupt
+     * gate, an aarch64 exception), and the jump buffer restores no PSTATE/RFLAGS,
+     * so without this the driver thread would continue with interrupts masked and
+     * never be preempted. Not modified between the setjmp and the jump. */
+    arch_irq_flags_t irq_state = arch_irq_save();
+    arch_irq_restore(irq_state);
+
     /* Checkpoint: longjmp from WARP_RETURN syscall handler lands here. */
     t->warp_r3_active = 1;
-    if (__builtin_setjmp(t->warp_r3_jbuf) != 0) {
-        /* WARP_RETURN fired — restore kernel CR3 and return. */
+    if (warp_setjmp(t->warp_r3_jbuf) != 0) {
+        /* WARP_RETURN fired — restore the kernel root first, with interrupts
+         * still masked, then the interrupt state the call began in. */
         paging_switch_root(t->warp_r3_old_cr3);
+        arch_irq_restore(irq_state);
         uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_TRAP_CODE);
         return (tc == 0) ? 0 : -1;
     }
@@ -636,7 +646,11 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
 
     /* Allocate and compile/load the WASM module; catch any WARP exceptions. */
-    vb::WasmModule* mod = nullptr;
+    /* volatile: assigned after the checkpoints below are armed and read in their
+     * landing pads, and a non-volatile local modified between warp_setjmp and the
+     * jump holds an unspecified value there (arch/warp_jmp.h) -- in practice the
+     * nullptr it held at the setjmp, so the half-built module would leak. */
+    vb::WasmModule* volatile mod = nullptr;
     void* warp_ctx = warp_context_for_pid(driver->owner_pid);
     if (!warp_ctx) {
         warp_runtime_leave(prev);
@@ -655,7 +669,7 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
     if (WASMOS_WARP_RUNTIME_LOAD_AOT && manifest->compiled_bytes != nullptr &&
         manifest->compiled_size > 0) {
         ckpt->active = 1;
-        if (__builtin_setjmp(ckpt->jbuf)) {
+        if (warp_setjmp(ckpt->jbuf)) {
             /* AOT load failed — discard the half-initialised module and let
              * the JIT path below handle it. */
             ckpt->active = 0;
@@ -682,14 +696,14 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
     /* JIT path: used when no AOT binary was present or AOT loading failed. */
     if (use_jit) {
         ckpt->active = 1;
-        if (__builtin_setjmp(ckpt->jbuf)) {
+        if (warp_setjmp(ckpt->jbuf)) {
             klog_write("[warp-driver] module compilation failed\n");
             /* Re-arm the checkpoint before calling the WasmModule destructor.
              * If the destructor throws (e.g. while freeing partially-compiled
              * JIT code), the exception is caught here rather than reaching the
              * top-level handler and causing a kernel panic. */
             ckpt->active = 1;
-            if (__builtin_setjmp(ckpt->jbuf) == 0) {
+            if (warp_setjmp(ckpt->jbuf) == 0) {
                 delete mod;
             }
             ckpt->active = 0;

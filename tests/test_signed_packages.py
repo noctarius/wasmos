@@ -35,6 +35,10 @@ UNSIGNED = b"[pm] refused svc.control to priv-probe: the image is not signed"
 REQUESTER = b"[pm] refused svc.control to priv-probe: the requester holds neither"
 APP_START_FAILED = b"[pm] app start failed"
 INVALID = b"[wasmos-app] refused, signed but verified by no trusted key: priv-probe"
+SYSTEM_ONLY = (
+    b"[pm] refused svc.control to priv-probe: only the system key grants it, "
+    b"and the image is a publisher's"
+)
 
 
 class SignedPackagesTest(unittest.TestCase):
@@ -111,6 +115,13 @@ class SignedPackagesTest(unittest.TestCase):
             f"no prompt after the refused spawn.\n{tail}",
         )
         self.assertFalse(STARTED in self._log_since(start, syslog_start), tail)
+
+    def test_a_publisher_package_gets_no_critical_kind(self):
+        # Regression: 2026-11-28-publisher-grants -- any trusted signature
+        # granted every capability the manifest declared. priv_publisher is
+        # priv_probe signed with the build's app key, which the keyring
+        # registered: it is trusted, and its svc.control is refused.
+        self._run("priv_publisher", SYSTEM_ONLY, refused=True)
 
     def test_a_requester_cannot_hand_out_what_it_does_not_hold(self):
         self._run("priv_deputy", REQUESTER, refused=True)

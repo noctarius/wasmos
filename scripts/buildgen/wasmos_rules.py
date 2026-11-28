@@ -64,6 +64,52 @@ def _manifest_aot(manifest: Path):
     )
 
 
+# Capability kinds a publisher's key may grant (capability_kind_for_apps in
+# src/kernel/capability.c); ipc.basic is everyone's.
+APP_KINDS = {"ipc.basic", "dma.buffer"}
+
+
+def _initfs_packages(b):
+    """The package files the tree's initfs image carries
+    (scripts/initfs.<arch>.toml): started before the keyring exists."""
+    toml = b.root / f"scripts/initfs.{arch(b.cfg).name}.toml"
+    b.regen_on(toml)
+    try:
+        entries = tomllib.loads(toml.read_text())
+    except OSError:
+        return set()
+    return {
+        e.get("source", "")
+        for table in entries.values()
+        if isinstance(table, list)
+        for e in table
+        if isinstance(e, dict)
+    }
+
+
+def _signing_seed(b, name, manifest: Path):
+    """The seed a package is signed with: the build's app key for an examples/
+    package whose manifest asks only for app kinds (APP_KINDS) and that the
+    initfs image does not carry, the system key for everything else. The kernel
+    trusts the app key only once the keyring has registered it, and grants it the
+    app kinds only, so a demo app that needs a critical kind -- system.control,
+    mmio.map -- or that boot starts before the keyring is signed with the system
+    key like the system's own packages (docs/architecture/10, "Signed
+    Packages")."""
+    try:
+        examples = Path(manifest).resolve().is_relative_to(b.root / "examples")
+        caps = tomllib.loads(Path(manifest).read_text()).get("capabilities", [])
+    except OSError:
+        return b.exports["signing.seed"]
+    if (
+        examples
+        and all(c.get("name") in APP_KINDS for c in caps)
+        and f"{name}.wap" not in _initfs_packages(b)
+    ):
+        return b.exports["signing.app_seed"]
+    return b.exports["signing.seed"]
+
+
 def pack(b, name, image, manifest, aot=None, sign=True):
     """Pack a module image (.wasm or native .elf) into <name>.wap.
 
@@ -75,9 +121,9 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     `aot="foreign"` bundles every architecture EXCEPT the tree's: a test fixture
     for a package this kernel has no AOT binary for.
     `aot=False` forces the plain path (native images are never AOT-compiled).
-    The package is signed with the build's system key unless `sign=False`, or
-    with the seed file `sign` names when it is a path: both only a test of the
-    signature policy wants."""
+    The package is signed with one of the build's keys (_signing_seed) unless
+    `sign=False`, or with the seed file `sign` names when it is a path: both only
+    a test of the signature policy wants."""
     sdk = b.exports["sdk"]
     manifest = Path(manifest)
     b.regen_on(manifest)  # `aot = true` is read at generation time
@@ -109,7 +155,7 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     # The kernel grants a privileged capability only to a package signed with
     # the build's key (docs/architecture/10-capability-and-policy.md).
     if sign:
-        seed = sign if isinstance(sign, Path) else b.exports["signing.seed"]
+        seed = sign if isinstance(sign, Path) else _signing_seed(b, name, manifest)
         argv += ["--sign", seed]
         implicit.append(seed)
     argv += ["--out", wap]

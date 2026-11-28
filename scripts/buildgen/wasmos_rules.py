@@ -47,18 +47,28 @@ def _run(tool: str) -> str:
     return tool if "/" in tool else f"./{tool}"
 
 
-def _manifest_wants_aot(manifest: Path) -> bool:
+def _manifest_aot(manifest: Path):
+    """The manifest's `aot` setting: "all" for `aot = "all"`, True for
+    `aot = true`, False otherwise."""
     try:
-        return "aot = true" in Path(manifest).read_text()
+        text = Path(manifest).read_text()
     except OSError:
         return False
+    if 'aot = "all"' in text:
+        return "all"
+    return "aot = true" in text
 
 
 def pack(b, name, image, manifest, aot=None, sign=True):
     """Pack a module image (.wasm or native .elf) into <name>.wap.
 
     Under WARP, a wasm module whose manifest says `aot = true` is compiled
-    ahead of time by warp_aot and the .warpbin is bundled next to the bytecode.
+    ahead of time for the tree's architecture and the .warpbin is bundled next
+    to the bytecode, tagged with that architecture. `aot = "all"` bundles one per
+    architecture (a "fat" package that runs from AOT code on either); system
+    modules ship with the kernel that runs them and need only their own.
+    `aot="foreign"` bundles every architecture EXCEPT the tree's: a test fixture
+    for a package this kernel has no AOT binary for.
     `aot=False` forces the plain path (native images are never AOT-compiled).
     The package is signed with the build's key unless `sign=False`, which only
     a test of the signature policy wants."""
@@ -69,19 +79,27 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     argv = [_run(sdk["packer"]), "--manifest", manifest, "--in", image]
     implicit = [manifest, sdk["packer"]]
     if aot is None:
-        aot = _manifest_wants_aot(manifest)
+        aot = _manifest_aot(manifest)
     warp_aot = b.exports.get("warp_aot")
     if aot and warp_aot:
-        warpbin = f"{name}.warpbin"
-        b.command(
-            [warpbin],
-            [_run(warp_aot), image, warpbin],
-            inputs=[image],
-            implicit=[warp_aot],
-            description=f"AOT {warpbin}",
-        )
-        argv += ["--compiled", warpbin]
-        implicit.append(warpbin)
+        tools = warp_aot["tools"]
+        if aot == "all":
+            arches = sorted(tools)
+        elif aot == "foreign":
+            arches = sorted(a for a in tools if a != warp_aot["tree"])
+        else:
+            arches = [warp_aot["tree"]]
+        for arch in arches:
+            warpbin = f"{name}.{arch}.warpbin"
+            b.command(
+                [warpbin],
+                [_run(tools[arch]), image, warpbin],
+                inputs=[image],
+                implicit=[tools[arch]],
+                description=f"AOT {warpbin}",
+            )
+            argv += ["--compiled", f"{arch}={warpbin}"]
+            implicit.append(warpbin)
     # The kernel grants a privileged capability only to a package signed with
     # the build's key (docs/architecture/10-capability-and-policy.md).
     if sign:

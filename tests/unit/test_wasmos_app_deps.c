@@ -31,7 +31,7 @@ typedef struct __attribute__((packed)) {
     uint32_t dep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
-    uint32_t compiled_size;
+    uint32_t compiled_count;
     char subsystem_tag[8];
     uint32_t region_count;
     uint32_t signature_size;

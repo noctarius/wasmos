@@ -49,6 +49,25 @@ def build(b):
         kernel_blob(b, "chardev_client.wasm")
     )
 
+    # One source packed twice for tests/test_warp_aot.py: with an AOT binary
+    # for every architecture, and with one only for the architectures other
+    # than the tree's.
+    wap = guest(
+        b,
+        "aot_fat",
+        [b.src("aot_probe/aot_probe.c")],
+        manifest=b.src("aot_probe/linker.metadata"),
+    )
+    install(b, "apps/aotfat.wap", wap)
+    wap = guest(
+        b,
+        "aot_foreign",
+        [b.src("aot_probe/aot_probe.c")],
+        manifest=b.src("aot_probe/foreign.metadata"),
+        aot="foreign",
+    )
+    install(b, "apps/aotforgn.wap", wap)
+
     wap = guest(
         b,
         "hello_c",

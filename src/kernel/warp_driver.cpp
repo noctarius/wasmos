@@ -669,11 +669,13 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
             /* AOT load failed — discard the half-initialised module and let
              * the JIT path below handle it. */
             ckpt->active = 0;
-            klog_write("[warp-driver] AOT load failed, falling back to JIT\n");
+            klog_printf("[warp-driver] %s: AOT load failed, falling back to JIT\n",
+                        manifest->name ? manifest->name : "?");
             delete mod;
             mod = nullptr;
         } else {
-            klog_write("[warp-driver] using AOT binary\n");
+            klog_printf("[warp-driver] %s: using AOT binary\n",
+                        manifest->name ? manifest->name : "?");
             mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
             /* Arm the linmem-block identification: the first warp_krealloc grow
              * (inside initFromCompiledBinary) moves the block into a dedicated

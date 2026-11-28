@@ -1,6 +1,8 @@
-"""warp_aot: host tool that compiles a wasm module ahead of time with WARP's
-code generator for the tree's target architecture, whatever the host's. Built
+"""warp_aot-<arch>: host tools that compile a wasm module ahead of time with
+WARP's code generator for one target architecture, whatever the host's. Built
 only for a WARP configuration."""
+
+import platform
 
 # Vendored WARP sources (libs/warp is a git subtree; never edited here).
 WARP_SOURCES = [
@@ -50,18 +52,23 @@ WARP_SOURCES = [
 TOOL_SOURCES = ["host_mem_utils.cpp", "host_shim.cpp", "warp_aot.cpp"]
 
 
+# The JIT target each architecture's tool is built with. WARP picks its code
+# generator at compile time and records no ISA in a compiled binary, so a
+# .warpbin is tagged with its architecture by the packer (--compiled
+# <arch>=<path>), and the kernel uses only the one for its own.
+JIT_TARGETS = {"x86_64": "-DJIT_TARGET_X86_64", "aarch64": "-DJIT_TARGET_AARCH64"}
+
+
+def _host_arch():
+    machine = platform.machine().lower()
+    return {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+
+
 def build(b):
     warp = b.root / "libs/warp"
-    # The code generator is chosen at compile time and WARP records no ISA in a
-    # compiled binary, so this must name the kernel's architecture: a blob for
-    # another one loads without complaint and executes as garbage.
-    jit_target = (
-        "-DJIT_TARGET_AARCH64" if b.cfg.WASMOS_ARCH_AARCH64 else "-DJIT_TARGET_X86_64"
-    )
     flags = [
         "-std=c++14",
         "-O2",
-        jit_target,
         "-DACTIVE_STACK_OVERFLOW_CHECK=1",
         "-DLINEAR_MEMORY_BOUNDS_CHECKS=1",
         "-DVB_POSIX",
@@ -79,29 +86,40 @@ def build(b):
         "-Wno-unsequenced",
         "-Wno-#pragma-messages",
     ]
+    tree_arch = "aarch64" if b.cfg.WASMOS_ARCH_AARCH64 else "x86_64"
     host = b.toolchain("host")
     if not b.cfg.WASMOS_WASM_RUNTIME_WARP:
         # Only a WARP tree builds the tool; index its own sources regardless.
         for src in b.srcs(*TOOL_SOURCES):
-            b.index(src, [host.tc.cxx, *host.tc.cxxflags, *flags])
+            b.index(
+                src, [host.tc.cxx, *host.tc.cxxflags, *flags, JIT_TARGETS[tree_arch]]
+            )
         return
-    objs = host.compile(
-        [warp / s for s in WARP_SOURCES] + b.srcs(*TOOL_SOURCES),
-        cxxflags=flags,
-        subdir="obj/warp_aot",
-    )
-    tool = "warp_aot"
-    b.command(
-        [tool],
-        [b.tools["clangxx"], *objs, "-o", tool],
-        inputs=objs,
-        description=f"LINK[host] {tool}",
-    )
-    b.exports["warp_aot"] = tool
-    # The WARP host test (tests/unit) links the same runtime build.
+    # One tool per target architecture, warp_aot-<arch>. A tree's own modules use
+    # its own architecture's; a package with `aot = "all"` (wasmos_rules.pack)
+    # also uses the others, and only then are they built.
+    tools = {}
+    for arch, target in JIT_TARGETS.items():
+        objs = host.compile(
+            [warp / s for s in WARP_SOURCES] + b.srcs(*TOOL_SOURCES),
+            cxxflags=[*flags, target],
+            subdir=f"obj/warp_aot/{arch}",
+        )
+        tool = f"warp_aot-{arch}"
+        b.command(
+            [tool],
+            [b.tools["clangxx"], *objs, "-o", tool],
+            inputs=objs,
+            description=f"LINK[host] {tool}",
+        )
+        tools[arch] = tool
+    b.exports["warp_aot"] = {"tree": tree_arch, "tools": tools}
+    # The WARP host test (tests/unit) links the same runtime and EXECUTES what it
+    # compiles, so its target is the host's architecture, not the tree's.
+    host_target = JIT_TARGETS.get(_host_arch(), JIT_TARGETS["x86_64"])
     b.exports["warp_host"] = {
         "sources": [warp / s for s in WARP_SOURCES]
         + b.srcs("host_mem_utils.cpp", "host_shim.cpp"),
-        "flags": flags,
+        "flags": [*flags, host_target],
     }
-    b.alias("warp_aot_tool", tool)
+    b.alias("warp_aot_tool", tools[tree_arch])

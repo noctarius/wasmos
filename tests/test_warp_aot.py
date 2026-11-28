@@ -11,8 +11,10 @@ if SCRIPTS not in sys.path:
 
 from qemu_test_framework import QemuSession, build_config_enabled, default_config
 
-AOT_USED = "[warp-driver] using AOT binary"
-AOT_FAILED = "[warp-driver] AOT load failed"
+AOT_USED = ": using AOT binary"
+AOT_FAILED = ": AOT load failed"
+NO_AOT_HERE = ": no AOT binary for this architecture"
+PROBE_OK = b"[test] aot-probe ok sum=5050"
 
 
 @unittest.skipUnless(
@@ -34,6 +36,13 @@ class WarpAotLoadTest(unittest.TestCase):
     Regression: 2026-11-28-warp-aot-host-isa -- warp_aot was built with
     JIT_TARGET_X86_64 whatever the target, so aarch64 trees packed x86_64 code
     and had to boot with AOT loading off, compiling every module at spawn.
+
+    Regression: 2026-11-28-wap-aot-untagged -- a .wap did not record which
+    architecture its AOT binary was for, so a package built for x86_64 and
+    spawned on aarch64 executed x86_64 code at EL0 and panicked the kernel. A
+    v12 package tags each binary with its ELF machine and may carry one per
+    architecture; the kernel uses only its own and otherwise compiles the
+    bytecode. examples/c/aot_probe is packed both ways.
     """
 
     @classmethod
@@ -67,6 +76,33 @@ class WarpAotLoadTest(unittest.TestCase):
             0,
             f"no module loaded an AOT binary\n--- kernel log ---\n{log[-4096:]}",
         )
+
+    def _spawn_probe(self, path: str) -> str:
+        start = self.session.send_command(f"spawn {path}", timeout_s=30)
+        self.assertTrue(
+            self.session.expect_from(start, PROBE_OK, timeout_s=30),
+            f"{path} did not run\n--- tail ---\n{self.session.tail()}",
+        )
+        return self.session.syslog_tail(1 << 20)
+
+    def test_a_fat_package_runs_from_its_own_architecture(self) -> None:
+        log = self._spawn_probe("/boot/apps/aotfat")
+        self.assertIn(
+            "aot-fat" + AOT_USED,
+            log,
+            f"the fat package did not use its AOT binary\n--- kernel log ---\n{log[-4096:]}",
+        )
+        self.assertNotIn("aot-fat" + NO_AOT_HERE, log)
+        self.assertNotIn(AOT_FAILED, log)
+
+    def test_a_package_without_this_architecture_runs_from_bytecode(self) -> None:
+        log = self._spawn_probe("/boot/apps/aotforgn")
+        self.assertIn(
+            "aot-foreign" + NO_AOT_HERE,
+            log,
+            f"no fallback was reported\n--- kernel log ---\n{log[-4096:]}",
+        )
+        self.assertNotIn("aot-foreign" + AOT_USED, log)
 
     def test_an_aot_utility_runs(self) -> None:
         start = self.session.send_command("sysinfo", timeout_s=30)

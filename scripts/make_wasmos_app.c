@@ -9,9 +9,14 @@
 
 /* Container identity. MAGIC is the 8-byte magic, compared byte-for-byte and
  * NOT NUL-terminated in the file. VERSION selects which header layout the parser
- * applies; this packer emits 11, and src/kernel/wasmos_app.c accepts only 11. */
+ * applies; this packer emits 12, and src/kernel/wasmos_app.c accepts only 12. */
 #define MAGIC "WASMOSAP"
-#define VERSION 11u
+#define VERSION 12u
+/* Most WARP AOT binaries one package carries (WASMOS_APP_MAX_COMPILED), and the
+ * ELF e_machine values that tag them. */
+#define MAX_COMPILED 4u
+#define EM_X86_64 62u
+#define EM_AARCH64 183u
 /* An Ed25519 signature (RFC 8032), and the seed and public key it is made from. */
 #define SIGNATURE_LEN 64u
 #define SEED_LEN 32u
@@ -68,7 +73,8 @@
  *   cap_count x (wasmos_cap_request_t + name bytes),
  *   region_count x wasmos_region_entry_t,
  *   mem_hint_count x wasmos_mem_hint_t (stack then heap),
- *   wasm_size raw payload bytes, then compiled_size WARP AOT bytes if non-zero,
+ *   wasm_size raw payload bytes, then compiled_count x wasmos_compiled_record_t,
+ *   then the compiled_count WARP AOT binaries in table order,
  *   then signature_size signature bytes if non-zero.
  * Nothing is padded or aligned between sections; the parser advances by the
  * counts in this header alone.
@@ -91,8 +97,8 @@
  *                            the manifest's [deps] table; 0 without one.
  *   cap_count                Number of capability-request records (max 8).
  *   mem_hint_count           Number of memory-hint records; always 2.
- *   compiled_size            Byte length of the WARP AOT binary appended after
- *                            the payload; 0 when absent.
+ *   compiled_count           Number of WARP AOT binaries (max MAX_COMPILED),
+ *                            each for a different architecture; 0 when none.
  *   subsystem_tag            Up-to-8-byte tag, NUL-padded, from [A-Z0-9+_-];
  *                            defaults to "NATIVE" or "WASM".
  *   region_count             Number of wasmos_region_entry_t records, written
@@ -112,7 +118,7 @@ typedef struct __attribute__((packed)) {
     uint32_t dep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
-    uint32_t compiled_size; /* size of the WARP AOT binary appended after WASM; 0 if absent */
+    uint32_t compiled_count; /* WARP AOT binaries after the payload; 0 if none */
     char subsystem_tag[SUBSYSTEM_TAG_LEN];
     uint32_t region_count;   /* declared register windows */
     uint32_t signature_size; /* 0, or SIGNATURE_LEN: the signature that ends the package */
@@ -756,27 +762,70 @@ static int check_deps(int count, char** paths) {
     return rc;
 }
 
-/* Pack one payload into a .wap package, or check dependencies. Three mutually
- * exclusive command lines:
- *
- *   --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled <in.warpbin>]
- *       Preferred form. Everything except the payload comes from the linker
- *       manifest, and --compiled appends a pre-built WARP AOT binary.
- *
- *   --check-deps <manifest>...
- *       Writes nothing; fails on a cycle of [deps] needs edges (check_deps).
- *
- *   <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags>
- *   <cap_count> [<cap_name> <cap_flags>]...
- *       Positional form, kept for callers that have no manifest. This form
- *       emits no AOT binary, no region records and no dependencies.
- *
- * Writes the header and sections in the exact order src/kernel/wasmos_app.c
- * parses them, then the payload, then the AOT binary if present. Returns 0 on
- * success and 1 on any failure: bad arguments, an unknown capability name, a
- * non-zero capability flags value, an unreadable input, an empty --compiled
- * file, or a short write. A failed run may leave a truncated output file behind,
- * because errors after fopen do not remove it. */
+/* One AOT table record, byte-identical to wasmos_app_compiled_record_t in
+ * src/kernel/wasmos_app.c: the ELF e_machine of the binary's code and its byte
+ * length. The kernel uses a binary only on the architecture its tag names, so a
+ * package can carry one per architecture and stay runnable on each. */
+typedef struct __attribute__((packed)) {
+    uint16_t machine;
+    uint16_t reserved;
+    uint32_t size;
+} wasmos_compiled_record_t;
+
+/* Load one `--compiled <arch>=<path>` argument: `arch` is x86_64 or aarch64.
+ * Fills *rec and hands the bytes to *data (malloc'd, the caller frees). Returns
+ * 0, or -1 after a message for an unknown architecture, an unreadable or empty
+ * file, or a file over 4 GiB. */
+static int load_compiled(const char* arg, wasmos_compiled_record_t* rec, uint8_t** data) {
+    const char* eq = strchr(arg, '=');
+    if (!eq) {
+        fprintf(stderr, "--compiled wants <arch>=<path>: %s\n", arg);
+        return -1;
+    }
+    size_t arch_len = (size_t)(eq - arg);
+    if (arch_len == 6 && strncmp(arg, "x86_64", 6) == 0) {
+        rec->machine = EM_X86_64;
+    } else if (arch_len == 7 && strncmp(arg, "aarch64", 7) == 0) {
+        rec->machine = EM_AARCH64;
+    } else {
+        fprintf(stderr, "--compiled: unknown architecture in %s\n", arg);
+        return -1;
+    }
+    rec->reserved = 0;
+    const char* path = eq + 1;
+    FILE* cf = fopen(path, "rb");
+    if (!cf) {
+        perror(path);
+        return -1;
+    }
+    long csz = -1;
+    if (fseek(cf, 0, SEEK_END) == 0) {
+        csz = ftell(cf);
+    }
+    if (csz <= 0 || (unsigned long)csz > 0xFFFFFFFFul || fseek(cf, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "compiled file is empty or unreadable: %s\n", path);
+        fclose(cf);
+        return -1;
+    }
+    *data = (uint8_t*)malloc((size_t)csz);
+    if (!*data || fread(*data, 1, (size_t)csz, cf) != (size_t)csz) {
+        perror(path);
+        free(*data);
+        *data = NULL;
+        fclose(cf);
+        return -1;
+    }
+    fclose(cf);
+    rec->size = (uint32_t)csz;
+    return 0;
+}
+
+static void free_compiled(uint8_t** data, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        free(data[i]);
+    }
+}
+
 /* Read a signing seed: SEED_LEN bytes written as hex, whitespace ignored. */
 static int read_seed(const char* path, uint8_t seed[SEED_LEN]) {
     FILE* f = fopen(path, "r");
@@ -891,6 +940,28 @@ static int emit_pubkey_c(const char* seed_path, const char* out_path) {
     return fclose(f) == 0 ? 0 : 1;
 }
 
+/* Pack one payload into a .wap package, or check dependencies. Three mutually
+ * exclusive command lines:
+ *
+ *   --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled <arch>=<in.warpbin>]...
+ *       Preferred form. Everything except the payload comes from the linker
+ *       manifest; each --compiled adds a pre-built WARP AOT binary for one
+ *       architecture (load_compiled).
+ *
+ *   --check-deps <manifest>...
+ *       Writes nothing; fails on a cycle of [deps] needs edges (check_deps).
+ *
+ *   <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags>
+ *   <cap_count> [<cap_name> <cap_flags>]...
+ *       Positional form, kept for callers that have no manifest. This form
+ *       emits no AOT binary, no region records and no dependencies.
+ *
+ * Writes the header and sections in the exact order src/kernel/wasmos_app.c
+ * parses them, then the payload, then the AOT table and binaries. Returns 0 on
+ * success and 1 on any failure: bad arguments, an unknown capability name, a
+ * non-zero capability flags value, an unreadable input, an empty --compiled
+ * file, or a short write. A failed run may leave a truncated output file behind,
+ * because errors after fopen do not remove it. */
 int main(int argc, char** argv) {
     if (argc == 4 && strcmp(argv[1], "--pubkey-c") == 0) {
         return emit_pubkey_c(argv[2], argv[3]);
@@ -902,7 +973,8 @@ int main(int argc, char** argv) {
         const char* manifest_path = argv[2];
         const char* in_path = NULL;
         const char* out_path = NULL;
-        const char* compiled_path = NULL;
+        const char* compiled_arg[MAX_COMPILED];
+        uint32_t compiled_count = 0;
         const char* sign_seed_path = NULL;
         for (int i = 3; i + 1 < argc; i += 2) {
             if (strcmp(argv[i], "--in") == 0) {
@@ -910,7 +982,11 @@ int main(int argc, char** argv) {
             } else if (strcmp(argv[i], "--out") == 0) {
                 out_path = argv[i + 1];
             } else if (strcmp(argv[i], "--compiled") == 0) {
-                compiled_path = argv[i + 1];
+                if (compiled_count >= MAX_COMPILED) {
+                    fprintf(stderr, "more than %u --compiled binaries\n", MAX_COMPILED);
+                    return 1;
+                }
+                compiled_arg[compiled_count++] = argv[i + 1];
             } else if (strcmp(argv[i], "--sign") == 0) {
                 sign_seed_path = argv[i + 1];
             } else {
@@ -921,7 +997,7 @@ int main(int argc, char** argv) {
         if (!in_path || !out_path) {
             fprintf(stderr,
                     "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
-                    "<in.warpbin>] [--sign <seed.hex>]\n",
+                    "<arch>=<in.warpbin>]... [--sign <seed.hex>]\n",
                     argv[0]);
             return 1;
         }
@@ -991,51 +1067,31 @@ int main(int argc, char** argv) {
         }
         fclose(in);
 
-        /* Optional: load pre-compiled WARP AOT binary. */
-        uint8_t* compiled_data = NULL;
-        size_t compiled_data_size = 0;
-        if (compiled_path) {
-            FILE* cf = fopen(compiled_path, "rb");
-            if (!cf) {
-                perror("open compiled");
+        /* The WARP AOT binaries, one per architecture. */
+        uint8_t* compiled_data[MAX_COMPILED] = {0};
+        wasmos_compiled_record_t compiled_rec[MAX_COMPILED];
+        for (uint32_t i = 0; i < compiled_count; ++i) {
+            if (load_compiled(compiled_arg[i], &compiled_rec[i], &compiled_data[i]) != 0) {
+                free_compiled(compiled_data, compiled_count);
                 free(wasm);
                 return 1;
             }
-            if (fseek(cf, 0, SEEK_END) != 0) {
-                perror("seek compiled");
-                fclose(cf);
-                free(wasm);
-                return 1;
+            for (uint32_t j = 0; j < i; ++j) {
+                if (compiled_rec[j].machine == compiled_rec[i].machine) {
+                    fprintf(stderr,
+                            "two --compiled binaries for one architecture: %s\n",
+                            compiled_arg[i]);
+                    free_compiled(compiled_data, compiled_count);
+                    free(wasm);
+                    return 1;
+                }
             }
-            long csz = ftell(cf);
-            if (csz <= 0) {
-                fprintf(stderr, "compiled file is empty\n");
-                fclose(cf);
-                free(wasm);
-                return 1;
-            }
-            fseek(cf, 0, SEEK_SET);
-            compiled_data = (uint8_t*)malloc((size_t)csz);
-            if (!compiled_data) {
-                fclose(cf);
-                free(wasm);
-                return 1;
-            }
-            if (fread(compiled_data, 1, (size_t)csz, cf) != (size_t)csz) {
-                perror("read compiled");
-                fclose(cf);
-                free(compiled_data);
-                free(wasm);
-                return 1;
-            }
-            fclose(cf);
-            compiled_data_size = (size_t)csz;
         }
 
         FILE* outf = fopen(out_path, "wb");
         if (!outf) {
             perror("open output");
-            free(compiled_data);
+            free_compiled(compiled_data, compiled_count);
             free(wasm);
             return 1;
         }
@@ -1053,7 +1109,7 @@ int main(int argc, char** argv) {
         hdr.dep_count = lm.dep_count;
         hdr.cap_count = cap_count;
         hdr.mem_hint_count = 2;
-        hdr.compiled_size = (uint32_t)compiled_data_size;
+        hdr.compiled_count = compiled_count;
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
         hdr.region_count = lm.region_count;
         hdr.signature_size = sign_seed_path ? SIGNATURE_LEN : 0u;
@@ -1088,11 +1144,14 @@ int main(int argc, char** argv) {
         ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, outf) == 1;
         ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, outf) == 1;
         ok &= fwrite(wasm, 1, (size_t)in_size, outf) == (size_t)in_size;
-        if (compiled_data_size > 0) {
-            ok &= fwrite(compiled_data, 1, compiled_data_size, outf) == compiled_data_size;
+        for (uint32_t i = 0; i < compiled_count; ++i) {
+            ok &= fwrite(&compiled_rec[i], sizeof(compiled_rec[i]), 1, outf) == 1;
+        }
+        for (uint32_t i = 0; i < compiled_count; ++i) {
+            ok &= fwrite(compiled_data[i], 1, compiled_rec[i].size, outf) == compiled_rec[i].size;
         }
 
-        free(compiled_data);
+        free_compiled(compiled_data, compiled_count);
         free(wasm);
         ok &= fclose(outf) == 0;
         if (ok && sign_seed_path && sign_package(out_path, sign_seed_path) != 0) {
@@ -1231,7 +1290,7 @@ int main(int argc, char** argv) {
     hdr.dep_count = 0; /* dependencies need the manifest's [deps] table */
     hdr.cap_count = cap_count;
     hdr.mem_hint_count = 2;
-    hdr.compiled_size = 0; /* positional path emits no AOT binary; use --manifest --compiled */
+    hdr.compiled_count = 0; /* positional path emits no AOT binary; use --manifest --compiled */
     subsystem_tag_copy(hdr.subsystem_tag, (flags & (1u << 4)) != 0 ? "NATIVE" : "WASM");
     /* No regions without a manifest: declaring a register window needs the
      * [[regions]] table, so this path emits none.  The count must still be

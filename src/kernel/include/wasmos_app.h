@@ -25,7 +25,10 @@
 /* Container version the packer (scripts/make_wasmos_app.c) emits, and the only one
  * the parser accepts.  The version is bound to an exact header_size, so a blob whose
  * header_size disagrees is rejected rather than reinterpreted. */
-#define WASMOS_APP_VERSION 11u
+#define WASMOS_APP_VERSION 12u
+/* Most WARP AOT binaries one package carries: one per architecture it ships
+ * compiled code for (v12). */
+#define WASMOS_APP_MAX_COMPILED 4u
 /* On-wire width of the subsystem tag field (v5+).  Struct fields that hold a parsed tag
  * are this + 1 so the tag is always NUL-terminated in memory. */
 #define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
@@ -138,8 +141,17 @@ typedef struct {
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     const uint8_t* wasm_bytes;
     uint32_t wasm_size;
-    const uint8_t* compiled_bytes; /* pre-compiled WARP AOT binary; NULL if absent */
-    uint32_t compiled_size;
+    /* The package's WARP AOT binaries, one per architecture, each tagged with the
+     * ELF e_machine of the code it holds (EM_X86_64, EM_AARCH64).  WARP records no
+     * ISA in a compiled binary, so the tag is the only thing that keeps a binary
+     * for one architecture from executing on another; wasmos_app_compiled_for
+     * selects by it.  The parser guarantees non-zero sizes and distinct tags. */
+    uint32_t compiled_count;
+    struct {
+        uint16_t machine;
+        const uint8_t* bytes;
+        uint32_t size;
+    } compiled[WASMOS_APP_MAX_COMPILED];
     /* The package's Ed25519 signature (WASMOS_APP_SIGNATURE_LEN bytes, the last in
      * the blob) and the length of what it signs: every byte before it.  NULL and 0
      * for an unsigned package.  Parsing locates the signature; whether it is valid
@@ -293,7 +305,7 @@ typedef struct {
 
 /* Validate a .wap blob and fill *out_desc with zero-copy views into it.  The parser walks
  * the blob strictly in packer order — header, name, entry, dependency table, capability
- * table, region table, memory hints, raw payload bytes, then the optional AOT binary —
+ * table, region table, memory hints, raw payload bytes, then the AOT table and binaries —
  * bounds-checking each step with overflow-
  * safe 32-bit arithmetic.  Every header count is walked even when this build ignores the
  * section, because skipping one desynchronises the running offset and misreads
@@ -302,9 +314,17 @@ typedef struct {
  * with the version, a count above its table capacity, a dependency record with an
  * unknown strength or kind or a name that is empty or over its kind's limit, a
  * NATIVE package that is neither driver nor service, an invalid subsystem tag, an
- * inverted I/O window, a BAR index >= 6, or any section that runs past blob_size.
+ * inverted I/O window, a BAR index >= 6, an AOT entry with a zero machine or size
+ * or a machine already listed, or any section that runs past blob_size.
  * `blob` is borrowed: the descriptor's pointers dangle once the blob is freed or moved. */
 int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t* out_desc);
+
+/* The package's AOT binary for ELF machine `machine` (ARCH_ELF_MACHINE for this
+ * kernel): 0 with *bytes and *size set when the package carries one, -1 with
+ * both cleared when it does not.  A package without one for this architecture is
+ * still runnable from its bytecode. */
+int wasmos_app_compiled_for(const wasmos_app_desc_t* desc, uint16_t machine, const uint8_t** bytes,
+                            uint32_t* size);
 
 /* Index into info's boot module table of the WASMOS-APP whose embedded app name
  * is the name_len bytes at `name`, or 0xFFFFFFFF when the table holds none (or

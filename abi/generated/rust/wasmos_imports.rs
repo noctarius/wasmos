@@ -894,4 +894,14 @@ unsafe extern "C" {
     /// outside linear memory traps the module under wasm3 and answers
     /// WASMOS_ERR_KERNEL_BAD_POINTER under WARP.
     pub fn keyring_register_key(a0: i32, a1: i32) -> i32;
+    /// Let a package start although its signature is verified by no trusted
+    /// key: `hash` holds `len` bytes, the SHA-512 digest of the whole package
+    /// file. Such a package is then admitted and runs from bytecode with
+    /// ipc.basic only (docs/architecture/10, "Signed Packages"). Requires the
+    /// keyring.register capability (WASMOS_ERR_KERNEL_NOT_AUTHORIZED). Returns 0,
+    /// also for a digest already registered; WASMOS_ERR_KERNEL_BAD_HASH when
+    /// `len` is not 64; WASMOS_ERR_KERNEL_ALLOWLIST_FULL when the table is full.
+    /// A buffer outside linear memory traps the module under wasm3 and answers
+    /// WASMOS_ERR_KERNEL_BAD_POINTER under WARP.
+    pub fn keyring_allow_package(a0: i32, a1: i32) -> i32;
 }

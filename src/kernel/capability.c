@@ -68,6 +68,8 @@ static uint32_t kind_to_mask(capability_kind_t kind) {
         return 1u << 13;
     case CAP_KEYRING_REGISTER:
         return 1u << 14;
+    case CAP_KEYRING_ADMIN:
+        return 1u << 15;
     default:
         return 0;
     }
@@ -155,6 +157,7 @@ static const struct {
     {"inventory.device", CAP_INVENTORY_DEVICE},
     {"inventory.storage", CAP_INVENTORY_STORAGE},
     {"keyring.register", CAP_KEYRING_REGISTER},
+    {"keyring.admin", CAP_KEYRING_ADMIN},
 };
 
 int capability_kind_from_name(const uint8_t* name, uint32_t name_len, capability_kind_t* out_kind) {
@@ -255,6 +258,7 @@ static int capability_kind_acts_for_requester(capability_kind_t kind) {
     case CAP_INVENTORY_DEVICE:
     case CAP_INVENTORY_STORAGE:
     case CAP_KEYRING_REGISTER:
+    case CAP_KEYRING_ADMIN:
         return 1;
     default:
         return 0;
@@ -265,7 +269,7 @@ static int capability_kind_acts_for_requester(capability_kind_t kind) {
  * no other. Every kind not listed is critical -- hardware (io.port, irq.route,
  * mmio.map, pci.config), control of the system or of other processes
  * (system.control, spawn.grant, svc.control), a system role (subsystem.register,
- * svc.class, console.owner, keyring.register), the firmware clock and the device
+ * svc.class, console.owner, keyring.register, keyring.admin), the firmware clock and the device
  * and storage inventories -- and only the build's system key grants it. dma.buffer is an
  * app's own memory for a display surface or a device it talks to through a
  * driver, bounded by the manifest and charged to the process. */

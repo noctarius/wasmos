@@ -348,6 +348,8 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL` | -0x0013000D | a ring-3 host-call trap carried an ordinal that names no host call |
 | `WASMOS_ERR_KERNEL_KEY_UNSUPPORTED` | -0x0013000E | a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with |
 | `WASMOS_ERR_KERNEL_KEYRING_FULL` | -0x0013000F | the kernel's trusted-key table holds as many keys as it can; the key was not registered |
+| `WASMOS_ERR_KERNEL_BAD_HASH` | -0x00130010 | a package hash offered to the kernel's allowlist is not a 64-byte SHA-512 digest |
+| `WASMOS_ERR_KERNEL_ALLOWLIST_FULL` | -0x00130011 | the kernel's allowlist of package hashes holds as many as it can; the hash was not registered |
 
 ### `block` (domain 20) — Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it.
 
@@ -451,3 +453,13 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_DISPLAY_DEVICE` | -0x001B0003 | the device refused a transfer or flush command (a virtio-gpu error response) |
 | `WASMOS_ERR_DISPLAY_BUSY` | -0x001B0004 | the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds |
 | `WASMOS_ERR_DISPLAY_NOT_PRESENTER` | -0x001B0005 | FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to "display"; the presenter is unchanged |
+
+### `keyring` (domain 28) — keyring service (KEYRING_IPC_*) failures: changing the trusted keys and the package allowlist
+
+| Code | Value | Description |
+|---|---|---|
+| `WASMOS_ERR_KEYRING_NOT_AUTHORIZED` | -0x001C0001 | the sender lacks the keyring.admin capability, which every change to the keyring requires |
+| `WASMOS_ERR_KEYRING_BAD_REQUEST` | -0x001C0002 | the request's payload cannot be read from the caller's buffer, or its size is wrong for the request |
+| `WASMOS_ERR_KEYRING_NOT_A_KEY` | -0x001C0003 | the payload holds no PEM "PUBLIC KEY" block of an Ed25519 or RSA key |
+| `WASMOS_ERR_KEYRING_BUSY` | -0x001C0004 | the keyring is serving as many requests as it queues; the request was not taken |
+| `WASMOS_ERR_KEYRING_PERSIST` | -0x001C0005 | the change is in force but could not be written to /boot/system/keys, so it does not survive a restart |

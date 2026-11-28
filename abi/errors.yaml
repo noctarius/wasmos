@@ -385,6 +385,8 @@ domains:
       - { name: UNKNOWN_HOSTCALL, description: "a ring-3 host-call trap carried an ordinal that names no host call" }
       - { name: KEY_UNSUPPORTED, description: "a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with" }
       - { name: KEYRING_FULL,    description: "the kernel's trusted-key table holds as many keys as it can; the key was not registered" }
+      - { name: BAD_HASH,        description: "a package hash offered to the kernel's allowlist is not a 64-byte SHA-512 digest" }
+      - { name: ALLOWLIST_FULL,  description: "the kernel's allowlist of package hashes holds as many as it can; the hash was not registered" }
 
   block:
     id: 20
@@ -508,3 +510,13 @@ domains:
       - { name: DEVICE,    description: "the device refused a transfer or flush command (a virtio-gpu error response)" }
       - { name: BUSY,      description: "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds" }
       - { name: NOT_PRESENTER, description: "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged" }
+
+  keyring:
+    id: 28
+    description: "keyring service (KEYRING_IPC_*) failures: changing the trusted keys and the package allowlist"
+    codes:
+      - { name: NOT_AUTHORIZED, description: "the sender lacks the keyring.admin capability, which every change to the keyring requires" }
+      - { name: BAD_REQUEST,    description: "the request's payload cannot be read from the caller's buffer, or its size is wrong for the request" }
+      - { name: NOT_A_KEY,      description: "the payload holds no PEM \"PUBLIC KEY\" block of an Ed25519 or RSA key" }
+      - { name: BUSY,           description: "the keyring is serving as many requests as it queues; the request was not taken" }
+      - { name: PERSIST,        description: "the change is in force but could not be written to /boot/system/keys, so it does not survive a restart" }

@@ -134,7 +134,8 @@ typedef enum {
     HC_RTC_EFI_GET = 124,
     HC_RTC_EFI_SET = 125,
     HC_KEYRING_REGISTER_KEY = 126,
-    HC_COUNT = 127,
+    HC_KEYRING_ALLOW_PACKAGE = 127,
+    HC_COUNT = 128,
 } warp_hostcall_id_t;
 
 #endif /* WASMOS_HOSTCALL_IDS_H */

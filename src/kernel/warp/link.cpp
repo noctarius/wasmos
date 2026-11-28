@@ -1056,6 +1056,20 @@ static uint32_t warp_keyring_register_key(uint32_t der, uint32_t len, void* ctx_
     return (uint32_t)wasmos_app_trust_register_as(context_id, p, len);
 }
 
+/* keyring_allow_package (abi/hostcalls.yaml): the check and the copy are
+ * wasmos_app_allow_register_as's, shared with wasm3. */
+static uint32_t warp_keyring_allow_package(uint32_t hash, uint32_t len, void* ctx_) {
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    if (len != WASMOS_APP_PACKAGE_HASH_LEN)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_HASH;
+    const uint8_t* p = warp_mem(warp_call_ctx(ctx_), hash, len);
+    if (!p)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    return (uint32_t)wasmos_app_allow_register_as(context_id, p, len);
+}
+
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;
  * WASMOS_INVAL for a negative handle, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER when
  * the endpoint has no live owner, which drives nothing. */

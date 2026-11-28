@@ -1748,3 +1748,32 @@ subsystems:
           presenter (virtio-gpu); elsewhere what is drawn is already shown.
       - { symbol: DISPLAY_IPC_RESP, value: 0x1180, kind: resp, doc: "arg0 = 0: the rects were presented; the descriptor buffer is the caller's again." }
       - { symbol: DISPLAY_IPC_ERROR, value: 0x11ff, kind: error, doc: "arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again." }
+
+  - name: keyring
+    id: 27
+    range: [0x1200, 0x12ff]
+    opcodes:
+      - symbol: KEYRING_IPC_ALLOW_REQ
+        value: 0x1200
+        kind: req
+        doc: |
+          Let a package start although its signature is verified by no trusted
+          key ("start anyway"): it then runs from bytecode with ipc.basic only.
+          The payload is the package's SHA-512 digest (64 bytes) followed by its
+          path (up to 128 bytes, not NUL-terminated, recorded beside the digest),
+          in a transfer buffer the caller owns and has lent READ to the keyring:
+          arg0=buffer_id arg1=offset arg2=size. Requires keyring.admin. The
+          digest is registered with the kernel and appended to
+          /boot/system/keys/allow.lst before the answer.
+      - symbol: KEYRING_IPC_ADD_KEY_REQ
+        value: 0x1201
+        kind: req
+        doc: |
+          Trust a publisher's key: the payload is a PEM "PUBLIC KEY" file
+          (Ed25519, or RSA of 2048 to 4096 bits; at most 4096 bytes) in a
+          transfer buffer the caller owns and has lent READ to the keyring:
+          arg0=buffer_id arg1=offset arg2=size. Requires keyring.admin. The key
+          is registered with the kernel and written to
+          /boot/system/keys/<first 8 hex digits of its id>.pem before the answer.
+      - { symbol: KEYRING_IPC_RESP, value: 0x1280, kind: resp, doc: "arg0 = 0: the change is in force and recorded; the payload buffer is the caller's again." }
+      - { symbol: KEYRING_IPC_ERROR, value: 0x12ff, kind: error, doc: "arg0 = packed WASMOS_ERR_KEYRING_* code, or the kernel's WASMOS_ERR_KERNEL_* refusal; the payload buffer is the caller's again." }

@@ -86,6 +86,7 @@
 #define WASMOS_APP_TRUST_SYSTEM 1u    /* the build's system key: everything */
 #define WASMOS_APP_TRUST_PUBLISHER 2u /* another trusted key: AOT, ipc.basic only */
 #define WASMOS_APP_TRUST_INVALID 3u   /* a signature no trusted key verifies: refused */
+#define WASMOS_APP_TRUST_ALLOWED 4u   /* INVALID, but its digest is allowed: as UNSIGNED */
 
 /* Capacities of the fixed-size tables in wasmos_app_desc_t.  A header count above any of
  * these makes wasmos_app_parse reject the whole package rather than truncate — a
@@ -312,9 +313,10 @@ typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const 
  * compiled in, and the keys the keyring registered (wasmos_app_trust_register),
  * which yield WASMOS_APP_TRUST_PUBLISHER -- and verified against that key alone; an
  * unknown key, an algorithm this kernel cannot check, or a signature that does not
- * verify is INVALID.  Hashes the whole package, so it costs time proportional to
- * its size: call it once per decision.
- * TODO: the per-package allowlist ("start anyway") is not consulted yet. */
+ * verify is INVALID -- unless the SHA-512 digest of the whole package is on the
+ * allowlist (wasmos_app_allow_register), which makes it ALLOWED: admitted, and no
+ * more trusted than an unsigned package.  Hashes the whole package, so it costs
+ * time proportional to its size: call it once per decision. */
 uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc);
 
 /* Make a key, given as its DER SubjectPublicKeyInfo, a trusted publisher key: a
@@ -334,10 +336,33 @@ int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len);
  * copied before its id is derived, so the caller cannot change it meanwhile. */
 int wasmos_app_trust_register_as(uint32_t context_id, const uint8_t* der, uint32_t der_len);
 
+/* Length of a package digest on the allowlist: SHA-512 of every byte of the package
+ * file, the signature record included. */
+#define WASMOS_APP_PACKAGE_HASH_LEN 64u
+/* How many digests the allowlist holds.
+ * TODO: neither a digest nor a registered key can be withdrawn; both tables only
+ * grow until restart, so an administrator who trusted the wrong package or key
+ * must delete its file in /boot/system/keys and restart (docs/TASKS.md). */
+#define WASMOS_APP_MAX_ALLOWED 64u
+
+/* Allow the package whose SHA-512 digest is `hash` (`len` bytes) to start although
+ * its signature is verified by no trusted key ("start anyway"): wasmos_app_trust
+ * answers WASMOS_APP_TRUST_ALLOWED for it from now on. The digest covers the whole
+ * file, so any change to the package makes it INVALID again. A digest already
+ * registered changes nothing. Returns WASMOS_OK, WASMOS_ERR_KERNEL_BAD_HASH for a
+ * NULL `hash` or a `len` other than WASMOS_APP_PACKAGE_HASH_LEN, or
+ * WASMOS_ERR_KERNEL_ALLOWLIST_FULL. */
+int wasmos_app_allow_register(const uint8_t* hash, uint32_t len);
+
+/* wasmos_app_allow_register on behalf of the process with memory context
+ * `context_id`, which must hold keyring.register: the keyring_allow_package host
+ * call of both runtimes. WASMOS_ERR_KERNEL_NOT_AUTHORIZED otherwise. */
+int wasmos_app_allow_register_as(uint32_t context_id, const uint8_t* hash, uint32_t len);
+
 /* 0 when the package may be started, -1 (logged) when its signature is verified by no
- * trusted key (WASMOS_APP_TRUST_INVALID).  An unsigned package is admitted: it runs
- * from bytecode with ipc.basic only.  The process manager calls this before creating
- * the process, so the requester learns of the refusal. */
+ * trusted key and its digest is not allowed (WASMOS_APP_TRUST_INVALID).  An unsigned package is
+ * admitted: it runs from bytecode with ipc.basic only.  The process manager calls this before
+ * creating the process, so the requester learns of the refusal. */
 int wasmos_app_admit(const wasmos_app_desc_t* desc);
 
 /* 1 when wasmos_app_trust is WASMOS_APP_TRUST_SYSTEM: signed with the build's system

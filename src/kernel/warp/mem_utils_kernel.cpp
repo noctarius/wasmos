@@ -490,7 +490,7 @@ uint8_t* alloc_paged_in_zone(size_t size, MmapType type) {
 #else
     uint64_t phys_min = WASMOS_BUFFER_PHYS_LIMIT;
 #endif
-    uint64_t phys = pfa_alloc_pages_above(pages, phys_min);
+    uint64_t phys = pfa_alloc_pages_between(pages, phys_min, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (!phys)
         return nullptr;
 

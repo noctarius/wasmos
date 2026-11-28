@@ -9,15 +9,15 @@
  *
  * Throwing works, but does not unwind.  The WARP translation units build with
  * -fexceptions, so `throw` compiles and reaches __cxa_throw; that entry point
- * in warp/cxx_abi.cpp __builtin_longjmps to the per-CPU checkpoint that
- * warp_driver.cpp arms before each WARP call, rather than running the standard
+ * in warp/cxx_abi.cpp warp_longjmps (arch/warp_jmp.h) to the per-thread
+ * checkpoint that warp_driver.cpp arms before each WARP call, rather than running the standard
  * two-phase unwinder.  Callers may rely on the throw reaching the driver
  * boundary and on the exception object staying readable until then, and must
  * NOT rely on any of:
  *   - destructors of locals between the throw and the driver boundary running;
  *     the longjmp skips every one of them, so anything RAII-owned there leaks
  *   - a catch clause selecting on type; the checkpoint is a catch-all
- *   - nesting; there is one checkpoint per CPU (see warp/cxx_abi.cpp).
+ *   - nesting; there is one checkpoint per thread (see warp/cxx_abi.cpp).
  * With no checkpoint armed, __cxa_throw panics rather than returning.
  *
  * std::exception_ptr, std::current_exception, std::set_terminate and

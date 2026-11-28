@@ -64,10 +64,10 @@ ARCH = {
             "arch/aarch64/platform_aarch64.c",
             "arch/aarch64/smp_aarch64.c",
         ],
-        "warp": [
-            "arch/aarch64/warp_ring3_aarch64.c",
-            "arch/aarch64/warp_jmp_aarch64.S",
-        ],
+        "warp": ["arch/aarch64/warp_ring3_aarch64.c"],
+        # WARP's assembly, compiled with the kernel profile: kernel-warp carries
+        # C/C++ flags only.
+        "warp_asm": ["arch/aarch64/warp_jmp_aarch64.S"],
         "warp_backend": [
             f"src/core/compiler/backend/aarch64/aarch64_{s}.cpp"
             for s in (
@@ -274,12 +274,8 @@ def build(b):
     if warp:
         objs = kernel.compile(b.srcs(*core), flags=b.exports["monocypher"]["include"])
         kwarp = b.toolchain("kernel-warp")
-        # Assembly takes the kernel profile's flags; kernel-warp carries C/C++ only.
-        warp_arch = target.get("warp", [])
-        objs += kernel.compile(b.srcs(*[s for s in warp_arch if s.endswith(".S")]))
-        objs += kwarp.compile(
-            b.srcs(*WARP_GLUE, *[s for s in warp_arch if not s.endswith(".S")])
-        )
+        objs += kernel.compile(b.srcs(*target.get("warp_asm", [])))
+        objs += kwarp.compile(b.srcs(*WARP_GLUE, *target.get("warp", [])))
         objs += kwarp.compile(
             [b.root / "libs/warp" / s for s in WARP_LIB + target["warp_backend"]]
         )
@@ -316,8 +312,7 @@ def build(b):
             b.index(src, [tc.cc, *tc.cflags, *wasm3_inc])
     else:
         tc = b.toolchain("kernel-warp", overrides=other).tc
-        warp_arch = [s for s in target.get("warp", []) if not s.endswith(".S")]
-        for src in b.srcs(*WARP_GLUE, *warp_arch):
+        for src in b.srcs(*WARP_GLUE, *target.get("warp", [])):
             cxx = src.suffix == ".cpp"
             b.index(
                 src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]

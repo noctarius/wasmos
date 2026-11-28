@@ -2066,7 +2066,7 @@ m3ApiRawFunction(wasmos_keyring_register_key) {
     if (current_process_context(&context_id) != 0) {
         m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
     }
-    if (len <= 0 || len > 64) {
+    if (len <= 0 || (uint32_t)len > WASMOS_APP_MAX_KEY_DER) {
         m3ApiReturn(WASMOS_ERR_KERNEL_KEY_UNSUPPORTED);
     }
     m3ApiCheckMem(der, (uint32_t)len);

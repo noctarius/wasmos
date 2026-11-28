@@ -77,6 +77,9 @@
 #define WASMOS_APP_SIG_ALG_RSA_PSS_SHA512 2u
 #define WASMOS_APP_SIG_RSA_MIN_LEN 256u
 #define WASMOS_APP_SIG_RSA_MAX_LEN 512u
+/* Longest DER SubjectPublicKeyInfo the kernel keeps: a 4096-bit RSA key is 550
+ * bytes. */
+#define WASMOS_APP_MAX_KEY_DER 600u
 
 /* How far a package is trusted (wasmos_app_trust). */
 #define WASMOS_APP_TRUST_UNSIGNED 0u  /* no signature: bytecode, ipc.basic only */
@@ -311,15 +314,16 @@ typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const 
  * unknown key, an algorithm this kernel cannot check, or a signature that does not
  * verify is INVALID.  Hashes the whole package, so it costs time proportional to
  * its size: call it once per decision.
- * TODO: RSA-PSS signatures (which the keyring verifies) and the per-package
- * allowlist are not consulted yet. */
+ * TODO: the per-package allowlist ("start anyway") is not consulted yet. */
 uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc);
 
-/* Make an Ed25519 key, given as its DER SubjectPublicKeyInfo, a trusted publisher
- * key: a package whose signature it verifies is WASMOS_APP_TRUST_PUBLISHER from
- * now on. The kernel derives the key's id itself. Registering the system key or a
- * key already registered changes nothing. Returns WASMOS_OK,
- * WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for anything but an Ed25519 key, or
+/* Make a key, given as its DER SubjectPublicKeyInfo, a trusted publisher key: a
+ * package whose signature it verifies is WASMOS_APP_TRUST_PUBLISHER from now on.
+ * An Ed25519 key verifies WASMOS_APP_SIG_ALG_ED25519 signatures, an RSA key of
+ * 2048 to 4096 bits WASMOS_APP_SIG_ALG_RSA_PSS_SHA512 ones. The kernel derives
+ * the key's id itself. Registering the system key or a key already registered
+ * changes nothing. Returns WASMOS_OK, WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for any
+ * other key or one over WASMOS_APP_MAX_KEY_DER bytes, or
  * WASMOS_ERR_KERNEL_KEYRING_FULL. Only the keyring service, which holds
  * keyring.register, reaches this (api->keyring_register_key). */
 int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len);

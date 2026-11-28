@@ -117,7 +117,19 @@ WARP_COMPAT_TRAITS = [
 # The .wap parser (wasmos_app.c) compiled for real with what it links against:
 # the subsystem registry, Ed25519 and the test signing key, runtime and slab
 # stubs. Shared by every suite that parses packages.
-WASMOS_APP_PARSER = [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/include'), "-I" + R('src/kernel/include'), "-I" + R('abi/generated/c'), "-I" + R('libs/wasm3/source'), "-I" + R('libs/monocypher/src'), "-I" + R('libs/monocypher/src/optional'), '-iquote', R('src/libc/include'), R('tests/unit/stubs_signing_pubkey.c'), R('libs/monocypher/src/monocypher.c'), R('libs/monocypher/src/optional/monocypher-ed25519.c'), R('tests/unit/stubs_app_runtime.c'), R('tests/unit/stubs_spinlock.c'), R('src/kernel/wasmos_app.c'), R('src/kernel/subsystem_registry.c'), R('src/kernel/hashmap.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('src/libc/src/string.c')]
+# The kernel's mbedTLS subset (KERNEL_MBEDTLS in src/kernel/BUILD.py, which this
+# list must match), compiled as the kernel compiles it: wasmos_app.c verifies
+# RSA-PSS package signatures with it.
+KERNEL_MBEDTLS = [R('libs/mbedtls/library/' + f) for f in (
+    "asn1parse.c", "asn1write.c", "bignum.c", "bignum_core.c", "constant_time.c", "md.c",
+    "oid.c", "pk.c", "pk_wrap.c", "pkparse.c", "platform.c", "platform_util.c", "rsa.c",
+    "rsa_alt_helpers.c", "sha512.c",
+)] + [R('src/kernel/crypto/kernel_mbedtls.c')]
+KERNEL_MBEDTLS_FLAGS = ['-I', R('libs/mbedtls/include'), '-I', R('src/kernel/crypto'),
+                        '-DMBEDTLS_CONFIG_FILE="kernel_mbedtls_config.h"',
+                        '-Wno-unused-parameter', '-Wno-sign-compare']
+
+WASMOS_APP_PARSER = [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/include'), "-I" + R('src/kernel/include'), "-I" + R('abi/generated/c'), "-I" + R('libs/wasm3/source'), "-I" + R('libs/monocypher/src'), "-I" + R('libs/monocypher/src/optional'), '-iquote', R('src/libc/include'), R('tests/unit/stubs_signing_pubkey.c'), R('libs/monocypher/src/monocypher.c'), R('libs/monocypher/src/optional/monocypher-ed25519.c'), R('tests/unit/stubs_app_runtime.c'), R('tests/unit/stubs_spinlock.c'), R('src/kernel/wasmos_app.c'), R('src/kernel/subsystem_registry.c'), R('src/kernel/hashmap.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('src/libc/src/string.c'), *KERNEL_MBEDTLS_FLAGS, *KERNEL_MBEDTLS]
 
 TESTS = [
     (CC, 'test_list', [*C11, "-I" + R('src/kernel/include'), R('tests/unit/test_list.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c')]),
@@ -134,6 +146,8 @@ TESTS = [
     (RUN, 'test_wasmos_app_deps', []),
     (CC, 'test_wasmos_app_aot', [R('tests/unit/test_wasmos_app_aot.c'), *WASMOS_APP_PARSER]),
     (RUN, 'test_wasmos_app_aot', []),
+    (CC, 'test_wasmos_app_rsa', [R('tests/unit/test_wasmos_app_rsa.c'), *WASMOS_APP_PARSER]),
+    (RUN, 'test_wasmos_app_rsa', []),
     (CC, 'test_device_manager_rules', [*C11, "-I" + R('src/services/device_manager'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('src/libc/include'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_device_manager_rules.c'), R('src/services/device_manager/device_manager_rules.c'), R('src/libc/src/string.c')]),
     (RUN, 'test_device_manager_rules', []),
     (CC, 'test_device_manager_unit', [*C11, "-I" + R('src/services/device_manager'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('tests/unit'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_device_manager_unit.c'), R('src/services/device_manager/device_manager_unit.c')]),

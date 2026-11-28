@@ -12,6 +12,8 @@
 #include "wasmos_app.h"
 #include "wasmos_exec_format.h"
 #include "monocypher-ed25519.h"
+#include "mbedtls/pk.h"
+#include "mbedtls/sha512.h"
 #include <string.h>
 
 /* The build's system signing key and its id (WASMOS_APP_SIG_*), generated from the
@@ -757,34 +759,18 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
     return rc;
 }
 
-/* Brings a parsed package up as a live instance owned by owner_context_id:
- * copies its name and entry export into the instance, grants every requested
- * capability, resolves the subsystem, and calls that subsystem's start hook.  The
- * dependency table is data for a supervisor and is not consulted here.  The entry export is NOT
- * invoked; wasmos_app_call_entry does that.
- *
- * The capability granter must have been installed with
- * wasmos_app_set_policy_hooks whenever the package requests a capability.
- *
- * init_argv supplies up to FOUR entry arguments and is read as four words
- * regardless of init_argc; a NULL init_argv is read as four zeros.  init_argc is
- * stored verbatim and passed on to the subsystem.
- *
- * desc is borrowed and, since it points into the package blob, that blob must
- * stay mapped through the call.
- *
- * Returns 0 with the instance marked active, or -1 for a NULL instance or desc,
- * a zero owner context, a name or entry that does not fit, a refused capability, an unresolvable
- * subsystem, or a failed start hook.  On failure the instance is left inactive, but capabilities
- * already granted to the context are NOT withdrawn. */
 /* Keys the keyring service registered (wasmos_app_trust_register): publishers'
- * Ed25519 keys, the build's app key among them. A key is added once and never
- * removed while the system runs; the table is read on every signed spawn and
- * written only at registration, both under g_trusted_keys_lock. */
+ * keys, the build's app key among them, each Ed25519 or RSA. A key is added once
+ * and never removed while the system runs; the table is read on every signed
+ * spawn and written only at registration, both under g_trusted_keys_lock. An RSA
+ * key is kept as its DER SubjectPublicKeyInfo and parsed when a signature is
+ * checked against it. */
 #define WASMOS_APP_MAX_TRUSTED_KEYS 32u
 static struct {
     uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN];
-    uint8_t pubkey[32];
+    uint16_t alg; /* WASMOS_APP_SIG_ALG_* the key verifies */
+    uint16_t der_len;
+    uint8_t der[WASMOS_APP_MAX_KEY_DER];
 } g_trusted_keys[WASMOS_APP_MAX_TRUSTED_KEYS];
 static uint32_t g_trusted_key_count;
 static ksync_spinlock_t g_trusted_keys_lock; /* zero storage is unlocked; no init */
@@ -803,9 +789,34 @@ static void wasmos_app_key_id(const uint8_t* der, uint32_t der_len,
     memcpy(id, hash, WASMOS_APP_SIG_KEY_ID_LEN);
 }
 
+/* The signature algorithm a DER SubjectPublicKeyInfo verifies: Ed25519 for the
+ * RFC 8410 form, RSA-PSS-SHA512 for an RSA key of 2048 to 4096 bits; 0 for
+ * anything else. */
+static uint16_t wasmos_app_key_alg(const uint8_t* der, uint32_t der_len) {
+    if (der_len == sizeof(k_ed25519_spki_prefix) + 32u &&
+        memcmp(der, k_ed25519_spki_prefix, sizeof(k_ed25519_spki_prefix)) == 0) {
+        return WASMOS_APP_SIG_ALG_ED25519;
+    }
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    uint16_t alg = 0;
+    if (mbedtls_pk_parse_public_key(&pk, der, der_len) == 0 &&
+        mbedtls_pk_get_type(&pk) == MBEDTLS_PK_RSA) {
+        size_t bits = mbedtls_pk_get_bitlen(&pk);
+        if (bits >= 2048u && bits <= 4096u) {
+            alg = WASMOS_APP_SIG_ALG_RSA_PSS_SHA512;
+        }
+    }
+    mbedtls_pk_free(&pk);
+    return alg;
+}
+
 int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len) {
-    if (!der || der_len != sizeof(k_ed25519_spki_prefix) + 32u ||
-        memcmp(der, k_ed25519_spki_prefix, sizeof(k_ed25519_spki_prefix)) != 0) {
+    if (!der || der_len == 0u || der_len > WASMOS_APP_MAX_KEY_DER) {
+        return WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
+    }
+    uint16_t alg = wasmos_app_key_alg(der, der_len);
+    if (alg == 0u) {
         return WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
     }
     uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN];
@@ -827,7 +838,9 @@ int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len) {
             rc = WASMOS_ERR_KERNEL_KEYRING_FULL;
         } else {
             memcpy(g_trusted_keys[i].id, id, WASMOS_APP_SIG_KEY_ID_LEN);
-            memcpy(g_trusted_keys[i].pubkey, der + sizeof(k_ed25519_spki_prefix), 32u);
+            g_trusted_keys[i].alg = alg;
+            g_trusted_keys[i].der_len = (uint16_t)der_len;
+            memcpy(g_trusted_keys[i].der, der, der_len);
             g_trusted_key_count++;
         }
     }
@@ -839,22 +852,25 @@ int wasmos_app_trust_register_as(uint32_t context_id, const uint8_t* der, uint32
     if (!capability_has(context_id, CAP_KEYRING_REGISTER)) {
         return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
     }
-    uint8_t copy[sizeof(k_ed25519_spki_prefix) + 32u];
-    if (!der || der_len != sizeof(copy)) {
+    uint8_t copy[WASMOS_APP_MAX_KEY_DER];
+    if (!der || der_len == 0u || der_len > sizeof(copy)) {
         return WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
     }
-    memcpy(copy, der, sizeof(copy));
-    return wasmos_app_trust_register(copy, sizeof(copy));
+    memcpy(copy, der, der_len);
+    return wasmos_app_trust_register(copy, der_len);
 }
 
-/* The registered key with id `id`, copied to *pubkey: 1 when there is one. */
-static int wasmos_app_registered_key(const uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN],
-                                     uint8_t pubkey[32]) {
+/* The registered key with id `id`, copied out (its algorithm, DER and length):
+ * 1 when there is one. */
+static int wasmos_app_registered_key(const uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN], uint16_t* alg,
+                                     uint8_t der[WASMOS_APP_MAX_KEY_DER], uint32_t* der_len) {
     int found = 0;
     ksync_spinlock_lock(&g_trusted_keys_lock);
     for (uint32_t i = 0; i < g_trusted_key_count; ++i) {
         if (memcmp(g_trusted_keys[i].id, id, WASMOS_APP_SIG_KEY_ID_LEN) == 0) {
-            memcpy(pubkey, g_trusted_keys[i].pubkey, 32u);
+            *alg = g_trusted_keys[i].alg;
+            *der_len = g_trusted_keys[i].der_len;
+            memcpy(der, g_trusted_keys[i].der, g_trusted_keys[i].der_len);
             found = 1;
             break;
         }
@@ -868,27 +884,61 @@ static int wasmos_app_ed25519_verifies(const wasmos_app_desc_t* desc, const uint
     return crypto_ed25519_check(desc->signature, pubkey, desc->blob, desc->signed_size) == 0;
 }
 
+/* 1 when the package's RSASSA-PSS signature (SHA-512 as hash and MGF1, any salt
+ * length) over the SHA-512 digest of its signed bytes verifies against the RSA
+ * key with DER SubjectPublicKeyInfo `der`. */
+static int wasmos_app_rsa_pss_verifies(const wasmos_app_desc_t* desc, const uint8_t* der,
+                                       uint32_t der_len) {
+    uint8_t digest[64];
+    if (mbedtls_sha512(desc->blob, desc->signed_size, digest, 0) != 0) {
+        return 0;
+    }
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ok = 0;
+    if (mbedtls_pk_parse_public_key(&pk, der, der_len) == 0) {
+        mbedtls_pk_rsassa_pss_options opts = {
+            .mgf1_hash_id = MBEDTLS_MD_SHA512,
+            .expected_salt_len = MBEDTLS_RSA_SALT_LEN_ANY,
+        };
+        ok = mbedtls_pk_verify_ext(MBEDTLS_PK_RSASSA_PSS,
+                                   &opts,
+                                   &pk,
+                                   MBEDTLS_MD_SHA512,
+                                   digest,
+                                   sizeof(digest),
+                                   desc->signature,
+                                   desc->signature_len) == 0;
+    }
+    mbedtls_pk_free(&pk);
+    return ok;
+}
+
 uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc) {
     if (!desc || !desc->signature || !desc->blob || desc->signed_size == 0u) {
         return WASMOS_APP_TRUST_UNSIGNED;
     }
-    if (desc->signature_alg != WASMOS_APP_SIG_ALG_ED25519) {
-        return WASMOS_APP_TRUST_INVALID;
-    }
-    if (memcmp(desc->signature_key_id, wasmos_image_signing_key_id, WASMOS_APP_SIG_KEY_ID_LEN) ==
-        0) {
+    if (desc->signature_alg == WASMOS_APP_SIG_ALG_ED25519 &&
+        memcmp(desc->signature_key_id, wasmos_image_signing_key_id, WASMOS_APP_SIG_KEY_ID_LEN) ==
+            0) {
         return wasmos_app_ed25519_verifies(desc, wasmos_image_signing_pubkey)
                    ? WASMOS_APP_TRUST_SYSTEM
                    : WASMOS_APP_TRUST_INVALID;
     }
     /* A key the keyring registered: a publisher's, the build's app key included.
-     * Verified outside the lock; the copy is the key as registered. */
-    uint8_t pubkey[32];
-    if (wasmos_app_registered_key(desc->signature_key_id, pubkey)) {
-        return wasmos_app_ed25519_verifies(desc, pubkey) ? WASMOS_APP_TRUST_PUBLISHER
-                                                         : WASMOS_APP_TRUST_INVALID;
+     * Verified outside the lock against the copy of the key as registered, and
+     * only with the algorithm the key is for. */
+    uint8_t der[WASMOS_APP_MAX_KEY_DER];
+    uint16_t alg = 0;
+    uint32_t der_len = 0;
+    if (!wasmos_app_registered_key(desc->signature_key_id, &alg, der, &der_len) ||
+        alg != desc->signature_alg) {
+        return WASMOS_APP_TRUST_INVALID;
     }
-    return WASMOS_APP_TRUST_INVALID;
+    int ok = alg == WASMOS_APP_SIG_ALG_ED25519
+                 ? wasmos_app_ed25519_verifies(desc, der + sizeof(k_ed25519_spki_prefix))
+                 : wasmos_app_rsa_pss_verifies(desc, der, der_len);
+    return ok ? WASMOS_APP_TRUST_PUBLISHER : WASMOS_APP_TRUST_INVALID;
 }
 
 int wasmos_app_admit(const wasmos_app_desc_t* desc) {
@@ -908,6 +958,26 @@ int wasmos_app_signature_valid(const wasmos_app_desc_t* desc) {
     return wasmos_app_trust(desc) == WASMOS_APP_TRUST_SYSTEM;
 }
 
+/* Brings a parsed package up as a live instance owned by owner_context_id:
+ * copies its name and entry export into the instance, grants every requested
+ * capability, resolves the subsystem, and calls that subsystem's start hook.  The
+ * dependency table is data for a supervisor and is not consulted here.  The entry export is NOT
+ * invoked; wasmos_app_call_entry does that.
+ *
+ * The capability granter must have been installed with
+ * wasmos_app_set_policy_hooks whenever the package requests a capability.
+ *
+ * init_argv supplies up to FOUR entry arguments and is read as four words
+ * regardless of init_argc; a NULL init_argv is read as four zeros.  init_argc is
+ * stored verbatim and passed on to the subsystem.
+ *
+ * desc is borrowed and, since it points into the package blob, that blob must
+ * stay mapped through the call.
+ *
+ * Returns 0 with the instance marked active, or -1 for a NULL instance or desc,
+ * a zero owner context, a name or entry that does not fit, a refused capability, an unresolvable
+ * subsystem, or a failed start hook.  On failure the instance is left inactive, but capabilities
+ * already granted to the context are NOT withdrawn. */
 int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* desc,
                      uint32_t owner_context_id, uint32_t requester_cap_mask,
                      const uint32_t* init_argv, uint32_t init_argc) {

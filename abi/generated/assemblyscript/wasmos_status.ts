@@ -280,7 +280,7 @@ export const WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED: i32 = -0x0013000A; // an all-c
 export const WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: i32 = -0x0013000B; // every kernel-log subscriber slot is held by another process
 export const WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE: i32 = -0x0013000C; // a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it
 export const WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: i32 = -0x0013000D; // a ring-3 host-call trap carried an ordinal that names no host call
-export const WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: i32 = -0x0013000E; // a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with
+export const WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: i32 = -0x0013000E; // a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with
 export const WASMOS_ERR_KERNEL_KEYRING_FULL: i32 = -0x0013000F; // the kernel's trusted-key table holds as many keys as it can; the key was not registered
 export const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process block slot is available
 export const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
@@ -631,7 +631,7 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: return "every kernel-log subscriber slot is held by another process";
     case WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE: return "a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it";
     case WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: return "a ring-3 host-call trap carried an ordinal that names no host call";
-    case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with";
+    case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with";
     case WASMOS_ERR_KERNEL_KEYRING_FULL: return "the kernel's trusted-key table holds as many keys as it can; the key was not registered";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";

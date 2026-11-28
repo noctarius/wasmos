@@ -346,7 +346,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT` | -0x0013000B | every kernel-log subscriber slot is held by another process |
 | `WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE` | -0x0013000C | a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it |
 | `WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL` | -0x0013000D | a ring-3 host-call trap carried an ordinal that names no host call |
-| `WASMOS_ERR_KERNEL_KEY_UNSUPPORTED` | -0x0013000E | a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with |
+| `WASMOS_ERR_KERNEL_KEY_UNSUPPORTED` | -0x0013000E | a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with |
 | `WASMOS_ERR_KERNEL_KEYRING_FULL` | -0x0013000F | the kernel's trusted-key table holds as many keys as it can; the key was not registered |
 
 ### `block` (domain 20) — Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it.

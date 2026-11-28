@@ -2341,10 +2341,10 @@ Other graphics/VT/UI:
 
 The aarch64 port targets QEMU `virt` (GICv3 + ITS, PCIe ECAM, virtio) under
 HVF on Apple Silicon or TCG; bare-metal Apple Silicon is out of scope. It boots
-to the CLI under wasm3 on one core or, with `WASMOS_SMP`, on several started
-through PSCI `CPU_ON`, with console input through the PL011 driver, and passes
-`run-qemu-test`. Every QEMU battery runs on it in CI (`aarch64_wasm3_smp` in
-`tests/batteries.json`); a test whose subject aarch64
+to the CLI under wasm3 or WARP on one core or, with `WASMOS_SMP`, on several
+started through PSCI `CPU_ON`, with console input through the PL011 driver, and
+passes `run-qemu-test`. Every QEMU battery runs on it in CI (`aarch64_wasm3_smp`
+and `aarch64_warp_smp` in `tests/batteries.json`); a test whose subject aarch64
 lacks is skipped there with `requires_arch` (`scripts/qemu_test_framework.py`),
 and the reason it prints names what is missing. Read
 `docs/architecture/38-aarch64-platform.md` first, then `04-boot-and-handoff.md`,
@@ -2429,8 +2429,19 @@ and the reason it prints names what is missing. Read
   `ICC_PMR_EL1`) would reach it.
 - [ ] [ENHANCEMENT][P2] Per-root ASIDs, so a root switch keeps the other roots'
   TLB entries (`arch/aarch64/paging.c` TODO); today every switch flushes.
-- [ ] [FEATURE][P2] WARP aarch64 backend in the kernel (code loading, ring-3
-  trampolines) and per-arch AOT artifacts in packaging.
+- [x] [FEATURE][P2] WARP aarch64 backend in the kernel (ring-3 trampolines and
+  `ERET` entry, `warp_jmp`, guest atomics, stack fence); every QEMU battery runs
+  on `aarch64_warp_smp`.
+- [ ] [FEATURE][P2] Per-arch WARP AOT artifacts in packaging: packages carry
+  x86_64 AOT code only, so aarch64 WARP trees run with
+  `WASMOS_WARP_RUNTIME_LOAD_AOT` off and compile every module at load.
+- [ ] [BUG][P2] A single-CPU WARP system never echoes the first CLI command
+  after boot: on `aarch64_warp_single`, and on `x86_64_warp_smp` booted with
+  one CPU (`WASMOS_QEMU_SMP_COUNT=1`), `test_hello_go` times out on its first
+  `send_command` while the CPU stays busy in the kernel (stall dumps land in
+  `ipc_endpoint_dequeue_locked` and `thread_owner_tid_at`); with four CPUs the
+  same test passes in 8 s. CI boots the single-CPU trees with `run-qemu-test`
+  only, so the batteries do not cover it.
 - [ ] [TEST][P2] aarch64 counterparts of the inline x86_64 ring-3 probes (the
   smoke process and the fault probes with their policy verdict;
   `kernel_ring3_suite_runtime.c` TODO), and an arm64 battery axis with a CI

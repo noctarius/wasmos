@@ -22,9 +22,9 @@ runner. Bare-metal hardware is out of scope.
 
 | Aspect | aarch64 | x86_64 for comparison |
 |---|---|---|
-| Configuration | `configs/aarch64_wasm3_{single,smp}_defconfig`, `aarch64_warp_single_defconfig` | four defconfigs |
+| Configuration | `configs/aarch64_{wasm3,warp}_{single,smp}_defconfig` | four defconfigs |
 | CPUs | single or SMP (PSCI `CPU_ON`) | single or SMP (INIT-SIPI-SIPI) |
-| WASM runtime | wasm3; WARP builds (JIT only) but its ring-3 hooks are not implemented | wasm3 or WARP |
+| WASM runtime | wasm3 or WARP (JIT only; the bundled AOT code is x86_64) | wasm3 or WARP |
 | Loader | `BOOTAA64.EFI` | `BOOTX64.EFI` |
 | Interrupts | GICv3 + ITS (MSI/MSI-X as LPIs) | LAPIC/IOAPIC (or PIC) |
 | Timer | EL1 virtual timer | LAPIC timer (or PIT) |
@@ -233,11 +233,9 @@ whose reason names what is missing.
 - Stopping a CPU that spins with IRQs masked on a GIC with two security
   states: there Group 0 is the secure world's, and the stop would need a GICv3
   pseudo-NMI (priority masking through `ICC_PMR_EL1`).
-- WARP: the ring-3 hooks (`src/kernel/arch/aarch64/warp_ring3_aarch64.c`: the
-  trampoline stubs and the `ERET` entry), the linear-memory window and its
-  fault path, and per-arch AOT artifacts. The JIT itself (WARP's aarch64 code
-  generator) and the checkpoints' jump (`arch/warp_jmp.h`, assembly here since
-  clang has no `__builtin_setjmp` on aarch64) are in the kernel.
+- WARP AOT artifacts for aarch64: packages carry x86_64 AOT code only, so
+  aarch64 WARP trees compile every module at load
+  (`WASMOS_WARP_RUNTIME_LOAD_AOT` off).
 - Containment of every EL0 exception: only an unresolved instruction or data
   abort terminates just the process; an undefined instruction, `BRK` or an
   alignment fault from EL0 panics the kernel (`aarch64_exception`,

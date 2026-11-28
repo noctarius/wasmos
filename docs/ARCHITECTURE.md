@@ -57,7 +57,7 @@ in-kernel scheduler rather than an optional mode.
 - [aarch64 Platform (QEMU `virt`)](architecture/38-aarch64-platform.md) - the
   second target: EL2-to-EL1 boot, the shared slot geometry under TTBR0/TTBR1,
   GICv3 and ITS-delivered MSIs, ECAM, ACPI devices plus the board table, the
-  per-arch driver set, and what is still x86_64-only (SMP, WARP)
+  per-arch driver set, and what is still x86_64-only
 - Architecture boundary: CPU- and platform-specific code lives in
   `src/kernel/arch/<arch>/` and `src/kernel/include/arch/<arch>/`, reached only
   through the selection headers `src/kernel/include/arch/*.h`, which key on the

@@ -3122,17 +3122,43 @@ StackElement Backend::executeLinearMemoryLoad(OPCode const opcode, uint32_t cons
   return targetRegElem.elem;
 }
 
-// TODO: lower threads-proposal atomics on this backend (alignment trap plus barriers); modules built with
-// -matomics are rejected at compile time until then.
-void Backend::emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2) const {
-  static_cast<void>(addrElem);
-  static_cast<void>(offset);
-  static_cast<void>(sizeLog2);
-  throw FeatureNotSupportedException(ErrorCode::Not_implemented);
+void Backend::emitAtomicAlignmentCheck(Stack::iterator const addrElem, uint32_t const offset, uint32_t const sizeLog2) {
+  uint32_t const alignMask{(1_U32 << sizeLog2) - 1_U32};
+  if (alignMask == 0U) {
+    return;
+  }
+  if (addrElem->getBaseType() == StackType::CONSTANT) {
+    if (((addrElem->data.constUnion.u32 + offset) & alignMask) != 0U) {
+      as_.TRAP(TrapCode::UNALIGNED_ATOMIC);
+    }
+    return;
+  }
+  // Only the low bits of the effective address decide alignment, so the offset contributes offset & alignMask. A
+  // nonzero contribution is added to a writable copy of the address and subtracted again, which leaves the operand
+  // unchanged on the non-trapping path. alignMask is 1 or 3 (2- and 4-byte accesses).
+  uint32_t const offsetBits{offset & alignMask};
+  RegAllocTracker regAllocTracker{};
+  REG const addrReg{common_.liftToRegInPlaceProt(*addrElem, offsetBits != 0U, regAllocTracker).reg};
+  if (offsetBits != 0U) {
+    as_.INSTR(ADD_wD_wN_imm12zxols12).setD(addrReg).setN(addrReg).setImm12zx(SafeUInt<12U>::fromUnsafe(offsetBits))();
+  }
+  as_.INSTR((alignMask == 1U) ? TST_wN_1_t : TST_wN_3_t).setN(addrReg)();
+  as_.cTRAP(TrapCode::UNALIGNED_ATOMIC, CC::NE);
+  if (offsetBits != 0U) {
+    as_.INSTR(SUB_wD_wN_imm12zxols12).setD(addrReg).setN(addrReg).setImm12zx(SafeUInt<12U>::fromUnsafe(offsetBits))();
+  }
 }
 
 void Backend::executeAtomicFence() const {
-  throw FeatureNotSupportedException(ErrorCode::Not_implemented);
+  as_.INSTR(DMB_ISH_t)();
+}
+
+void Backend::executeAtomicBarrierAfterLoad() const {
+  as_.INSTR(DMB_ISH_t)();
+}
+
+void Backend::executeAtomicBarrierBeforeStore() const {
+  as_.INSTR(DMB_ISH_t)();
 }
 
 void Backend::executeLinearMemoryStore(OPCode const opcode, uint32_t const offset) {

@@ -81,7 +81,7 @@ jobs:
       fail-fast: false
       matrix:
         config: [x86_64_warp_single, x86_64_warp_smp, x86_64_wasm3_single, x86_64_wasm3_smp,
-                 aarch64_wasm3_single, aarch64_wasm3_smp, aarch64_warp_single]
+                 aarch64_wasm3_single, aarch64_wasm3_smp, aarch64_warp_single, aarch64_warp_smp]
     env:
       # Force TCG (software emulation). wasmos is only validated under TCG (the
       # dev environment is macOS QEMU); under KVM the bootloader->kernel handoff
@@ -173,16 +173,8 @@ jobs:
           fi
 
       # WASMOS_QEMU_TEST_TIMEOUT (job env) sets the halt test's budget.
-      # FIXME: aarch64_warp_single is built but not booted: its ring-3 hooks
-      # (src/kernel/arch/aarch64/warp_ring3_aarch64.c) panic by name at the
-      # first WARP module. Boot it once they are implemented.
       - name: Build + boot test (${{ matrix.config }})
-        run: |
-          if [ "${{ matrix.config }}" = aarch64_warp_single ]; then
-            ninja -C "out/${{ matrix.config }}"
-          else
-            ninja -C "out/${{ matrix.config }}" run-qemu-test
-          fi
+        run: ninja -C "out/${{ matrix.config }}" run-qemu-test
 
       # The only gate that exercises cross-CPU work stealing under load, so it
       # runs on the SMP configs alone. Turning WASMOS_SCHED_SMP_STRESS on in the

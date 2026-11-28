@@ -71,6 +71,13 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Do not add extra documentation files unless explicitly asked.
 - Do not break the boot flow or kernel entry contract.
 - NEVER modify code in `libs/wasm3` or `libs/warp` or in any other dependency imported via git subtree.
+  The one sanctioned exception is WebAssembly threads-proposal atomics, which
+  neither upstream implements: decoding the `0xFE` atomic loads, stores and
+  fence in both runtimes, and in WARP's aarch64 backend the alignment trap and
+  the `DMB ISH` barriers that make them sequentially consistent (the
+  `executeAtomicBarrierAfterLoad` / `executeAtomicBarrierBeforeStore` backend
+  hooks, implemented by every WARP backend). Anything outside that needs its
+  own sanction, recorded here.
 - NEVER return a bare `-1` as an error code on a subsystem boundary. Any value
   that leaves a subsystem — a host-call return, an IPC reply's code argument, or a
   status a peer decodes — must be a generated packed code from `abi/errors.yaml`

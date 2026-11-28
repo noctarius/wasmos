@@ -58,6 +58,7 @@
     {
       "name": "aarch64",
       "runtimes": [
+        "aarch64_warp_smp",
         "aarch64_wasm3_smp"
       ]
     }

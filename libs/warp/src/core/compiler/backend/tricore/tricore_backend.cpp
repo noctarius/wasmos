@@ -2323,6 +2323,14 @@ void Backend::executeAtomicFence() const {
   throw FeatureNotSupportedException(ErrorCode::Not_implemented);
 }
 
+void Backend::executeAtomicBarrierAfterLoad() const {
+  throw FeatureNotSupportedException(ErrorCode::Not_implemented);
+}
+
+void Backend::executeAtomicBarrierBeforeStore() const {
+  throw FeatureNotSupportedException(ErrorCode::Not_implemented);
+}
+
 void Backend::executeLinearMemoryStore(OPCode const opcode, uint32_t const offset) {
   assert(moduleInfo_.hasMemory && "Memory not defined");
   // coverity[autosar_cpp14_a8_5_2_violation]

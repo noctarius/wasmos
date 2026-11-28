@@ -5,8 +5,7 @@
 > concurrency, and TLB-shootdown work remain explicitly deferred.
 
 This document is the engineering reference for WARP JIT execution in ring 3.
-WARP runs on x86_64. On aarch64 it builds, JIT-only, but its ring-3 hooks are
-not implemented yet, so aarch64 trees run wasm3
+WARP runs on x86_64 and, JIT-only, on aarch64
 ([38-aarch64-platform.md](38-aarch64-platform.md)).
 It is a companion to
 `11-ring3-isolation-and-separation.md` (ring 3 kernel model) and should be
@@ -20,7 +19,9 @@ services, drivers, and utilities:
 - WARP exports execute from per-module user mappings with dedicated user CR3,
   ring-3 stack pages, and user-visible JIT/linear-memory aliases.
 - Hostcalls and export returns use ring-3 trampoline pages that raise a
-  syscall back into the kernel (`int 0x80` on x86_64).
+  syscall back into the kernel (`int 0x80` on x86_64, `svc #0` with the number
+  in `x8` on aarch64, where the entry is an `ERET` with the return trampoline
+  in `x30`).
 - The architecture-specific half is confined to `arch/warp_ring3_arch.h` and
   `src/kernel/arch/<arch>/warp_ring3_<arch>.c`: the stub machine code
   (`WARP_R3_HC_STUB_BYTES` per host-call stub), the transition into user mode
@@ -93,8 +94,12 @@ Ring 3  (execution, new):
   Fault → x86_user_exception_handler → process_set_exit_status(-11) → killed
 ```
 
-WARP source (`libs/warp`) is **never modified**.  All changes are in the
-kernel wrapper layer.
+WARP source (`libs/warp`) is modified only by the sanctioned guest-atomics
+patch: decoding the threads proposal's atomic loads, stores and fence, and on
+aarch64 the alignment trap and the `DMB ISH` barriers that make them
+sequentially consistent (`executeAtomicBarrierAfterLoad` /
+`executeAtomicBarrierBeforeStore`). Everything else is in the kernel wrapper
+layer.
 
 ---
 
@@ -509,7 +514,9 @@ trampoline VAs as `ptr` values.
 
 ### 13.3  Stack fence
 
-`k_stack_fence = 0xFFFFFFFF00000000` works for ring 0 (always below RSP).
+`k_stack_fence = 0xFFFF800000000000` lies below every kernel stack under both
+backends' comparisons: x86_64 compares the stack pointer against it signed,
+aarch64 unsigned, so a fence must be below kernel stacks in both orders.
 For ring 3, the fence must be `ring3_stack_base` (below which RSP must not
 drop).  This requires passing the fence per-process:
 

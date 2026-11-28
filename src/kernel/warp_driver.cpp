@@ -40,6 +40,7 @@ extern "C" {
 #include "src/WasmModule/WasmModule.hpp"
 #undef private
 #include "src/core/runtime/MemoryHelper.hpp"
+#include "src/core/runtime/TrapException.hpp"
 #include "src/core/common/Span.hpp"
 #include "src/core/common/ILogger.hpp"
 #include "warp/shim.h"
@@ -103,13 +104,14 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
 // Helpers
 // ---------------------------------------------------------------------------
 
-/* Stack fence handed to every ring-0 WARP entry point.  WARP's
- * ACTIVE_STACK_OVERFLOW_CHECK compares RSP against this with a SIGNED jle, and a kernel
- * RSP near 0xFFFFFFFF8... is signed ~-2 GiB, so a fence at signed ~-4 GiB never trips.
- * It is therefore a disabling value, not a real guard: ring-0 WARP code gets no stack
+/* Stack fence handed to every ring-0 WARP entry point: the bottom of the canonical
+ * higher half.  WARP's ACTIVE_STACK_OVERFLOW_CHECK traps when the stack pointer is at
+ * or below it, comparing SIGNED on x86_64 (jle) and UNSIGNED on aarch64 (b.ls); every
+ * kernel stack is above this address under both comparisons, so it never trips.  It
+ * is therefore a disabling value, not a real guard: ring-0 WARP code gets no stack
  * overflow detection.  The ring-3 path replaces it with a genuine fence inside the user
  * stack (see warp_r3_patch_basedata). */
-static const uint8_t* const k_stack_fence = reinterpret_cast<const uint8_t*>(0xFFFFFFFF00000000ULL);
+static const uint8_t* const k_stack_fence = reinterpret_cast<const uint8_t*>(0xFFFF800000000000ULL);
 
 /* The driver's vb::WasmModule, stored type-erased in the C struct.  Undefined for a
  * driver whose wasm_module is null; every caller checks driver->active first. */
@@ -439,6 +441,12 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     uint64_t r3_fn_va = warp_r3_resolve_export(mod, name);
     if (r3_fn_va == 0) {
         klog_write("[warp-r3] failed to resolve export\n");
+        /* TODO: a missing export and a guest trap (below) both return -1, and the
+         * process manager maps any failed entry to PROC_EXIT_REASON_TRAPPED
+         * (process_manager_spawn.c, wasmos_app_call_entry's caller), so a module
+         * without its entry export is reported as having trapped. The return is
+         * kernel-internal; distinguishing them needs a reason in
+         * wasmos_app_call_entry's result, on both runtimes (wasm_driver.c). */
         return -1;
     }
 
@@ -513,7 +521,15 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
         paging_switch_root(t->warp_r3_old_cr3);
         arch_irq_restore(irq_state);
         uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_TRAP_CODE);
-        return (tc == 0) ? 0 : -1;
+        if (tc == 0) {
+            return 0;
+        }
+        /* A guest trap never reaches __cxa_throw: the JIT returns its code here. The
+         * message is WARP's own for that code (TrapException::what). */
+        vb::TrapException trap(static_cast<vb::TrapCode>(tc));
+        klog_printf(
+            "[warp] trap in %s: %s (code %u)\n", name, trap.what(), static_cast<unsigned>(tc));
+        return -1;
     }
 
     /* Enter the debug entry trampoline, which captures the user stack pointer

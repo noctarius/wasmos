@@ -204,6 +204,14 @@ public:
   void executeAtomicFence() const;
 
   ///
+  /// @brief Barrier after a threads-proposal atomic load, so no later access is ordered before it (none needed under TSO: a load is not reordered with a later access)
+  void executeAtomicBarrierAfterLoad() const;
+
+  ///
+  /// @brief Barrier before a threads-proposal atomic store, so no earlier access is ordered after it (none needed under TSO: a store is not reordered with an earlier access)
+  void executeAtomicBarrierBeforeStore() const;
+
+  ///
   /// @brief Produces machine code for a memory copy instruction.
   /// @pre dst src size should be should be i32.
   /// @post stack will be handled correctly.

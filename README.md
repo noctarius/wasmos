@@ -102,7 +102,8 @@ runtime takes the Kconfig default (WARP).
 | `x86_64_warp_smp_defconfig`      | x86_64  | WARP    | SMP    |
 | `aarch64_wasm3_single_defconfig` | aarch64 | wasm3   | single |
 | `aarch64_wasm3_smp_defconfig`    | aarch64 | wasm3   | SMP    |
-| `aarch64_warp_single_defconfig`  | aarch64 | WARP    | single (builds; does not boot yet) |
+| `aarch64_warp_single_defconfig`  | aarch64 | WARP    | single |
+| `aarch64_warp_smp_defconfig`     | aarch64 | WARP    | SMP    |
 
 Give each configuration its own directory, so switching never means
 reconfiguring:

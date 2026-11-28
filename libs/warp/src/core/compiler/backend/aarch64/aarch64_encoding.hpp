@@ -569,6 +569,13 @@ constexpr OPCodeTemplate CMP_SP_xM_t{0xEB2063FFU};
 /// value and updates the condition flags
 constexpr AbstrInstr TST_wN_imm12zxols12{0x7200001FU, ArgType::NONE, ArgType::r32, ArgType::imm12zxols12_32, false};
 
+/// @brief TST Wn, #1: ANDS WZR, Wn, #1 (logical immediate N=0, immr=0, imms=0); sets Z when bit 0 is clear
+constexpr OPCodeTemplate TST_wN_1_t{0x7200001FU};
+/// @brief TST Wn, #3: ANDS WZR, Wn, #3 (logical immediate N=0, immr=0, imms=1); sets Z when bits 1:0 are clear
+constexpr OPCodeTemplate TST_wN_3_t{0x7200041FU};
+/// @brief DMB ISH: data memory barrier over the inner-shareable domain, ordering all loads and stores
+constexpr OPCodeTemplate DMB_ISH_t{0xD5033BBFU};
+
 /// @brief MSUB Wd, Wn, Wm, Wa: Multiplies two register values and subtracts the product from a third register value
 // coverity[autosar_cpp14_m3_4_1_violation]
 constexpr OPCodeTemplate MSUB_wD_wN_wM_wA_t{0x1B008000U};

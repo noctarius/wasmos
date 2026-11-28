@@ -110,7 +110,7 @@ and the CPU topology.
 
 | Symbol | Default | Effect |
 |--------|---------|--------|
-| `WASMOS_ARCH_X86_64` / `_AARCH64` | `X86_64` | target architecture: compiler triples, code model, boot file name, QEMU machine and firmware (`ARCHES` in `toolchains.py`). aarch64 is under bring-up: its kernel runs wasm3 guests and stops at the first unimplemented interface; the IRQ-mode choice and WARP are x86_64-only |
+| `WASMOS_ARCH_X86_64` / `_AARCH64` | `X86_64` | target architecture: compiler triples, code model, boot file name, QEMU machine and firmware (`ARCHES` in `toolchains.py`). aarch64 runs wasm3 and WARP (JIT only); the IRQ-mode choice is x86_64-only |
 | `WASMOS_WASM_RUNTIME_WASM3` / `_WARP` | choice | kernel runtime; WARP adds the WARP sources, `warp_aot` and AOT packing |
 | `WASMOS_IRQ_PIC` / `_LAPIC` / `_IOAPIC` | `IOAPIC` | `-DWASMOS_IRQ_MODE=0/1/2` |
 | `WASMOS_SMP` | `n` (depends on `IOAPIC`) | `-DWASMOS_SMP`; QEMU runs with 4 CPUs |

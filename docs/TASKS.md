@@ -2439,13 +2439,11 @@ and the reason it prints names what is missing. Read
   machine and may carry one per architecture; the kernel uses only its own
   and otherwise compiles the bytecode. `examples/` demo apps ship fat
   (`aot = "all"`).
-- [ ] [FEATURE][P1] Keyring service: reads the PEM public keys in
-  `/boot/system/keys/` (Ed25519 by its fixed SubjectPublicKeyInfo, RSA through
-  mbedTLS) and registers them with the kernel (a host call gated by a new
-  `keyring.register` capability), which then verifies a package signed by one
-  to the publisher trust level (`wasmos_app_trust` TODO). The build's app key
-  (`apps.pem`) becomes usable then, and `examples/` apps that ask for no
-  critical capability move to it.
+- [x] [FEATURE][P1] Keyring service (`src/services/keyring`): reads the PEM
+  public keys in `/boot/system/keys/` and registers the Ed25519 ones with the
+  kernel (`keyring_register_key`, `keyring.register`), which then verifies a
+  package signed by one to the publisher trust level. The build's app key signs
+  the `examples/` apps that ask only for app kinds (`tests/test_keyring.py`).
 - [ ] [FEATURE][P1] RSA-PSS package signatures (algorithm 2 of the signature
   record): the packer signs with a host build of mbedTLS, and the process
   manager asks the keyring to verify one asynchronously (deferred reply) before

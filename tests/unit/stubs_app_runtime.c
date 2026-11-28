@@ -36,3 +36,14 @@ int wasm_driver_call_unlocked(wasm_driver_t* driver, const char* export_name, ui
     (void)argv;
     return -1;
 }
+
+/* The capability lookup wasmos_app_trust_register_as makes: the one context that
+ * holds keyring.register is stubs_app_keyring_context, 0 (none) by default. */
+#include "capability.h"
+
+uint32_t stubs_app_keyring_context;
+
+int capability_has(uint32_t context_id, capability_kind_t kind) {
+    return kind == CAP_KEYRING_REGISTER && context_id != 0u &&
+           context_id == stubs_app_keyring_context;
+}

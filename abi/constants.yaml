@@ -605,3 +605,4 @@ groups:
       - { symbol: WASMOS_CAP_RTC_EFI, value: 11, doc: "rtc.efi: read and set the clock through UEFI runtime services (rtc_efi_get/rtc_efi_set)." }
       - { symbol: WASMOS_CAP_INVENTORY_DEVICE, value: 12, doc: "inventory.device: publish PCI and ACPI device records (and the end of a bus scan) to device-manager's inventory." }
       - { symbol: WASMOS_CAP_INVENTORY_STORAGE, value: 13, doc: "inventory.storage: publish and retire block-device and volume records in device-manager's inventory." }
+      - { symbol: WASMOS_CAP_KEYRING_REGISTER, value: 14, doc: "keyring.register: register a trusted package-signing key with the kernel (the keyring service)." }

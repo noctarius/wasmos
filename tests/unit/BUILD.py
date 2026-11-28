@@ -278,6 +278,8 @@ TESTS = [
     (RUN, 'test_warp_r3_hostcall_args', []),
     (CC, 'test_warp_r3_hostcall_args_aarch64', [*C11, '-DWASMOS_ARCH_AARCH64', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), '-I', R('tests/unit/include'), R('tests/unit/test_warp_r3_hostcall_args.c')]),
     (RUN, 'test_warp_r3_hostcall_args_aarch64', []),
+    (CC, 'test_keyring_pem', [*C11, '-I', R('src/services/keyring'), '-I', R('libs/monocypher/src'), R('tests/unit/test_keyring_pem.c'), R('src/services/keyring/keyring_pem.c'), R('libs/monocypher/src/monocypher.c')]),
+    (RUN, 'test_keyring_pem', []),
     (CC, 'test_physmem', [*C11, '-DWASMOS_PHYSMEM_TEST_SEAMS=1', '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_physmem.c'), R('src/kernel/physmem.c'), R('tests/unit/stubs_kpanic.c'), R('tests/unit/stubs_spinlock.c')]),
     (RUN, 'test_physmem', []),
     (CC, 'test_linmem_slots', [*C11, '-include', R('src/libc/include/wasmos_cast.h'), '-iquote', R('src/kernel/include'), '-iquote', R('abi/generated/c'), R('tests/unit/test_linmem_slots.c'), R('src/kernel/linmem_slots.c'), R('tests/unit/stubs_spinlock.c')]),

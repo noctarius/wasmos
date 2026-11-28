@@ -327,7 +327,7 @@ linked feature documents for rationale and rollout plans.
   descriptor v3), so their deaths are named and end the system (`svc kill
   device-manager` halts it, `tests/test_supervisor.py`). Kernel init spawns
   only the PM and the supervisor, then waits for /boot and spawns sysinit; the
-  boot milestone counts 7 required units. device-manager sends READY once
+  boot milestone counts 8 required units (the keyring among them). device-manager sends READY once
   `devmgr.inv` and `devmgr.query` are registered, not after enumeration. A unit arrives as a one-line
   spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
   always] [class=optional|required|critical] [tty=<slot>] [probe=<s>]
@@ -521,8 +521,10 @@ linked feature documents for rationale and rollout plans.
   installs it and a second, app key as PEM in `/boot/system/keys/`. A signed
   package no trusted key verifies is refused at spawn
   (`WASMOS_ERR_PROC_SPAWN_UNTRUSTED`); an unsigned one starts with `ipc.basic`.
-  A publisher key's package gets `dma.buffer` at most, once the keyring (not
-  built yet) registers such keys. A manifest
+  The keyring service registers the PEM keys in `/boot/system/keys/` with the
+  kernel at boot (`test_keyring.py`); a package signed by one is a
+  publisher's and gets `dma.buffer` at most. The build signs the `examples/`
+  apps that need nothing else with its app key. A manifest
   capability beyond `ipc.basic` is granted only to a package that verifies;
   a kind that acts on requests also needs the requester to hold it or
   `spawn.grant` (`capability_manifest_grant_check`), so the shell holds

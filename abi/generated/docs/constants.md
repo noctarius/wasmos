@@ -535,3 +535,4 @@ the kernel's capability_kind_t takes the same values.
 | `WASMOS_CAP_RTC_EFI` | 11 | rtc.efi: read and set the clock through UEFI runtime services (rtc_efi_get/rtc_efi_set). |
 | `WASMOS_CAP_INVENTORY_DEVICE` | 12 | inventory.device: publish PCI and ACPI device records (and the end of a bus scan) to device-manager's inventory. |
 | `WASMOS_CAP_INVENTORY_STORAGE` | 13 | inventory.storage: publish and retire block-device and volume records in device-manager's inventory. |
+| `WASMOS_CAP_KEYRING_REGISTER` | 14 | keyring.register: register a trusted package-signing key with the kernel (the keyring service). |

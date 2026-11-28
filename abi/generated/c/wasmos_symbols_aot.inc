@@ -134,4 +134,5 @@
     LINK("wasmos", "pci_config_write_for", stub_i4) , \
     LINK("wasmos", "ipc_peer_await", stub_i2) , \
     LINK("wasmos", "rtc_efi_get", stub_i2) , \
-    LINK("wasmos", "rtc_efi_set", stub_i2)
+    LINK("wasmos", "rtc_efi_set", stub_i2) , \
+    LINK("wasmos", "keyring_register_key", stub_i2)

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "monocypher.h"
 #include "monocypher-ed25519.h"
 #include "test_shuffle.h"
 
@@ -449,6 +450,101 @@ static int test_signature_records_are_checked(void) {
     return 0;
 }
 
+/* DER SubjectPublicKeyInfo of the Ed25519 key from seed first, first+1, ... */
+static void key_der(uint8_t first, uint8_t der[44]) {
+    static const uint8_t prefix[12] = {
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00};
+    uint8_t seed[32];
+    uint8_t secret[64];
+    for (uint32_t i = 0; i < 32; ++i) {
+        seed[i] = (uint8_t)(first + i);
+    }
+    memcpy(der, prefix, sizeof(prefix));
+    crypto_ed25519_key_pair(secret, der + sizeof(prefix), seed);
+}
+
+/* The key id a DER key has (BLAKE2b-256, first 16 bytes), as the packer derives it. */
+static void key_id_of(const uint8_t der[44], uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN]) {
+    uint8_t hash[32];
+    crypto_blake2b(hash, sizeof(hash), der, 44);
+    memcpy(id, hash, WASMOS_APP_SIG_KEY_ID_LEN);
+}
+
+/* A key the keyring registers makes its packages a publisher's: they start and
+ * run AOT code, and are not the system's. The table is global, so every
+ * registration check is in this one case, on seeds no other case uses. */
+static int test_a_registered_key_makes_a_publisher(void) {
+    const test_aot_t aot[] = {{EM_X86_64, "x86code"}};
+    const uint8_t publisher = 0x40u;
+    uint8_t der[44];
+    uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN];
+    wasmos_app_desc_t desc;
+    key_der(publisher, der);
+    key_id_of(der, id);
+
+    uint32_t len = sign_blob_with(build(1, aot, 1, 0), publisher, id);
+    if (wasmos_app_parse(g_blob, len, &desc) != 0 ||
+        wasmos_app_trust(&desc) != WASMOS_APP_TRUST_INVALID) {
+        return __LINE__; /* unknown until registered */
+    }
+    if (wasmos_app_trust_register(der, sizeof(der)) != WASMOS_OK ||
+        wasmos_app_trust(&desc) != WASMOS_APP_TRUST_PUBLISHER || wasmos_app_admit(&desc) != 0 ||
+        wasmos_app_signature_valid(&desc) != 0 ||
+        select_for(&desc, EM_X86_64, "x86code") != WASMOS_APP_AOT_SELECTED) {
+        return __LINE__;
+    }
+    if (wasmos_app_trust_register(der, sizeof(der)) != WASMOS_OK) {
+        return __LINE__; /* again: a no-op */
+    }
+    /* Altered after signing: still refused. */
+    g_blob[len - SIG_RECORD_LEN - 1u] ^= 0x01u;
+    if (wasmos_app_parse(g_blob, len, &desc) != 0 ||
+        wasmos_app_trust(&desc) != WASMOS_APP_TRUST_INVALID) {
+        return __LINE__;
+    }
+    /* Registering the system key changes nothing: it still grants privilege. */
+    uint8_t system_der[44];
+    key_der(SYSTEM_SEED, system_der);
+    len = sign_blob(build(1, aot, 1, 0));
+    if (wasmos_app_trust_register(system_der, sizeof(system_der)) != WASMOS_OK ||
+        wasmos_app_parse(g_blob, len, &desc) != 0 ||
+        wasmos_app_trust(&desc) != WASMOS_APP_TRUST_SYSTEM) {
+        return __LINE__;
+    }
+    /* Only an Ed25519 SubjectPublicKeyInfo is accepted. */
+    uint8_t bad[44];
+    memcpy(bad, der, sizeof(bad));
+    bad[8] ^= 0x01u;
+    if (wasmos_app_trust_register(bad, sizeof(bad)) != WASMOS_ERR_KERNEL_KEY_UNSUPPORTED ||
+        wasmos_app_trust_register(der, 43u) != WASMOS_ERR_KERNEL_KEY_UNSUPPORTED) {
+        return __LINE__;
+    }
+    /* The table holds a bounded number of keys. */
+    int full = 0;
+    for (uint32_t i = 0; i < 64u && !full; ++i) {
+        uint8_t more[44];
+        key_der((uint8_t)(0x41u + i), more);
+        int rc = wasmos_app_trust_register(more, sizeof(more));
+        if (rc == WASMOS_ERR_KERNEL_KEYRING_FULL) {
+            full = 1;
+        } else if (rc != WASMOS_OK) {
+            return __LINE__;
+        }
+    }
+    if (!full || wasmos_app_trust_register(der, sizeof(der)) != WASMOS_OK) {
+        return __LINE__; /* full, and a registered key still is */
+    }
+    /* The host call's way in needs keyring.register (stubs_app_runtime.c). */
+    extern uint32_t stubs_app_keyring_context;
+    stubs_app_keyring_context = 7u;
+    if (wasmos_app_trust_register_as(8u, der, sizeof(der)) != WASMOS_ERR_KERNEL_NOT_AUTHORIZED ||
+        wasmos_app_trust_register_as(7u, der, sizeof(der)) != WASMOS_OK ||
+        wasmos_app_trust_register_as(7u, der, 43u) != WASMOS_ERR_KERNEL_KEY_UNSUPPORTED) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -468,6 +564,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_an_unsigned_package_is_admitted_untrusted),
         WASMOS_TEST_CASE(test_an_altered_signed_package_is_refused),
         WASMOS_TEST_CASE(test_signature_records_are_checked),
+        WASMOS_TEST_CASE(test_a_registered_key_makes_a_publisher),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     if (wasmos_test_run_all(cases, groups) != 0) {

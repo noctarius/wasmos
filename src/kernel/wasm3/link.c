@@ -2058,6 +2058,21 @@ m3ApiRawFunction(wasmos_rtc_efi_set) {
     m3ApiReturn(efi_rtc_set(buf));
 }
 
+/* keyring_register_key (abi/hostcalls.yaml): the check and the copy are
+ * wasmos_app_trust_register_as's, shared with WARP. */
+m3ApiRawFunction(wasmos_keyring_register_key) {
+    m3ApiReturnType(int32_t) m3ApiGetArgMem(const uint8_t*, der) m3ApiGetArg(int32_t, len);
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_NO_CALLER);
+    }
+    if (len <= 0 || len > 64) {
+        m3ApiReturn(WASMOS_ERR_KERNEL_KEY_UNSUPPORTED);
+    }
+    m3ApiCheckMem(der, (uint32_t)len);
+    m3ApiReturn(wasmos_app_trust_register_as(context_id, der, (uint32_t)len));
+}
+
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;
  * WASMOS_INVAL for a negative handle, WASMOS_ERR_MSI_NOT_FUNCTION_DRIVER when
  * the endpoint has no live owner, which drives nothing. */

@@ -301,6 +301,8 @@ enum {
     WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 11), /* every kernel-log subscriber slot is held by another process */
     WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 12), /* a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it */
     WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 13), /* a ring-3 host-call trap carried an ordinal that names no host call */
+    WASMOS_ERR_KERNEL_KEY_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 14), /* a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with */
+    WASMOS_ERR_KERNEL_KEYRING_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 15), /* the kernel's trusted-key table holds as many keys as it can; the key was not registered */
     WASMOS_ERR_BLOCK_NO_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 1), /* no per-process block slot is available */
     WASMOS_ERR_BLOCK_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 2), /* no physical backing could be obtained for the buffer */
     WASMOS_ERR_BLOCK_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 3), /* the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address */
@@ -666,6 +668,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: return "kernel.NO_SUBSCRIBER_SLOT";
     case WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE: return "kernel.PHYS_NOT_FIRMWARE";
     case WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: return "kernel.UNKNOWN_HOSTCALL";
+    case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "kernel.KEY_UNSUPPORTED";
+    case WASMOS_ERR_KERNEL_KEYRING_FULL: return "kernel.KEYRING_FULL";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "block.NO_SLOT";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "block.NO_BACKING";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "block.ABOVE_4G";
@@ -963,6 +967,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: return "every kernel-log subscriber slot is held by another process";
     case WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE: return "a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it";
     case WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: return "a ring-3 host-call trap carried an ordinal that names no host call";
+    case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with";
+    case WASMOS_ERR_KERNEL_KEYRING_FULL: return "the kernel's trusted-key table holds as many keys as it can; the key was not registered";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";

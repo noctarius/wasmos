@@ -14,6 +14,13 @@ spawn /boot/apps/chardevc.wap
 # depends on the order of these lines.
 service vt /boot/system/services/vt.wap class=required
 
+# The trusted package-signing keys (/boot/system/keys): until the keyring has
+# registered them, a package signed with a publisher's key -- the demo apps
+# started below are signed with the build's app key -- is refused. The keyring
+# registers its name only once the keys are in force.
+service keyring /boot/system/services/keyring.wap class=required
+wait-svc keyring
+
 # The kernel log, appended to /var/log/messages on the tmpfs root from the first
 # boot line on (the logger reads the kernel's ring from its oldest byte).
 exec /boot/system/utils/mkdir.wap -p /var/log

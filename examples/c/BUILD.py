@@ -129,9 +129,10 @@ def build(b):
     )
     install(b, "apps/crypto_smoke.wap", wap)
 
-    # priv_probe's bytecode packed two more ways for the signature policy
-    # (tests/test_signed_packages.py): without a signature, and signed and then
-    # altered by one byte in its payload, so the signature no longer matches.
+    # priv_probe's bytecode packed three more ways for the signature policy
+    # (tests/test_signed_packages.py): without a signature; signed and then
+    # altered by one byte in its payload, so the signature no longer matches;
+    # and signed with the build's app key.
     probe_wasm = "priv_probe.wasm"
     unsigned = pack(
         b,
@@ -154,6 +155,17 @@ def build(b):
         description="TAMPER priv_tampered.wap",
     )
     install(b, "apps/priv_tampered.wap", "priv_tampered.wap")
+    # Signed with the build's app key: trusted, but a publisher's, so its
+    # svc.control is refused while it still starts.
+    publisher = pack(
+        b,
+        "priv_publisher",
+        probe_wasm,
+        b.src("priv_probe/linker.metadata"),
+        aot=False,
+        sign=b.exports["signing.app_seed"],
+    )
+    install(b, "apps/priv_publisher.wap", publisher)
 
     for name in SIMPLE:
         wap = guest(

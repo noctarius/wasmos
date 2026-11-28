@@ -280,6 +280,8 @@ pub const WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED: i32 = -0x0013000A; // an all-cont
 pub const WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT: i32 = -0x0013000B; // every kernel-log subscriber slot is held by another process
 pub const WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE: i32 = -0x0013000C; // a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it
 pub const WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: i32 = -0x0013000D; // a ring-3 host-call trap carried an ordinal that names no host call
+pub const WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: i32 = -0x0013000E; // a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with
+pub const WASMOS_ERR_KERNEL_KEYRING_FULL: i32 = -0x0013000F; // the kernel's trusted-key table holds as many keys as it can; the key was not registered
 pub const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process block slot is available
 pub const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
 pub const WASMOS_ERR_BLOCK_ABOVE_4G: i32 = -0x00140003; // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
@@ -636,6 +638,8 @@ pub fn wasmos_strerror(c: i32) -> &'static str {
         WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT => "every kernel-log subscriber slot is held by another process",
         WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE => "a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it",
         WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL => "a ring-3 host-call trap carried an ordinal that names no host call",
+        WASMOS_ERR_KERNEL_KEY_UNSUPPORTED => "a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with",
+        WASMOS_ERR_KERNEL_KEYRING_FULL => "the kernel's trusted-key table holds as many keys as it can; the key was not registered",
         WASMOS_ERR_BLOCK_NO_SLOT => "no per-process block slot is available",
         WASMOS_ERR_BLOCK_NO_BACKING => "no physical backing could be obtained for the buffer",
         WASMOS_ERR_BLOCK_ABOVE_4G => "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address",

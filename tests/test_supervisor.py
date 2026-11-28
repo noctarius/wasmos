@@ -120,7 +120,7 @@ class SupervisorTests(unittest.TestCase):
         # require_prompt already waited for the milestone; it is said once,
         # and it is the only thing the supervisor says on a clean boot.
         self.assertRegex(
-            log, r"\[supervisor\] boot complete at \d+ ms: 7 required units up"
+            log, r"\[supervisor\] boot complete at \d+ ms: 8 required units up"
         )
         self.assertEqual(log.count("[supervisor] boot complete"), 1)
         # Kernel init spawns sysinit on fs-manager's word that /boot is

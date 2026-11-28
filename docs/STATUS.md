@@ -799,7 +799,7 @@ linked feature documents for rationale and rollout plans.
   `WASMOS_ARCH_AARCH64`); `ARCHES` in `scripts/buildgen/toolchains.py` holds
   every per-architecture build and QEMU value. aarch64
   (`aarch64_{wasm3,warp}_{single,smp}_defconfig`, QEMU `virt` with GICv3, HVF
-  locally and TCG in CI) boots to the CLI under wasm3 or WARP (JIT only), on one core or on four with the
+  locally and TCG in CI) boots to the CLI under wasm3 or WARP (AOT and JIT), on one core or on four with the
   secondaries started through PSCI `CPU_ON`, and runs every QEMU battery on the
   SMP configuration, in CI on an aarch64-linux runner; `run-qemu-test` and
   `run-qemu-ring3-threading-test` pass. It drives: EL0/EL1 with `svc` syscalls,
@@ -808,7 +808,7 @@ linked feature documents for rationale and rollout plans.
   PL011 console, virtio-blk as the boot disk, virtio-net, -rng, -console, the
   clock (below), the display and input (below), and PSCI power-off. The design
   is [architecture/38-aarch64-platform.md](architecture/38-aarch64-platform.md);
-  WARP AOT artifacts, ASIDs and a framebuffer for firmware without a GOP are open
+  ASIDs and a framebuffer for firmware without a GOP are open
   (`TASKS.md`, "arm64 Port"). The SMP scheduler stress gate
   (`run-qemu-sched-stress-test`) passes on aarch64 SMP under HVF (25 of 25
   runs) and runs in CI's `defconfig` job on the arm64 runner. A panic stops

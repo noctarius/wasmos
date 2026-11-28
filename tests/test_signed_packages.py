@@ -13,7 +13,9 @@ altered by one byte (priv_tampered.wap), which is refused outright: a
 signature no trusted key verifies stops the spawn. priv_deputy exits only ipc.basic and
 asks for priv_probe to be spawned; `priv_deputy exit` asks and exits without
 waiting for the answer. The shell holds svc.control, so it may start
-the signed probe; nothing else here may.
+the signed probe; nothing else here may. priv_rsa and priv_rsa_untrusted are
+the probe signed with RSA-PSS keys: one the keyring trusts (rsa-test.pem), one
+it does not.
 """
 
 import os
@@ -122,6 +124,27 @@ class SignedPackagesTest(unittest.TestCase):
         # priv_probe signed with the build's app key, which the keyring
         # registered: it is trusted, and its svc.control is refused.
         self._run("priv_publisher", SYSTEM_ONLY, refused=True)
+
+    def test_an_rsa_signed_package_is_a_publishers(self):
+        # Regression: 2026-11-28-rsa-keys-skipped -- an RSA signature was
+        # verified by no key, so the package was refused outright. Signed with
+        # the trusted RSA test key, the probe starts as a publisher's: its
+        # svc.control is refused for that reason and no other.
+        self._run("priv_rsa", SYSTEM_ONLY, refused=True)
+
+    def test_an_rsa_signature_from_an_untrusted_key_does_not_start(self):
+        syslog_start = len(self.session.syslog_tail(1 << 20))
+        start = self.session.send_command("priv_rsa_untrusted", timeout_s=20)
+        log = self._wait_for(start, syslog_start, INVALID)
+        tail = f"--- tail ---\n{self.session.tail()}\n"
+        self.assertTrue(
+            INVALID in log, f"the untrusted package was not refused.\n{tail}"
+        )
+        self.assertTrue(
+            self.session.expect_from(start, b"wamos> ", timeout_s=20),
+            f"no prompt after the refused spawn.\n{tail}",
+        )
+        self.assertFalse(STARTED in self._log_since(start, syslog_start), tail)
 
     def test_a_requester_cannot_hand_out_what_it_does_not_hold(self):
         self._run("priv_deputy", REQUESTER, refused=True)

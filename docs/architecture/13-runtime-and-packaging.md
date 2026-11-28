@@ -179,14 +179,26 @@ A package carries one WARP AOT binary per architecture it was compiled for,
 each tagged with the ELF `e_machine` of its code (`EM_X86_64` 62,
 `EM_AARCH64` 183). WARP records no ISA in a compiled binary, so the tag is
 what keeps a binary for one architecture from executing on another.
-`wasmos_app_parse` refuses a zero tag, a zero size and a tag listed twice;
-`wasmos_app_compiled_for` selects by tag, and `wasmos_app_start` asks for
-`ARCH_ELF_MACHINE`. A package with binaries but none for this architecture
-starts from its bytecode and logs `no AOT binary for this architecture,
-compiling <name> at load`, so a WASM package runs on every
-architecture and AOT only changes how fast it starts. The module's name
-never opens a kernel log line: console output is test input, and a utility's
-own errors start with `<name>:`.
+`wasmos_app_parse` refuses a zero tag, a zero size and a tag listed twice.
+
+An AOT binary runs as native code and skips every check WARP's compiler emits
+for the bytecode (bounds checks included), so it is trusted like a native
+image: `wasmos_app_aot_select` hands it to the runtime only when the package's
+signature is valid for the build's key
+([Capability and Policy](10-capability-and-policy.md), "Signed Packages"),
+whatever capabilities the package asks for, and then only the binary tagged
+`ARCH_ELF_MACHINE`. Otherwise the package starts from its bytecode and the
+WARP driver logs why: `no AOT binary for this architecture, compiling <name>
+at load`, or `AOT binary of a package not signed by a trusted key, compiling
+<name> at load`. A WASM package therefore runs on every architecture and from
+any source, and AOT only changes how fast it starts. The module's name never
+opens a kernel log line: console output is test input, and a utility's own
+errors start with `<name>:`.
+
+TODO: the build's key is the only trusted key, so a package from outside the
+build (an external app) always runs from bytecode. A second trust source -- a
+system keyring of signing keys -- is not defined yet; `wasmos_app_aot_trusted`
+(`src/kernel/wasmos_app.c`) is where it would be consulted.
 
 The manifest's `aot` key chooses what is packed: `aot = true` the tree's own
 architecture, which is all a system driver, service or utility needs since it

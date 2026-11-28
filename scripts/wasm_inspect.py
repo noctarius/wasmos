@@ -5,7 +5,9 @@ import struct
 WASM_MAGIC = b"\0asm"
 WASM_VERSION = 1
 WASMOS_MAGIC = b"WASMOSAP"
-WASMOS_APP_VERSION = 11
+WASMOS_APP_VERSION = 12
+# ELF e_machine values that tag a package's WARP AOT binaries.
+AOT_MACHINES = {62: "x86_64", 183: "aarch64"}
 SUBSYSTEM_TAG_LEN = 8
 # Fixed-size record with no trailing name: wasmos_region_entry_t in
 # scripts/make_wasmos_app.c.
@@ -73,7 +75,7 @@ def parse_wasmos_app(data):
     dep_count, off = read_u32_le(data, off)
     cap_count, off = read_u32_le(data, off)
     mem_hint_count, off = read_u32_le(data, off)
-    compiled_size, off = read_u32_le(data, off)
+    compiled_count, off = read_u32_le(data, off)
     off += SUBSYSTEM_TAG_LEN
     region_count, off = read_u32_le(data, off)
     signature_size, off = read_u32_le(data, off)
@@ -105,6 +107,17 @@ def parse_wasmos_app(data):
     wasm_off = off
     if wasm_off + wasm_size > len(data):
         raise ReadError("wasm payload exceeds file size")
+    off += wasm_size
+    aot = []
+    for _ in range(compiled_count):
+        machine, off = read_u16_le(data, off)
+        _, off = read_u16_le(data, off)
+        size, off = read_u32_le(data, off)
+        aot.append((AOT_MACHINES.get(machine, f"e_machine {machine}"), size))
+    # The binaries follow the table back to back; a table that claims more than
+    # the file holds is refused, as the kernel's parser refuses it.
+    if off + sum(size for _, size in aot) > len(data):
+        raise ReadError("AOT binaries exceed file size")
     return {
         "version": version,
         "flags": flags,
@@ -113,6 +126,7 @@ def parse_wasmos_app(data):
         "wasm_offset": wasm_off,
         "wasm_size": wasm_size,
         "signed": signature_size != 0,
+        "aot": aot,
     }
 
 
@@ -409,6 +423,8 @@ def main():
             print(f"flags: 0x{app_info['flags']:08X}")
             print(f"wasm_size: {app_info['wasm_size']}")
             print(f"signed: {'yes' if app_info['signed'] else 'no'}")
+            aot = ", ".join(f"{arch} ({size} bytes)" for arch, size in app_info["aot"])
+            print(f"aot: {aot or 'none'}")
             print("")
         print("WASM")
         if info["type_count"] is not None:

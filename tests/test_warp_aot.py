@@ -11,8 +11,13 @@ if SCRIPTS not in sys.path:
 
 from qemu_test_framework import QemuSession, build_config_enabled, default_config
 
-AOT_USED = "[warp-driver] using AOT binary"
-AOT_FAILED = "[warp-driver] AOT load failed"
+AOT_USED = "[warp-driver] using AOT binary for "
+AOT_FAILED = "[warp-driver] AOT load failed for "
+NO_AOT_HERE = "[warp-driver] no AOT binary for this architecture, compiling "
+UNTRUSTED = (
+    "[warp-driver] AOT binary of a package not signed by a trusted key, compiling "
+)
+PROBE_OK = b"[test] aot-probe ok sum=5050"
 
 
 @unittest.skipUnless(
@@ -34,6 +39,19 @@ class WarpAotLoadTest(unittest.TestCase):
     Regression: 2026-11-28-warp-aot-host-isa -- warp_aot was built with
     JIT_TARGET_X86_64 whatever the target, so aarch64 trees packed x86_64 code
     and had to boot with AOT loading off, compiling every module at spawn.
+
+    Regression: 2026-11-28-wap-aot-untagged -- a .wap did not record which
+    architecture its AOT binary was for, so a package built for x86_64 and
+    spawned on aarch64 executed x86_64 code at EL0 and panicked the kernel. A
+    v12 package tags each binary with its ELF machine and may carry one per
+    architecture; the kernel uses only its own and otherwise compiles the
+    bytecode. examples/c/aot_probe is packed both ways.
+
+    Regression: 2026-11-28-aot-unsigned -- the kernel ran any package's AOT
+    binary as native code, so an unsigned package could carry a hand-made one
+    tagged for this machine and skip every check WARP's compiler emits. Only a
+    package signed by a trusted key has its binary used; examples/c/aot_probe
+    is also packed unsigned.
     """
 
     @classmethod
@@ -68,6 +86,42 @@ class WarpAotLoadTest(unittest.TestCase):
             f"no module loaded an AOT binary\n--- kernel log ---\n{log[-4096:]}",
         )
 
+    def _spawn_probe(self, path: str) -> str:
+        start = self.session.send_command(f"spawn {path}", timeout_s=30)
+        self.assertTrue(
+            self.session.expect_from(start, PROBE_OK, timeout_s=30),
+            f"{path} did not run\n--- tail ---\n{self.session.tail()}",
+        )
+        return self.session.syslog_tail(1 << 20)
+
+    def test_a_fat_package_runs_from_its_own_architecture(self) -> None:
+        log = self._spawn_probe("/boot/apps/aotfat")
+        self.assertIn(
+            AOT_USED + "aot-fat",
+            log,
+            f"the fat package did not use its AOT binary\n--- kernel log ---\n{log[-4096:]}",
+        )
+        self.assertNotIn(NO_AOT_HERE + "aot-fat", log)
+        self.assertNotIn(AOT_FAILED + "aot-fat", log)
+
+    def test_a_package_without_this_architecture_runs_from_bytecode(self) -> None:
+        log = self._spawn_probe("/boot/apps/aotforgn")
+        self.assertIn(
+            NO_AOT_HERE + "aot-foreign",
+            log,
+            f"no fallback was reported\n--- kernel log ---\n{log[-4096:]}",
+        )
+        self.assertNotIn(AOT_USED + "aot-foreign", log)
+
+    def test_an_unsigned_package_runs_from_bytecode(self) -> None:
+        log = self._spawn_probe("/boot/apps/aotunsig")
+        self.assertIn(
+            UNTRUSTED + "aot-unsigned",
+            log,
+            f"no fallback was reported\n--- kernel log ---\n{log[-4096:]}",
+        )
+        self.assertNotIn(AOT_USED + "aot-unsigned", log)
+
     def test_an_aot_utility_runs(self) -> None:
         start = self.session.send_command("sysinfo", timeout_s=30)
         self.assertTrue(
@@ -75,7 +129,9 @@ class WarpAotLoadTest(unittest.TestCase):
             f"sysinfo (AOT) did not run\n--- tail ---\n{self.session.tail()}",
         )
         log = self.session.syslog_tail(1 << 20)
-        self.assertNotIn(AOT_FAILED, log, f"--- kernel log ---\n{log[-4096:]}")
+        self.assertNotIn(
+            AOT_FAILED + "sysinfo", log, f"--- kernel log ---\n{log[-4096:]}"
+        )
 
 
 if __name__ == "__main__":

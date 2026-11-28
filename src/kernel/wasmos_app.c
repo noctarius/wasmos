@@ -2,6 +2,7 @@
  * wasmos_app_parse() validates the magic/version and builds a wasmos_app_desc_t
  * with zero-copy pointers into the blob.  wasmos_app_start() creates the WASM
  * driver instance, grants capabilities, and prepares entry args. */
+#include "arch/arch_cpu.h"
 #include "klog.h"
 #include "native_driver.h"
 #include "serial.h"
@@ -45,8 +46,10 @@ typedef struct __attribute__((packed)) {
     uint32_t dep_count;
     uint32_t cap_count;
     uint32_t mem_hint_count;
-    /* Byte length of a WARP AOT binary appended after the payload; 0 if absent. */
-    uint32_t compiled_size;
+    /* Number of WARP AOT binaries (v12): a table of compiled_count
+     * wasmos_app_compiled_record_t follows the payload, then the binaries in
+     * table order. */
+    uint32_t compiled_count;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
     /* Declared register windows, written after the driver matches. */
     uint32_t region_count;
@@ -54,6 +57,14 @@ typedef struct __attribute__((packed)) {
      * ends the package, over every byte before it, this header included. */
     uint32_t signature_size;
 } wasmos_app_header_t;
+
+/* One AOT table record: the ELF e_machine of the binary's code and its byte
+ * length.  `reserved` is written as 0 and not read. */
+typedef struct __attribute__((packed)) {
+    uint16_t machine;
+    uint16_t reserved;
+    uint32_t size;
+} wasmos_app_compiled_record_t;
 
 /* Dependency record, followed by name_len raw name bytes with no terminator. */
 typedef struct __attribute__((packed)) {
@@ -105,6 +116,7 @@ static int wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t* state,
     manifest.module_size = params->module_size;
     manifest.compiled_bytes = params->compiled_bytes;
     manifest.compiled_size = params->compiled_size;
+    manifest.compiled_status = params->compiled_status;
     manifest.entry_export = 0;
     manifest.entry_argc = 0;
     manifest.entry_argv = 0;
@@ -388,7 +400,7 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     uint32_t dep_count = 0;
     uint32_t cap_count = 0;
     uint32_t mem_hint_count = 0;
-    uint32_t compiled_size = 0;
+    uint32_t compiled_count = 0;
     char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     subsystem_tag_default_for_flags(0, subsystem_tag);
     uint32_t region_count = 0;
@@ -410,7 +422,10 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     if (region_count > WASMOS_APP_MAX_REGIONS) {
         return -1;
     }
-    compiled_size = hdr->compiled_size;
+    compiled_count = hdr->compiled_count;
+    if (compiled_count > WASMOS_APP_MAX_COMPILED) {
+        return -1;
+    }
     for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
         subsystem_tag[i] = hdr->subsystem_tag[i];
     }
@@ -530,14 +545,28 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     const uint8_t* wasm_bytes = &blob[off];
     off += wasm_size;
 
-    /* Version 4+ may append a pre-compiled WARP AOT binary after the WASM bytes. */
-    const uint8_t* compiled_bytes = 0;
-    if (compiled_size > 0) {
-        if (check_bounds(off, compiled_size, blob_size) != 0) {
+    /* Version 12: the AOT table, then the binaries it describes, in its order. */
+    uint32_t table_size = compiled_count * (uint32_t)sizeof(wasmos_app_compiled_record_t);
+    if (check_bounds(off, table_size, blob_size) != 0) {
+        return -1;
+    }
+    const uint8_t* table = &blob[off];
+    off += table_size;
+    for (uint32_t i = 0; i < compiled_count; ++i) {
+        wasmos_app_compiled_record_t rec;
+        memcpy(&rec, table + i * sizeof(rec), sizeof(rec));
+        if (rec.machine == 0u || rec.size == 0u || check_bounds(off, rec.size, blob_size) != 0) {
             return -1;
         }
-        compiled_bytes = &blob[off];
-        off += compiled_size;
+        for (uint32_t j = 0; j < i; ++j) {
+            if (out_desc->compiled[j].machine == rec.machine) {
+                return -1;
+            }
+        }
+        out_desc->compiled[i].machine = rec.machine;
+        out_desc->compiled[i].bytes = &blob[off];
+        out_desc->compiled[i].size = rec.size;
+        off += rec.size;
     }
 
     /* Version 11: an optional signature, which must be exactly the last bytes of
@@ -565,13 +594,53 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
     out_desc->entry_len = entry_len;
     out_desc->wasm_bytes = wasm_bytes;
     out_desc->wasm_size = wasm_size;
-    out_desc->compiled_bytes = compiled_bytes;
-    out_desc->compiled_size = compiled_size;
+    out_desc->compiled_count = compiled_count;
     out_desc->signature = signature;
     out_desc->signed_size = signed_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
     return 0;
+}
+
+int wasmos_app_compiled_for(const wasmos_app_desc_t* desc, uint16_t machine, const uint8_t** bytes,
+                            uint32_t* size) {
+    *bytes = 0;
+    *size = 0;
+    for (uint32_t i = 0; i < desc->compiled_count; ++i) {
+        if (desc->compiled[i].machine == machine) {
+            *bytes = desc->compiled[i].bytes;
+            *size = desc->compiled[i].size;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* Whether a package's AOT code may run. AOT code executes as native code and
+ * skips every check WARP's compiler would have emitted for the bytecode, so it
+ * is trusted like a native image: only a package signed with the build's key
+ * qualifies, whatever capabilities it asks for.
+ * TODO: packages from outside the build (external apps) can only run from
+ * bytecode until a second trust source -- a system keyring of signing keys --
+ * is defined; this is where it would be consulted. */
+static int wasmos_app_aot_trusted(const wasmos_app_desc_t* desc) {
+    return wasmos_app_signature_valid(desc);
+}
+
+uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint16_t machine,
+                               const uint8_t** bytes, uint32_t* size) {
+    *bytes = 0;
+    *size = 0;
+    if (desc->compiled_count == 0) {
+        return WASMOS_APP_AOT_ABSENT;
+    }
+    if (!wasmos_app_aot_trusted(desc)) {
+        return WASMOS_APP_AOT_UNTRUSTED;
+    }
+    if (wasmos_app_compiled_for(desc, machine, bytes, size) != 0) {
+        return WASMOS_APP_AOT_OTHER_ARCH;
+    }
+    return WASMOS_APP_AOT_SELECTED;
 }
 
 /* Looks up the registered handler for a package's subsystem tag and copies its
@@ -761,8 +830,8 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
     params.name = instance->name;
     params.module_bytes = desc->wasm_bytes;
     params.module_size = desc->wasm_size;
-    params.compiled_bytes = desc->compiled_bytes;
-    params.compiled_size = desc->compiled_size;
+    params.compiled_status = wasmos_app_aot_select(
+        desc, ARCH_ELF_MACHINE, &params.compiled_bytes, &params.compiled_size);
     params.entry_export = 0;
     params.entry_argc = 0;
     params.entry_argv = 0;

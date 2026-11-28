@@ -515,7 +515,7 @@ linked feature documents for rationale and rollout plans.
   `test_supervisor_unit` and, on both runtimes, `test_hostcall_ipc`.
 - Packages are signed and a manifest's privilege is checked
   (`architecture/10`, "Signed Packages"). The build signs every `.wap` with
-  Ed25519 (`libs/monocypher` 4.0.3; `.wap` v11 ends in the signature) using
+  Ed25519 (`libs/monocypher` 4.0.3; the `.wap` ends in the signature) using
   `WASMOS_SIGNING_KEY` or a development seed it creates once in the build
   directory, and compiles the public key into the kernel. A manifest
   capability beyond `ipc.basic` is granted only to a package that verifies;
@@ -754,8 +754,10 @@ linked feature documents for rationale and rollout plans.
   `POPCNT`/`LZCNT`/`TZCNT` for wasm `i32.popcnt`/`clz`/`ctz`) with no CPUID
   guard, so the default `qemu64` model faults them with `#UD`.
 - Recent baseline: wasm3 and WARP+SMP boot through `init` to the CLI/halt path;
-  the WARP build uses AOT payloads for internal non-native modules and JIT for
-  examples and graphical apps.
+  the WARP build uses AOT payloads for internal non-native modules (the tree's
+  architecture) and for the AOT examples, which ship fat (`.wap` v12: one
+  tagged binary per architecture, `aot = "all"`), and JIT for the rest; a
+  package without a binary for the running architecture starts from bytecode.
 - Primary regression gates: `run-kernel-unit-tests`, `run-qemu-test`,
   `run-qemu-cli-test`, `run-qemu-ring3-test`, and (when applicable)
   `run-qemu-ring3-threading-test`. Never run QEMU integration targets in

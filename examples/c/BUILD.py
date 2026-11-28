@@ -49,6 +49,32 @@ def build(b):
         kernel_blob(b, "chardev_client.wasm")
     )
 
+    # One module packed three ways for tests/test_warp_aot.py: signed with an
+    # AOT binary for every architecture; signed with binaries only for the
+    # architectures other than the tree's; and unsigned, with the tree's own.
+    wap = guest(
+        b,
+        "aot_fat",
+        [b.src("aot_probe/aot_probe.c")],
+        manifest=b.src("aot_probe/linker.metadata"),
+    )
+    install(b, "apps/aotfat.wap", wap)
+    if wap is not None:
+        probe = "aot_fat.wasm"
+        wap = pack(
+            b, "aot_foreign", probe, b.src("aot_probe/foreign.metadata"), aot="foreign"
+        )
+        install(b, "apps/aotforgn.wap", wap)
+        wap = pack(
+            b,
+            "aot_unsigned",
+            probe,
+            b.src("aot_probe/unsigned.metadata"),
+            aot=True,
+            sign=False,
+        )
+        install(b, "apps/aotunsig.wap", wap)
+
     wap = guest(
         b,
         "hello_c",

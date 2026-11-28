@@ -2435,13 +2435,23 @@ and the reason it prints names what is missing. Read
 - [x] [FEATURE][P2] Per-arch WARP AOT artifacts in packaging: `warp_aot`
   compiles for the tree's architecture and aarch64 WARP trees load AOT
   (`tests/test_warp_aot.py`).
+- [x] [FEATURE][P2] Fat packages: `.wap` v12 tags each AOT binary with its ELF
+  machine and may carry one per architecture; the kernel uses only its own
+  and otherwise compiles the bytecode. `examples/` demo apps ship fat
+  (`aot = "all"`).
+- [ ] [ENHANCEMENT][P3] An AOT binary rebinds imports by position in the
+  host-call table and records no table identity, so a package compiled
+  against an older table binds the wrong functions on a newer kernel
+  (TODO in `architecture/13`, "AOT Binaries"). A per-record ABI tag would let
+  the kernel fall back to the bytecode.
 - [ ] [BUG][P2] A single-CPU WARP system never echoes the first CLI command
   after boot: on `aarch64_warp_single`, and on `x86_64_warp_smp` booted with
   one CPU (`WASMOS_QEMU_SMP_COUNT=1`), `test_hello_go` times out on its first
   `send_command` while the CPU stays busy in the kernel (stall dumps land in
   `ipc_endpoint_dequeue_locked` and `thread_owner_tid_at`); with four CPUs the
-  same test passes in 8 s. CI boots the single-CPU trees with `run-qemu-test`
-  only, so the batteries do not cover it.
+  same test passes in 8 s. `run-qemu-test` on `aarch64_warp_single` hits it
+  too, intermittently (1 run in 5 locally), so CI's boot job for that
+  configuration can fail on it.
 - [ ] [TEST][P2] aarch64 counterparts of the inline x86_64 ring-3 probes (the
   smoke process and the fault probes with their policy verdict;
   `kernel_ring3_suite_runtime.c` TODO), and an arm64 battery axis with a CI

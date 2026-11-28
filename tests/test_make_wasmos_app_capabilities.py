@@ -9,7 +9,7 @@ from scripts.qemu_test_framework import default_host_tool_path
 # Packed .wap header prefix, in the field order of wasmos_app_header_t in
 # scripts/make_wasmos_app.c, up to but excluding subsystem_tag: magic, version,
 # header_size, flags, name_len, entry_len, wasm_size, dep_count, cap_count,
-# mem_hint_count, compiled_size.
+# mem_hint_count, compiled_count.
 #
 # The tag must be located by OFFSET, never from the end of the header:
 # region_count follows the tag, so "the last 8 bytes" reads region_count plus

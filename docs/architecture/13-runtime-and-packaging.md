@@ -118,7 +118,7 @@ application is packed into this format by `make_wasmos_app`.
 #### Format Version
 
 The parser in `wasmos_app.c` accepts exactly one version, `WASMOS_APP_VERSION`
-(currently **11**), with exactly one `header_size`. Every package is repacked from
+(currently **12**), with exactly one `header_size`. Every package is repacked from
 source on each build, so an older container is rejected, never reinterpreted:
 v10 reuses v9's header size and changes what one count means, which only the
 version tells apart. Out-of-tree packages have to be repacked after a bump.
@@ -127,7 +127,8 @@ version tells apart. Out-of-tree packages have to be repacked after a bump.
 |--------------|-------------------------------------------------------------------------|
 | 9            | Register-window (`[[regions]]`) table; driver-match table removed       |
 | 10           | Dependency table (`[deps]`) replaces the required-endpoint table        |
-| 11 (current) | `signature_size`: an optional Ed25519 signature ends the package        |
+| 11           | `signature_size`: an optional Ed25519 signature ends the package        |
+| 12 (current) | AOT table: `compiled_count` binaries, each tagged with its ELF machine  |
 
 #### Header Layout
 
@@ -143,7 +144,7 @@ typedef struct __attribute__((packed)) {
     uint32_t dep_count;         /* up to WASMOS_APP_MAX_DEPS (16) */
     uint32_t cap_count;         /* up to 8 */
     uint32_t mem_hint_count;    /* always 2: stack + heap */
-    uint32_t compiled_size;     /* appended WARP AOT size; 0 if absent */
+    uint32_t compiled_count;    /* WARP AOT binaries, up to WASMOS_APP_MAX_COMPILED (4) */
     char     subsystem_tag[8];  /* ASCII, NUL-padded runtime tag */
     uint32_t region_count;      /* up to WASMOS_APP_MAX_REGIONS (4) */
     uint32_t signature_size;    /* 0 (unsigned) or WASMOS_APP_SIGNATURE_LEN (64) */
@@ -167,9 +168,50 @@ The parser walks the blob in this fixed order, same as the packer writes it:
 [region_count × wasmos_app_region_t]
 [mem_hint_count × wasmos_mem_hint_t]
 [raw WASM or ELF bytes]
-[compiled WARP AOT bytes if compiled_size > 0]
+[compiled_count × {u16 e_machine, u16 reserved, u32 size}]
+[the compiled_count WARP AOT binaries, in table order]
 [Ed25519 signature if signature_size > 0]
 ```
+
+#### AOT Binaries
+
+A package carries one WARP AOT binary per architecture it was compiled for,
+each tagged with the ELF `e_machine` of its code (`EM_X86_64` 62,
+`EM_AARCH64` 183). WARP records no ISA in a compiled binary, so the tag is
+what keeps a binary for one architecture from executing on another.
+`wasmos_app_parse` refuses a zero tag, a zero size and a tag listed twice.
+
+An AOT binary runs as native code and skips every check WARP's compiler emits
+for the bytecode (bounds checks included), so it is trusted like a native
+image: `wasmos_app_aot_select` hands it to the runtime only when the package's
+signature is valid for the build's key
+([Capability and Policy](10-capability-and-policy.md), "Signed Packages"),
+whatever capabilities the package asks for, and then only the binary tagged
+`ARCH_ELF_MACHINE`. Otherwise the package starts from its bytecode and the
+WARP driver logs why: `no AOT binary for this architecture, compiling <name>
+at load`, or `AOT binary of a package not signed by a trusted key, compiling
+<name> at load`. A WASM package therefore runs on every architecture and from
+any source, and AOT only changes how fast it starts. The module's name never
+opens a kernel log line: console output is test input, and a utility's own
+errors start with `<name>:`.
+
+TODO: the build's key is the only trusted key, so a package from outside the
+build (an external app) always runs from bytecode. A second trust source -- a
+system keyring of signing keys -- is not defined yet; `wasmos_app_aot_trusted`
+(`src/kernel/wasmos_app.c`) is where it would be consulted.
+
+The manifest's `aot` key chooses what is packed: `aot = true` the tree's own
+architecture, which is all a system driver, service or utility needs since it
+ships with the kernel that runs it; `aot = "all"` every architecture, a "fat"
+package for apps that travel between systems (the `examples/` demo apps).
+A WARP tree builds one `warp_aot-<arch>` tool per target architecture and
+only the ones its packages use.
+
+TODO: an AOT binary rebinds its imports by POSITION in the host-call table
+(`wasmos_symbols_aot.inc`), and neither the tag nor WARP's binary version
+records which table it was compiled against. A package built for an older
+host-call table would bind imports to the wrong functions on a newer kernel;
+an ABI tag per record would let the kernel fall back to the bytecode instead.
 
 Variable-length sections are bounds-checked with 32-bit overflow-safe
 arithmetic before any pointer access.
@@ -282,7 +324,7 @@ The tool in `scripts/make_wasmos_app.c` has two invocation modes:
 **Manifest mode (preferred):**
 ```
 make_wasmos_app --manifest <path> --in <module.wasm|elf> --out <module.wap>
-                [--compiled <module.warpbin>] [--sign <seed.hex>]
+                [--compiled <arch>=<module.warpbin>]... [--sign <seed.hex>]
 ```
 
 `--sign` signs the package with the Ed25519 key a hex seed file (32 bytes)
@@ -361,11 +403,11 @@ used by the build system.
   `native()` in `scripts/buildgen/wasmos_rules.py`, which run
   `make_wasmos_app --manifest <linker.metadata> --in <image>` as a build edge
   to produce the `.wap` artifact; under WARP a module whose manifest says
-  `aot = true` is compiled by `warp_aot` first and bundled with its `.warpbin`.
-  `warp_aot` is a host tool built with the code generator of the tree's target
-  architecture (`JIT_TARGET_*` in `src/tools/warp_aot/BUILD.py`); WARP records
-  no ISA in a compiled binary, so that choice is the only thing tying a
-  `.warpbin` to the kernel that runs it
+  `aot = true` (or `"all"`) is compiled by `warp_aot-<arch>` first and bundled
+  with its `.warpbin`s, tagged by architecture ("AOT Binaries" above);
+  `warp_aot-<arch>` is a host tool built with one architecture's code
+  generator (`JIT_TARGETS` in `src/tools/warp_aot/BUILD.py`), whatever the
+  host's
 
 ---
 

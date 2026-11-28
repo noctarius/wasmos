@@ -1,0 +1,15 @@
+version = 1
+
+[package]
+name = "aot-foreign"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

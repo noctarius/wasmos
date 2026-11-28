@@ -268,6 +268,13 @@ hold. Two rules keep a process from acquiring one through an image instead
 A refusal fails the start and is logged:
 `[pm] refused <capability> to <package>: <reason>`.
 
+The signature also decides whether a package's WARP AOT code may run. AOT code
+executes as native code and skips the checks WARP's compiler emits for the
+bytecode, so it is trusted like a native image: only a package signed with the
+build's key has it used, whatever capabilities it asks for, and any other runs
+from its bytecode ([Runtime and Packaging](13-runtime-and-packaging.md), "AOT
+Binaries").
+
 Consequences for who holds what: the shell (`cli`) holds `svc.control` so the
 console user can run `svc`; the vt, which spawns the shell for each console
 slot past the first, holds the shell's `system.control` and `svc.control`;

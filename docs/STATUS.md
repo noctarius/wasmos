@@ -327,7 +327,7 @@ linked feature documents for rationale and rollout plans.
   descriptor v3), so their deaths are named and end the system (`svc kill
   device-manager` halts it, `tests/test_supervisor.py`). Kernel init spawns
   only the PM and the supervisor, then waits for /boot and spawns sysinit; the
-  boot milestone counts 7 required units. device-manager sends READY once
+  boot milestone counts 8 required units (the keyring among them). device-manager sends READY once
   `devmgr.inv` and `devmgr.query` are registered, not after enumeration. A unit arrives as a one-line
   spec in `SUPERVISOR_IPC_SUBMIT_REQ` (`<unit> <path> [restart=never|on-failure|
   always] [class=optional|required|critical] [tty=<slot>] [probe=<s>]

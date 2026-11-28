@@ -46,6 +46,7 @@ export const WASMOS_ERR_DOMAIN_VIRTIO_BLK: u16 = 24;
 export const WASMOS_ERR_DOMAIN_BLOCK_DEV: u16 = 25;
 export const WASMOS_ERR_DOMAIN_SUPERVISOR: u16 = 26;
 export const WASMOS_ERR_DOMAIN_DISPLAY: u16 = 27;
+export const WASMOS_ERR_DOMAIN_KEYRING: u16 = 28;
 
 export const WASMOS_ERR_NONE: i32 = 0;
 // A domain error is the negative of (domain << 16) | local_code.
@@ -282,6 +283,8 @@ export const WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE: i32 = -0x0013000C; // a physic
 export const WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: i32 = -0x0013000D; // a ring-3 host-call trap carried an ordinal that names no host call
 export const WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: i32 = -0x0013000E; // a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with
 export const WASMOS_ERR_KERNEL_KEYRING_FULL: i32 = -0x0013000F; // the kernel's trusted-key table holds as many keys as it can; the key was not registered
+export const WASMOS_ERR_KERNEL_BAD_HASH: i32 = -0x00130010; // a package hash offered to the kernel's allowlist is not a 64-byte SHA-512 digest
+export const WASMOS_ERR_KERNEL_ALLOWLIST_FULL: i32 = -0x00130011; // the kernel's allowlist of package hashes holds as many as it can; the hash was not registered
 export const WASMOS_ERR_BLOCK_NO_SLOT: i32 = -0x00140001; // no per-process block slot is available
 export const WASMOS_ERR_BLOCK_NO_BACKING: i32 = -0x00140002; // no physical backing could be obtained for the buffer
 export const WASMOS_ERR_BLOCK_ABOVE_4G: i32 = -0x00140003; // the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address
@@ -340,6 +343,11 @@ export const WASMOS_ERR_DISPLAY_NOT_READY: i32 = -0x001B0002; // the display has
 export const WASMOS_ERR_DISPLAY_DEVICE: i32 = -0x001B0003; // the device refused a transfer or flush command (a virtio-gpu error response)
 export const WASMOS_ERR_DISPLAY_BUSY: i32 = -0x001B0004; // the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds
 export const WASMOS_ERR_DISPLAY_NOT_PRESENTER: i32 = -0x001B0005; // FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to "display"; the presenter is unchanged
+export const WASMOS_ERR_KEYRING_NOT_AUTHORIZED: i32 = -0x001C0001; // the sender lacks the keyring.admin capability, which every change to the keyring requires
+export const WASMOS_ERR_KEYRING_BAD_REQUEST: i32 = -0x001C0002; // the request's payload cannot be read from the caller's buffer, or its size is wrong for the request
+export const WASMOS_ERR_KEYRING_NOT_A_KEY: i32 = -0x001C0003; // the payload holds no PEM "PUBLIC KEY" block of an Ed25519 or RSA key
+export const WASMOS_ERR_KEYRING_BUSY: i32 = -0x001C0004; // the keyring is serving as many requests as it queues; the request was not taken
+export const WASMOS_ERR_KEYRING_PERSIST: i32 = -0x001C0005; // the change is in force but could not be written to /boot/system/keys, so it does not survive a restart
 
 export function errMake(dom: u16, code: u16): i32 {
   return -(<i32>(((<u32>dom) << 16) | (<u32>code)));
@@ -393,6 +401,7 @@ export function errorDomainName(d: u16): string {
     case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
     case WASMOS_ERR_DOMAIN_SUPERVISOR: return "supervisor";
     case WASMOS_ERR_DOMAIN_DISPLAY: return "display";
+    case WASMOS_ERR_DOMAIN_KEYRING: return "keyring";
     default: return "unknown";
   }
 }
@@ -633,6 +642,8 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: return "a ring-3 host-call trap carried an ordinal that names no host call";
     case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with";
     case WASMOS_ERR_KERNEL_KEYRING_FULL: return "the kernel's trusted-key table holds as many keys as it can; the key was not registered";
+    case WASMOS_ERR_KERNEL_BAD_HASH: return "a package hash offered to the kernel's allowlist is not a 64-byte SHA-512 digest";
+    case WASMOS_ERR_KERNEL_ALLOWLIST_FULL: return "the kernel's allowlist of package hashes holds as many as it can; the hash was not registered";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";
@@ -691,6 +702,11 @@ export function strerror(c: i32): string {
     case WASMOS_ERR_DISPLAY_DEVICE: return "the device refused a transfer or flush command (a virtio-gpu error response)";
     case WASMOS_ERR_DISPLAY_BUSY: return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds";
     case WASMOS_ERR_DISPLAY_NOT_PRESENTER: return "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged";
+    case WASMOS_ERR_KEYRING_NOT_AUTHORIZED: return "the sender lacks the keyring.admin capability, which every change to the keyring requires";
+    case WASMOS_ERR_KEYRING_BAD_REQUEST: return "the request's payload cannot be read from the caller's buffer, or its size is wrong for the request";
+    case WASMOS_ERR_KEYRING_NOT_A_KEY: return "the payload holds no PEM \"PUBLIC KEY\" block of an Ed25519 or RSA key";
+    case WASMOS_ERR_KEYRING_BUSY: return "the keyring is serving as many requests as it queues; the request was not taken";
+    case WASMOS_ERR_KEYRING_PERSIST: return "the change is in force but could not be written to /boot/system/keys, so it does not survive a restart";
     default: return "unknown error";
   }
 }

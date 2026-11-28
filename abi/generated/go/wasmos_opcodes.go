@@ -1315,3 +1315,25 @@ const DISPLAY_IPC_FLUSH_REQ int32 = 0x1100
 const DISPLAY_IPC_RESP int32 = 0x1180
 // arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again.
 const DISPLAY_IPC_ERROR int32 = 0x11FF
+
+// keyring (0x1200..0x12FF)
+// Let a package start although its signature is verified by no trusted
+// key ("start anyway"): it then runs from bytecode with ipc.basic only.
+// The payload is the package's SHA-512 digest (64 bytes) followed by its
+// path (up to 128 bytes, not NUL-terminated, recorded beside the digest),
+// in a transfer buffer the caller owns and has lent READ to the keyring:
+// arg0=buffer_id arg1=offset arg2=size. Requires keyring.admin. The
+// digest is registered with the kernel and appended to
+// /boot/system/keys/allow.lst before the answer.
+const KEYRING_IPC_ALLOW_REQ int32 = 0x1200
+// Trust a publisher's key: the payload is a PEM "PUBLIC KEY" file
+// (Ed25519, or RSA of 2048 to 4096 bits; at most 4096 bytes) in a
+// transfer buffer the caller owns and has lent READ to the keyring:
+// arg0=buffer_id arg1=offset arg2=size. Requires keyring.admin. The key
+// is registered with the kernel and written to
+// /boot/system/keys/<first 8 hex digits of its id>.pem before the answer.
+const KEYRING_IPC_ADD_KEY_REQ int32 = 0x1201
+// arg0 = 0: the change is in force and recorded; the payload buffer is the caller's again.
+const KEYRING_IPC_RESP int32 = 0x1280
+// arg0 = packed WASMOS_ERR_KEYRING_* code, or the kernel's WASMOS_ERR_KERNEL_* refusal; the payload buffer is the caller's again.
+const KEYRING_IPC_ERROR int32 = 0x12FF

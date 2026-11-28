@@ -391,3 +391,12 @@ endpoint-scoped and may repeat across subsystems.
 | `DISPLAY_IPC_FLUSH_REQ` | 0x1100 | req | Present what was drawn into the scanout inside the given rectangles. The request is a wasmos_display_flush_desc_t (version, count, rects in framebuffer pixels) in a transfer buffer the caller owns and has lent READ to the display: arg0=buffer_id arg1=offset arg2=size. The caller may rewrite the buffer once the answer arrives, so damage drawn meanwhile is accumulated, not sent. Rects are clipped to the scanout; an empty list presents nothing. Served by the endpoint registered as "display", which exists only on a machine whose scanout needs a presenter (virtio-gpu); elsewhere what is drawn is already shown.  |
 | `DISPLAY_IPC_RESP` | 0x1180 | resp | arg0 = 0: the rects were presented; the descriptor buffer is the caller's again. |
 | `DISPLAY_IPC_ERROR` | 0x11FF | error | arg0 = packed WASMOS_ERR_DISPLAY_* code; the descriptor buffer is the caller's again. |
+
+## keyring (0x1200–0x12FF)
+
+| Opcode | Value | Kind | Description |
+|---|---|---|---|
+| `KEYRING_IPC_ALLOW_REQ` | 0x1200 | req | Let a package start although its signature is verified by no trusted key ("start anyway"): it then runs from bytecode with ipc.basic only. The payload is the package's SHA-512 digest (64 bytes) followed by its path (up to 128 bytes, not NUL-terminated, recorded beside the digest), in a transfer buffer the caller owns and has lent READ to the keyring: arg0=buffer_id arg1=offset arg2=size. Requires keyring.admin. The digest is registered with the kernel and appended to /boot/system/keys/allow.lst before the answer.  |
+| `KEYRING_IPC_ADD_KEY_REQ` | 0x1201 | req | Trust a publisher's key: the payload is a PEM "PUBLIC KEY" file (Ed25519, or RSA of 2048 to 4096 bits; at most 4096 bytes) in a transfer buffer the caller owns and has lent READ to the keyring: arg0=buffer_id arg1=offset arg2=size. Requires keyring.admin. The key is registered with the kernel and written to /boot/system/keys/<first 8 hex digits of its id>.pem before the answer.  |
+| `KEYRING_IPC_RESP` | 0x1280 | resp | arg0 = 0: the change is in force and recorded; the payload buffer is the caller's again. |
+| `KEYRING_IPC_ERROR` | 0x12FF | error | arg0 = packed WASMOS_ERR_KEYRING_* code, or the kernel's WASMOS_ERR_KERNEL_* refusal; the payload buffer is the caller's again. |

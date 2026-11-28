@@ -644,6 +644,8 @@ enum {
     WASMOS_CAP_INVENTORY_STORAGE = 13,
     /* keyring.register: register a trusted package-signing key with the kernel (the keyring service). */
     WASMOS_CAP_KEYRING_REGISTER = 14,
+    /* keyring.admin: change what the keyring trusts -- add a publisher key, allow a package to start anyway (the trust utility, the console shell). */
+    WASMOS_CAP_KEYRING_ADMIN = 15,
 };
 
 #endif /* WASMOS_GENERATED_CONSTANTS_H */

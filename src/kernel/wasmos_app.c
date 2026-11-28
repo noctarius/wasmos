@@ -848,6 +848,66 @@ int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len) {
     return rc;
 }
 
+/* The allowlist: SHA-512 digests of packages allowed to start although no trusted
+ * key verifies their signature. Read at every spawn of such a package and written
+ * only at registration, both under g_allowed_lock. */
+static uint8_t g_allowed[WASMOS_APP_MAX_ALLOWED][WASMOS_APP_PACKAGE_HASH_LEN];
+static uint32_t g_allowed_count;
+static ksync_spinlock_t g_allowed_lock; /* zero storage is unlocked; no init */
+
+int wasmos_app_allow_register(const uint8_t* hash, uint32_t len) {
+    if (!hash || len != WASMOS_APP_PACKAGE_HASH_LEN) {
+        return WASMOS_ERR_KERNEL_BAD_HASH;
+    }
+    int rc = WASMOS_OK;
+    ksync_spinlock_lock(&g_allowed_lock);
+    uint32_t i = 0;
+    while (i < g_allowed_count && memcmp(g_allowed[i], hash, WASMOS_APP_PACKAGE_HASH_LEN) != 0) {
+        ++i;
+    }
+    if (i == g_allowed_count) {
+        if (g_allowed_count == WASMOS_APP_MAX_ALLOWED) {
+            rc = WASMOS_ERR_KERNEL_ALLOWLIST_FULL;
+        } else {
+            memcpy(g_allowed[i], hash, WASMOS_APP_PACKAGE_HASH_LEN);
+            g_allowed_count++;
+        }
+    }
+    ksync_spinlock_unlock(&g_allowed_lock);
+    return rc;
+}
+
+int wasmos_app_allow_register_as(uint32_t context_id, const uint8_t* hash, uint32_t len) {
+    if (!capability_has(context_id, CAP_KEYRING_REGISTER)) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    uint8_t copy[WASMOS_APP_PACKAGE_HASH_LEN];
+    if (!hash || len != sizeof(copy)) {
+        return WASMOS_ERR_KERNEL_BAD_HASH;
+    }
+    memcpy(copy, hash, sizeof(copy));
+    return wasmos_app_allow_register(copy, len);
+}
+
+/* 1 when the SHA-512 digest of the whole package is on the allowlist. Hashes only
+ * when the list holds something. */
+static int wasmos_app_allowed(const wasmos_app_desc_t* desc) {
+    ksync_spinlock_lock(&g_allowed_lock);
+    uint32_t count = g_allowed_count;
+    ksync_spinlock_unlock(&g_allowed_lock);
+    uint8_t digest[WASMOS_APP_PACKAGE_HASH_LEN];
+    if (count == 0u || mbedtls_sha512(desc->blob, desc->blob_size, digest, 0) != 0) {
+        return 0;
+    }
+    int found = 0;
+    ksync_spinlock_lock(&g_allowed_lock);
+    for (uint32_t i = 0; i < g_allowed_count && !found; ++i) {
+        found = memcmp(g_allowed[i], digest, sizeof(digest)) == 0;
+    }
+    ksync_spinlock_unlock(&g_allowed_lock);
+    return found;
+}
+
 int wasmos_app_trust_register_as(uint32_t context_id, const uint8_t* der, uint32_t der_len) {
     if (!capability_has(context_id, CAP_KEYRING_REGISTER)) {
         return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
@@ -914,7 +974,8 @@ static int wasmos_app_rsa_pss_verifies(const wasmos_app_desc_t* desc, const uint
     return ok;
 }
 
-uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc) {
+/* wasmos_app_trust without the allowlist: SYSTEM, PUBLISHER, UNSIGNED or INVALID. */
+static uint32_t wasmos_app_verify(const wasmos_app_desc_t* desc) {
     if (!desc || !desc->signature || !desc->blob || desc->signed_size == 0u) {
         return WASMOS_APP_TRUST_UNSIGNED;
     }
@@ -939,6 +1000,14 @@ uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc) {
                  ? wasmos_app_ed25519_verifies(desc, der + sizeof(k_ed25519_spki_prefix))
                  : wasmos_app_rsa_pss_verifies(desc, der, der_len);
     return ok ? WASMOS_APP_TRUST_PUBLISHER : WASMOS_APP_TRUST_INVALID;
+}
+
+uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc) {
+    uint32_t trust = wasmos_app_verify(desc);
+    if (trust == WASMOS_APP_TRUST_INVALID && wasmos_app_allowed(desc)) {
+        return WASMOS_APP_TRUST_ALLOWED;
+    }
+    return trust;
 }
 
 int wasmos_app_admit(const wasmos_app_desc_t* desc) {
@@ -1000,6 +1069,10 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
         klog_printf("[wasmos-app] refused, signed but verified by no trusted key: %s\n",
                     instance->name);
         return -1;
+    }
+    if (trust == WASMOS_APP_TRUST_ALLOWED) {
+        klog_printf("[wasmos-app] started anyway, verified by no trusted key but allowed: %s\n",
+                    instance->name);
     }
 
     wasmos_app_grant_ctx_t grant_ctx = {

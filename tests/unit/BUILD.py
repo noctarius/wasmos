@@ -148,6 +148,8 @@ TESTS = [
     (RUN, 'test_wasmos_app_aot', []),
     (CC, 'test_wasmos_app_rsa', [R('tests/unit/test_wasmos_app_rsa.c'), *WASMOS_APP_PARSER]),
     (RUN, 'test_wasmos_app_rsa', []),
+    (CC, 'test_wasmos_app_allow', [R('tests/unit/test_wasmos_app_allow.c'), *WASMOS_APP_PARSER]),
+    (RUN, 'test_wasmos_app_allow', []),
     (CC, 'test_device_manager_rules', [*C11, "-I" + R('src/services/device_manager'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('src/libc/include'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_device_manager_rules.c'), R('src/services/device_manager/device_manager_rules.c'), R('src/libc/src/string.c')]),
     (RUN, 'test_device_manager_rules', []),
     (CC, 'test_device_manager_unit', [*C11, "-I" + R('src/services/device_manager'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('tests/unit'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_device_manager_unit.c'), R('src/services/device_manager/device_manager_unit.c')]),

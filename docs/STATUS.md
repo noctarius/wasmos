@@ -524,7 +524,12 @@ linked feature documents for rationale and rollout plans.
   The keyring service registers the PEM keys in `/boot/system/keys/` --
   Ed25519, or RSA of 2048 to 4096 bits, whose RSASSA-PSS (SHA-512) signatures
   the kernel verifies with an mbedTLS subset -- with the kernel at boot
-  (`test_keyring.py`, `test_wasmos_app_rsa`); a package signed by one is a
+  (`test_keyring.py`, `test_wasmos_app_rsa`). `trust allow <app.wap>` lets a
+  package no trusted key verifies start anyway -- its SHA-512 digest goes on
+  the kernel's allowlist and into `/boot/system/keys/allow.lst`, and it runs
+  from bytecode with `ipc.basic` -- and `trust add-key <key.pem>` trusts a
+  publisher's key at run time; both need `keyring.admin`, held by the console
+  shell (`test_trust.py`). A package signed by a key the keyring registered is a
   publisher's and gets `dma.buffer` at most. The build signs the `examples/`
   apps that need nothing else with its app key. A manifest
   capability beyond `ipc.basic` is granted only to a package that verifies;

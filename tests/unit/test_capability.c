@@ -233,7 +233,8 @@ static int test_the_image_policy_decides_each_kind(void) {
                                         CAP_RTC_EFI,
                                         CAP_INVENTORY_DEVICE,
                                         CAP_INVENTORY_STORAGE,
-                                        CAP_KEYRING_REGISTER};
+                                        CAP_KEYRING_REGISTER,
+                                        CAP_KEYRING_ADMIN};
     for (uint32_t i = 0; i < sizeof(acting) / sizeof(acting[0]); ++i) {
         if (capability_manifest_grant_check(acting[i], 1, none) != CAPABILITY_GRANT_REQUESTER) {
             printf("  kind %u is handed out by a requester without it\n", (unsigned)acting[i]);
@@ -275,7 +276,8 @@ static int test_a_publisher_image_gets_the_app_kinds_only(void) {
                                           CAP_RTC_EFI,
                                           CAP_INVENTORY_DEVICE,
                                           CAP_INVENTORY_STORAGE,
-                                          CAP_KEYRING_REGISTER};
+                                          CAP_KEYRING_REGISTER,
+                                          CAP_KEYRING_ADMIN};
     for (uint32_t i = 0; i < sizeof(critical) / sizeof(critical[0]); ++i) {
         if (capability_manifest_grant_check(critical[i], CAPABILITY_IMAGE_PUBLISHER, all) !=
             CAPABILITY_GRANT_SYSTEM_ONLY) {
@@ -287,6 +289,25 @@ static int test_a_publisher_image_gets_the_app_kinds_only(void) {
             return __LINE__;
         }
     }
+    return 0;
+}
+
+/* keyring.admin is a capability a manifest can name and a context can hold: the
+ * keyring asks the kernel whether a request's sender holds it.
+ * Regression: 2026-11-28-start-anyway -- nothing let an administrator change
+ * what the keyring trusts while the system runs. */
+static int test_keyring_admin_is_granted_by_name(void) {
+    capability_init();
+    capability_kind_t kind;
+    if (capability_kind_from_name((const uint8_t*)"keyring.admin", 13u, &kind) != 0 ||
+        kind != CAP_KEYRING_ADMIN) {
+        return __LINE__;
+    }
+    if (grant(0x5151u, "keyring.admin") != 0 || !capability_has(0x5151u, CAP_KEYRING_ADMIN) ||
+        capability_has(0x5151u, CAP_KEYRING_REGISTER)) {
+        return __LINE__;
+    }
+    capability_release_context(0x5151u);
     return 0;
 }
 
@@ -319,6 +340,7 @@ int main(void) {
         WASMOS_TEST_CASE(test_region_refusals_name_their_reason),
         WASMOS_TEST_CASE(test_a_region_the_kernel_cannot_honour_refuses_the_profile),
         WASMOS_TEST_CASE(test_concurrent_grants_keep_their_own_records),
+        WASMOS_TEST_CASE(test_keyring_admin_is_granted_by_name),
     };
     if (wasmos_test_run_all(cases, (int)(sizeof(cases) / sizeof(cases[0]))) != 0) {
         return 1;

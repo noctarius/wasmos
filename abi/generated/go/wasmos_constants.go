@@ -565,3 +565,5 @@ const WASMOS_CAP_INVENTORY_DEVICE int32 = 12
 const WASMOS_CAP_INVENTORY_STORAGE int32 = 13
 // keyring.register: register a trusted package-signing key with the kernel (the keyring service).
 const WASMOS_CAP_KEYRING_REGISTER int32 = 14
+// keyring.admin: change what the keyring trusts -- add a publisher key, allow a package to start anyway (the trust utility, the console shell).
+const WASMOS_CAP_KEYRING_ADMIN int32 = 15

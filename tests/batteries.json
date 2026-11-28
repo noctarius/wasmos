@@ -71,6 +71,7 @@
       "files": [
         "test_boot_smoke.py",
         "test_keyring.py",
+        "test_trust.py",
         "test_cli.py",
         "test_rtc_range.py",
         "test_decode_kernel_panic.py",

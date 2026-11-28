@@ -207,6 +207,42 @@ def build(b):
         )
         install(b, f"apps/{name}.wap", wap)
 
+    # The "start anyway" fixtures (tests/test_trust.py): hello_c signed with the
+    # untrusted Ed25519 test seed, which `trust allow` lets start; the untrusted
+    # RSA key's public half, which `trust add-key` adds; and the trust utility
+    # without keyring.admin, whose requests the keyring refuses.
+    b.write_file("signing/untrusted-test-seed.hex", "5a" * 32 + "\n")
+    wap = pack(
+        b,
+        "hello_untrusted",
+        "hello_c.wasm",
+        b.src("trust_fixtures/hello_untrusted.metadata"),
+        aot=False,
+        sign=b.out / "signing/untrusted-test-seed.hex",
+    )
+    install(b, "apps/hello_untrusted.wap", wap)
+    b.command(
+        ["signing/rsa-untrusted.pem"],
+        [
+            f"./{packer}",
+            "--rsa-pubkey-pem",
+            "signing/rsa-untrusted.key.pem",
+            "signing/rsa-untrusted.pem",
+        ],
+        inputs=["signing/rsa-untrusted.key.pem"],
+        implicit=[packer],
+        description="KEY signing/rsa-untrusted.pem",
+    )
+    install(b, "apps/rsa-untrusted.pem", b.out / "signing/rsa-untrusted.pem")
+    wap = pack(
+        b,
+        "trust_noadmin",
+        "trust.wasm",
+        b.src("trust_fixtures/trust_noadmin.metadata"),
+        aot=False,
+    )
+    install(b, "apps/trust_noadmin.wap", wap)
+
     for name in SIMPLE:
         wap = guest(
             b,

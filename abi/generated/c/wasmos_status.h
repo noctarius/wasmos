@@ -58,6 +58,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
     WASMOS_ERR_DOMAIN_BLOCK_DEV = 25, /* Block-device SERVER failures, as a BLOCK_IPC_ERROR reply's arg0. Distinct from `block`, which describes the staging buffer a transfer moves through, and shared by every backend rather than per-driver: a client that reaches a disk through the `block` class should read one vocabulary whichever driver answers it. */
     WASMOS_ERR_DOMAIN_SUPERVISOR = 26, /* Supervisor refusals of a request, as a SUPERVISOR_IPC_ERROR reply's arg0. A refused submission recorded no unit and spawned nothing; a refused kill killed nothing. */
     WASMOS_ERR_DOMAIN_DISPLAY = 27, /* display presenter (DISPLAY_IPC_*) failures: the virtio-gpu scanout and its flush protocol */
+    WASMOS_ERR_DOMAIN_KEYRING = 28, /* keyring service (KEYRING_IPC_*) failures: changing the trusted keys and the package allowlist */
 };
 
 /* A domain error is the negative of (domain << 16) | local_code. */
@@ -303,6 +304,8 @@ enum {
     WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 13), /* a ring-3 host-call trap carried an ordinal that names no host call */
     WASMOS_ERR_KERNEL_KEY_UNSUPPORTED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 14), /* a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with */
     WASMOS_ERR_KERNEL_KEYRING_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 15), /* the kernel's trusted-key table holds as many keys as it can; the key was not registered */
+    WASMOS_ERR_KERNEL_BAD_HASH = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 16), /* a package hash offered to the kernel's allowlist is not a 64-byte SHA-512 digest */
+    WASMOS_ERR_KERNEL_ALLOWLIST_FULL = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KERNEL, 17), /* the kernel's allowlist of package hashes holds as many as it can; the hash was not registered */
     WASMOS_ERR_BLOCK_NO_SLOT = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 1), /* no per-process block slot is available */
     WASMOS_ERR_BLOCK_NO_BACKING = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 2), /* no physical backing could be obtained for the buffer */
     WASMOS_ERR_BLOCK_ABOVE_4G = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_BLOCK, 3), /* the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address */
@@ -361,6 +364,11 @@ enum {
     WASMOS_ERR_DISPLAY_DEVICE = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 3), /* the device refused a transfer or flush command (a virtio-gpu error response) */
     WASMOS_ERR_DISPLAY_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 4), /* the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds */
     WASMOS_ERR_DISPLAY_NOT_PRESENTER = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_DISPLAY, 5), /* FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged */
+    WASMOS_ERR_KEYRING_NOT_AUTHORIZED = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KEYRING, 1), /* the sender lacks the keyring.admin capability, which every change to the keyring requires */
+    WASMOS_ERR_KEYRING_BAD_REQUEST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KEYRING, 2), /* the request's payload cannot be read from the caller's buffer, or its size is wrong for the request */
+    WASMOS_ERR_KEYRING_NOT_A_KEY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KEYRING, 3), /* the payload holds no PEM \"PUBLIC KEY\" block of an Ed25519 or RSA key */
+    WASMOS_ERR_KEYRING_BUSY = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KEYRING, 4), /* the keyring is serving as many requests as it queues; the request was not taken */
+    WASMOS_ERR_KEYRING_PERSIST = WASMOS_ERR_MAKE(WASMOS_ERR_DOMAIN_KEYRING, 5), /* the change is in force but could not be written to /boot/system/keys, so it does not survive a restart */
 };
 
 #define WASMOS_ERR_CHAIN_DEPTH 4
@@ -429,6 +437,7 @@ static inline const char *wasmos_error_domain_name(wasmos_error_domain_t d) {
     case WASMOS_ERR_DOMAIN_BLOCK_DEV: return "block_dev";
     case WASMOS_ERR_DOMAIN_SUPERVISOR: return "supervisor";
     case WASMOS_ERR_DOMAIN_DISPLAY: return "display";
+    case WASMOS_ERR_DOMAIN_KEYRING: return "keyring";
     default: return "unknown";
     }
 }
@@ -670,6 +679,8 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: return "kernel.UNKNOWN_HOSTCALL";
     case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "kernel.KEY_UNSUPPORTED";
     case WASMOS_ERR_KERNEL_KEYRING_FULL: return "kernel.KEYRING_FULL";
+    case WASMOS_ERR_KERNEL_BAD_HASH: return "kernel.BAD_HASH";
+    case WASMOS_ERR_KERNEL_ALLOWLIST_FULL: return "kernel.ALLOWLIST_FULL";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "block.NO_SLOT";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "block.NO_BACKING";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "block.ABOVE_4G";
@@ -728,6 +739,11 @@ static inline const char *wasmos_error_code_name(wasmos_error_code_t c) {
     case WASMOS_ERR_DISPLAY_DEVICE: return "display.DEVICE";
     case WASMOS_ERR_DISPLAY_BUSY: return "display.BUSY";
     case WASMOS_ERR_DISPLAY_NOT_PRESENTER: return "display.NOT_PRESENTER";
+    case WASMOS_ERR_KEYRING_NOT_AUTHORIZED: return "keyring.NOT_AUTHORIZED";
+    case WASMOS_ERR_KEYRING_BAD_REQUEST: return "keyring.BAD_REQUEST";
+    case WASMOS_ERR_KEYRING_NOT_A_KEY: return "keyring.NOT_A_KEY";
+    case WASMOS_ERR_KEYRING_BUSY: return "keyring.BUSY";
+    case WASMOS_ERR_KEYRING_PERSIST: return "keyring.PERSIST";
     default: return "unknown";
     }
 }
@@ -969,6 +985,8 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL: return "a ring-3 host-call trap carried an ordinal that names no host call";
     case WASMOS_ERR_KERNEL_KEY_UNSUPPORTED: return "a key offered to the kernel's trusted-key table is not a DER SubjectPublicKeyInfo of an Ed25519 key or an RSA key of 2048 to 4096 bits, the keys the kernel verifies package signatures with";
     case WASMOS_ERR_KERNEL_KEYRING_FULL: return "the kernel's trusted-key table holds as many keys as it can; the key was not registered";
+    case WASMOS_ERR_KERNEL_BAD_HASH: return "a package hash offered to the kernel's allowlist is not a 64-byte SHA-512 digest";
+    case WASMOS_ERR_KERNEL_ALLOWLIST_FULL: return "the kernel's allowlist of package hashes holds as many as it can; the hash was not registered";
     case WASMOS_ERR_BLOCK_NO_SLOT: return "no per-process block slot is available";
     case WASMOS_ERR_BLOCK_NO_BACKING: return "no physical backing could be obtained for the buffer";
     case WASMOS_ERR_BLOCK_ABOVE_4G: return "the buffer's physical address is above 4 GiB, which a 32-bit guest cannot address";
@@ -1027,6 +1045,11 @@ static inline const char *wasmos_strerror(wasmos_error_code_t c) {
     case WASMOS_ERR_DISPLAY_DEVICE: return "the device refused a transfer or flush command (a virtio-gpu error response)";
     case WASMOS_ERR_DISPLAY_BUSY: return "the display's queue of waiting flushes is full; the request was not taken. A client sends one flush at a time and waits for its answer, so this means more clients than the queue holds";
     case WASMOS_ERR_DISPLAY_NOT_PRESENTER: return "FBTEXT_IPC_PRESENTER_REQ came from an endpoint the service registry does not have bound to \"display\"; the presenter is unchanged";
+    case WASMOS_ERR_KEYRING_NOT_AUTHORIZED: return "the sender lacks the keyring.admin capability, which every change to the keyring requires";
+    case WASMOS_ERR_KEYRING_BAD_REQUEST: return "the request's payload cannot be read from the caller's buffer, or its size is wrong for the request";
+    case WASMOS_ERR_KEYRING_NOT_A_KEY: return "the payload holds no PEM \"PUBLIC KEY\" block of an Ed25519 or RSA key";
+    case WASMOS_ERR_KEYRING_BUSY: return "the keyring is serving as many requests as it queues; the request was not taken";
+    case WASMOS_ERR_KEYRING_PERSIST: return "the change is in force but could not be written to /boot/system/keys, so it does not survive a restart";
     default: return "unknown error";
     }
 }

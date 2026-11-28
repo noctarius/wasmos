@@ -1,7 +1,6 @@
 import os
 import re
 import sys
-import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -34,7 +33,9 @@ class SerialTypeaheadTest(unittest.TestCase):
     started was discarded; only the bytes typed after it reached the shell
     ("cd /boot/apps" arrived as "pps"). With one CPU under WARP the driver
     starts after the first prompt, so the first command of a session was
-    lost -- the single-CPU "never echoed" failures in docs/TASKS.md.
+    lost, as test_hello_go's "never echoed" on out/default (x86_64 WARP, one
+    CPU) showed. The PL011 half (its init clears the pending receive
+    interrupt) is covered where this battery runs on aarch64.
     """
 
     def test_a_command_typed_before_the_serial_driver_runs(self) -> None:
@@ -48,16 +49,16 @@ class SerialTypeaheadTest(unittest.TestCase):
             typed_at = session.mark()
             session.send(f"echo {WORD}")
             session.require_prompt()
-            deadline = time.time() + 60
-            while not OUTPUT.search(bytes(session.buf[typed_at:])):
-                if time.time() >= deadline:
-                    self.fail(
-                        "the command typed before the serial driver started was lost\n"
-                        f"--- tail ---\n{session.tail()}"
-                    )
-                session._pump(0.2)
+            if not session.expect_from(typed_at, OUTPUT, timeout_s=60):
+                self.fail(
+                    "the command typed before the serial driver started was lost\n"
+                    f"--- tail ---\n{session.tail()}"
+                )
         finally:
-            session.send("halt")
+            # A failed start or prompt has already stopped QEMU and reported why;
+            # sending to it then would replace that report with "not running".
+            if session.proc:
+                session.send("halt")
             session.close()
 
 

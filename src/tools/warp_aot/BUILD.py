@@ -1,5 +1,6 @@
-"""warp_aot: host tool that compiles a wasm module ahead of time with WARP
-(x86_64 backend). Built only for a WARP configuration."""
+"""warp_aot: host tool that compiles a wasm module ahead of time with WARP's
+code generator for the tree's target architecture, whatever the host's. Built
+only for a WARP configuration."""
 
 # Vendored WARP sources (libs/warp is a git subtree; never edited here).
 WARP_SOURCES = [
@@ -51,10 +52,16 @@ TOOL_SOURCES = ["host_mem_utils.cpp", "host_shim.cpp", "warp_aot.cpp"]
 
 def build(b):
     warp = b.root / "libs/warp"
+    # The code generator is chosen at compile time and WARP records no ISA in a
+    # compiled binary, so this must name the kernel's architecture: a blob for
+    # another one loads without complaint and executes as garbage.
+    jit_target = (
+        "-DJIT_TARGET_AARCH64" if b.cfg.WASMOS_ARCH_AARCH64 else "-DJIT_TARGET_X86_64"
+    )
     flags = [
         "-std=c++14",
         "-O2",
-        "-DJIT_TARGET_X86_64",
+        jit_target,
         "-DACTIVE_STACK_OVERFLOW_CHECK=1",
         "-DLINEAR_MEMORY_BOUNDS_CHECKS=1",
         "-DVB_POSIX",

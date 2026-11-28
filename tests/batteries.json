@@ -181,6 +181,7 @@
       "description": "One guest per supported source language boots and runs, plus the guest the staged SDK builds from plain C.",
       "needs_qemu": true,
       "files": [
+        "test_warp_aot.py",
         "test_hello_as.py",
         "test_hello_c.py",
         "test_hello_go.py",

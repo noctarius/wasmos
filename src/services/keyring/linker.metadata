@@ -1,0 +1,25 @@
+version = 1
+aot = true
+
+[package]
+name = "keyring"
+entry = "async_initialize"
+kind = "service"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[deps]
+needs = ["fs.vfs"]
+provides = ["keyring"]
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+# Registers the trusted package-signing keys with the kernel.
+[[capabilities]]
+name = "keyring.register"
+flags = 0

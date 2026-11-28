@@ -11,6 +11,7 @@ def build(b):
         "fs_manager",
         "vt",
         "logger",
+        "keyring",
         "supervisor",
         "gfx_compositor",
         "font_service",

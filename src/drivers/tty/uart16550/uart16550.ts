@@ -43,7 +43,11 @@ class Uart16550 extends Uart {
         io_region_out8(REGION, 0, 0x01); /* divisor low (115200) */
         io_region_out8(REGION, 1, 0x00); /* divisor high */
         io_region_out8(REGION, 3, 0x03); /* 8N1, DLAB off */
-        io_region_out8(REGION, 2, 0xc7); /* FIFO enable, clear, 14-byte threshold */
+        /* FIFO enable, TX clear, 14-byte threshold. The receive FIFO is NOT
+         * cleared: it holds what was typed before the driver started. The kernel
+         * enabled the FIFO at boot (platform_x86_64.c), so FIFO-enable does not
+         * toggle here, which on a 16550 would clear both FIFOs regardless. */
+        io_region_out8(REGION, 2, 0xc5);
         io_region_out8(REGION, 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
         io_region_out8(REGION, REG_IER, 0x01); /* enable "received data available" interrupt */
     }

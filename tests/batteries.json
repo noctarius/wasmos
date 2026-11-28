@@ -149,6 +149,7 @@
         "test_vt_framebuffer_ownership.py",
         "test_vt_mode_regrid.py",
         "test_vt_serial_bind.py",
+        "test_serial_typeahead.py",
         "test_vt_tty_switch.py"
       ]
     },

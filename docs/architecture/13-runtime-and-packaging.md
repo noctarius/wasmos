@@ -233,9 +233,15 @@ algorithm does not have, does not parse. Parsing only locates the record;
 `wasmos_app_trust` looks the key id up among the keys the kernel trusts and
 verifies against that key alone. What each trust level earns is the capability
 policy's business ([Capability and Policy](10-capability-and-policy.md),
-"Signed Packages"). `make_wasmos_app` signs with Ed25519; the key id comes from
-the same SubjectPublicKeyInfo that `make_wasmos_app --pubkey-pem` writes, so a
-key read from PEM and a package name it alike.
+"Signed Packages"). `make_wasmos_app` signs with Ed25519 (`--sign <seed.hex>`)
+or with RSASSA-PSS, SHA-512 for the hash and MGF1, salt as long as the digest
+(`--sign-rsa <key.pem>`, a PEM RSA private key of 2048 to 4096 bits; its
+signature length is the modulus length). The key id comes from the same
+SubjectPublicKeyInfo that `make_wasmos_app --pubkey-pem` or `--rsa-pubkey-pem`
+writes, so a key read from PEM and a package name it alike. The packer's RSA
+support is an mbedTLS subset (`scripts/packer_mbedtls_config.h`); the kernel
+verifies with its own (`src/kernel/crypto/kernel_mbedtls_config.h`), which
+accepts a salt of any length.
 
 #### Flag Bits
 

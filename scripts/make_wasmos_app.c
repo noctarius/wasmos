@@ -7,6 +7,8 @@
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
+#include "make_wasmos_app_rsa.h"
+
 /* Container identity. MAGIC is the 8-byte magic, compared byte-for-byte and
  * NOT NUL-terminated in the file. VERSION selects which header layout the parser
  * applies; this packer emits 12, and src/kernel/wasmos_app.c accepts only 12. */
@@ -113,9 +115,9 @@
  *                            after the capability table and before the mem hints.
  *   signature_size           0 for an unsigned package, else the length of the
  *                            signature record (SIG_HEAD_LEN + signature) that
- *                            ends the package; its signature is
- *                            Ed25519 signature over every byte before it (this
- *                            header included), which ends the package.
+ *                            ends the package: Ed25519 over every byte before
+ *                            the record (this header included), or RSASSA-PSS
+ *                            over the SHA-512 digest of those bytes.
  */
 typedef struct __attribute__((packed)) {
     char magic[8];
@@ -893,12 +895,16 @@ static void ed25519_spki(const uint8_t pub[PUBKEY_LEN], uint8_t der[44]) {
 
 /* A key's id: the first SIG_KEY_ID_LEN bytes of BLAKE2b-256 over its DER
  * SubjectPublicKeyInfo, the form the keyring reads it in from PEM. */
+static void der_key_id(const uint8_t* der, uint32_t len, uint8_t id[SIG_KEY_ID_LEN]) {
+    uint8_t hash[32];
+    crypto_blake2b(hash, sizeof(hash), der, len);
+    memcpy(id, hash, SIG_KEY_ID_LEN);
+}
+
 static void ed25519_key_id(const uint8_t pub[PUBKEY_LEN], uint8_t id[SIG_KEY_ID_LEN]) {
     uint8_t der[44];
-    uint8_t hash[32];
     ed25519_spki(pub, der);
-    crypto_blake2b(hash, sizeof(hash), der, sizeof(der));
-    memcpy(id, hash, SIG_KEY_ID_LEN);
+    der_key_id(der, sizeof(der), id);
 }
 
 /* Sign the package just written at `path`, whose header already says
@@ -1047,6 +1053,12 @@ int main(int argc, char** argv) {
     if (argc == 4 && strcmp(argv[1], "--pubkey-pem") == 0) {
         return emit_pubkey_pem(argv[2], argv[3]);
     }
+    if (argc == 4 && strcmp(argv[1], "--genkey-rsa") == 0) {
+        return rsa_genkey(argv[3], (unsigned)strtoul(argv[2], NULL, 10)) == 0 ? 0 : 1;
+    }
+    if (argc == 4 && strcmp(argv[1], "--rsa-pubkey-pem") == 0) {
+        return rsa_pubkey_pem(argv[2], argv[3]) == 0 ? 0 : 1;
+    }
     if (argc >= 2 && strcmp(argv[1], "--check-deps") == 0) {
         return check_deps(argc - 2, argv + 2);
     }
@@ -1057,6 +1069,7 @@ int main(int argc, char** argv) {
         const char* compiled_arg[MAX_COMPILED];
         uint32_t compiled_count = 0;
         const char* sign_seed_path = NULL;
+        const char* sign_rsa_path = NULL;
         for (int i = 3; i + 1 < argc; i += 2) {
             if (strcmp(argv[i], "--in") == 0) {
                 in_path = argv[i + 1];
@@ -1070,15 +1083,17 @@ int main(int argc, char** argv) {
                 compiled_arg[compiled_count++] = argv[i + 1];
             } else if (strcmp(argv[i], "--sign") == 0) {
                 sign_seed_path = argv[i + 1];
+            } else if (strcmp(argv[i], "--sign-rsa") == 0) {
+                sign_rsa_path = argv[i + 1];
             } else {
                 fprintf(stderr, "unknown flag '%s'\n", argv[i]);
                 return 1;
             }
         }
-        if (!in_path || !out_path) {
+        if (!in_path || !out_path || (sign_seed_path && sign_rsa_path)) {
             fprintf(stderr,
                     "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
-                    "<arch>=<in.warpbin>]... [--sign <seed.hex>]\n",
+                    "<arch>=<in.warpbin>]... [--sign <seed.hex> | --sign-rsa <key.pem>]\n",
                     argv[0]);
             return 1;
         }
@@ -1194,6 +1209,17 @@ int main(int argc, char** argv) {
         subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
         hdr.region_count = lm.region_count;
         hdr.signature_size = sign_seed_path ? SIG_RECORD_ED25519_LEN : 0u;
+        if (sign_rsa_path) {
+            int rsa_len = rsa_signature_len(sign_rsa_path);
+            if (rsa_len < 0) {
+                fclose(outf);
+                (void)remove(out_path);
+                free_compiled(compiled_data, compiled_count);
+                free(wasm);
+                return 1;
+            }
+            hdr.signature_size = SIG_HEAD_LEN + (uint32_t)rsa_len;
+        }
 
         wasmos_mem_hint_t stack_hint = {MEM_HINT_STACK, lm.stack_pages, 0};
         wasmos_mem_hint_t heap_hint = {MEM_HINT_HEAP, lm.heap_pages, 0};
@@ -1238,6 +1264,9 @@ int main(int argc, char** argv) {
         if (ok && sign_seed_path && sign_package(out_path, sign_seed_path) != 0) {
             ok = 0;
         }
+        if (ok && sign_rsa_path && rsa_sign_package(out_path, sign_rsa_path, der_key_id) != 0) {
+            ok = 0;
+        }
         if (!ok) {
             (void)remove(out_path);
         }
@@ -1248,10 +1277,14 @@ int main(int argc, char** argv) {
                 "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> "
                 "<cap_count> [<cap_name> <cap_flags>]...\n"
                 "       %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled "
-                "<arch>=<in.warpbin>]... [--sign <seed.hex>]\n"
+                "<arch>=<in.warpbin>]... [--sign <seed.hex> | --sign-rsa <key.pem>]\n"
                 "       %s --pubkey-c <system-seed.hex> <out.c>\n"
                 "       %s --pubkey-pem <seed.hex> <out.pem>\n"
+                "       %s --genkey-rsa <bits> <out.pem>\n"
+                "       %s --rsa-pubkey-pem <key.pem> <out.pem>\n"
                 "       %s --check-deps <manifest>...\n",
+                argv[0],
+                argv[0],
                 argv[0],
                 argv[0],
                 argv[0],

@@ -263,11 +263,13 @@ Source: `architecture/06-memory-management.md`,
 
   Reuse rather than invent -- all of this is built and proven for WARP:
   the `WARP_R3_*` VA layout (`src/kernel/include/warp_ring3.h`: linmem RW, HC
-  stub page R-X with 8 bytes per call, entry/ret trampolines, 256 KiB user
-  stack), the `READ|EXEC|USER` mapping in
-  `src/kernel/warp/ring3_trampolines.c:103`, `r3_do_iretq`
-  (`src/kernel/warp_driver.cpp:348`), and the embedded-blob-into-a-process
-  loader pattern in `src/kernel/kernel_ring3_probe_runtime.c`.
+  stub page R-X with `WARP_R3_HC_STUB_BYTES` per call, entry/ret trampolines,
+  256 KiB user stack), the `READ|EXEC|USER` mapping in
+  `src/kernel/warp/ring3_trampolines.c`, the per-architecture entry into user
+  mode and host-call argument access (`arch_warp_r3_enter`,
+  `arch_warp_r3_hostcall_arg` in `src/kernel/include/arch/warp_ring3_arch.h`),
+  and the embedded-blob-into-a-process loader pattern in
+  `src/kernel/kernel_ring3_probe_runtime.c`.
 
   A second compile of `libs/wasm3` is unavoidable and is the right shape:
   today its objects compile through the `kernel` toolchain profile

@@ -18,8 +18,15 @@ services, drivers, and utilities:
 
 - WARP exports execute from per-module user mappings with dedicated user CR3,
   ring-3 stack pages, and user-visible JIT/linear-memory aliases.
-- Hostcalls and export returns use ring-3 trampoline pages plus `int 0x80`
-  dispatch back into the kernel.
+- Hostcalls and export returns use ring-3 trampoline pages that raise a
+  syscall back into the kernel (`int 0x80` on x86_64).
+- The architecture-specific half is confined to `arch/warp_ring3_arch.h` and
+  `src/kernel/arch/<arch>/warp_ring3_<arch>.c`: the stub machine code
+  (`WARP_R3_HC_STUB_BYTES` per host-call stub), the transition into user mode
+  (`arch_warp_r3_enter`, which also places the wrapper's return address), and
+  where a host call's arguments live (`arch_warp_r3_hostcall_arg`, which the
+  generated `wasmos_ring3_dispatch.inc` reads every argument through). The VA
+  layout, syscall numbers, dispatch and address-space setup are neutral.
 - Linear-memory growth is handled in the kernel wrapper layer by a ring-3
   memory-helper trampoline that remaps the module's user linear-memory window
   after WARP extends the backing allocation.

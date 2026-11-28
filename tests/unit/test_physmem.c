@@ -236,6 +236,32 @@ static void s_an_above_allocation_that_splits_an_extent_keeps_both_remnants(void
     CHECK(pfa_free_bytes() == before, "freeing it restores the block");
 }
 
+/* A ceiling keeps the whole run below it: a run that fits only above the
+ * ceiling is refused rather than placed there, and one that fits between floor
+ * and ceiling is carved there even when the extent runs on past the ceiling.
+ * Regression: 2026-11-28-warp-alias-ceiling -- WARP reaches its frames at
+ * phys | KERNEL_HIGHER_HALF_BASE, valid only below the direct-map window, but
+ * allocated them with a floor alone, so once memory below the window ran out a
+ * frame above it aliased the wrong memory. */
+static void s_a_between_allocation_stays_below_its_ceiling(void) {
+    (void)reset();
+    const uint64_t floor = MAP_BASE + 16 * PAGE;
+    const uint64_t ceiling = MAP_BASE + 32 * PAGE;
+
+    uint64_t frame = pfa_alloc_pages_between(4, floor, ceiling);
+    CHECK(frame == floor, "the run starts at the floor");
+    CHECK(frame + 4 * PAGE <= ceiling, "the run ends at or below the ceiling");
+
+    uint64_t too_big = pfa_alloc_pages_between(16, floor, ceiling);
+    CHECK(too_big == 0, "a run that would cross the ceiling is refused");
+
+    uint64_t exact = pfa_alloc_pages_between(12, floor, ceiling);
+    CHECK(exact == floor + 4 * PAGE, "the rest of the window is still usable");
+    CHECK(pfa_alloc_pages_between(1, floor, ceiling) == 0, "a full window refuses");
+    CHECK(pfa_alloc_pages_above(1, floor) == ceiling, "the floor alone goes on past it");
+    reset();
+}
+
 static void s_boot_tables_land_inside_the_bootstrap_window(void) {
     int status = boot_split_map(64, 1);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) != TOUCHED_UNMAPPED,
@@ -302,6 +328,8 @@ static const wasmos_test_void_case_t k_cases[] = {
      s_a_frame_freed_into_a_fragmented_list_can_be_allocated},
     {"an_above_allocation_that_splits_an_extent_keeps_both_remnants",
      s_an_above_allocation_that_splits_an_extent_keeps_both_remnants},
+    {"a_between_allocation_stays_below_its_ceiling",
+     s_a_between_allocation_stays_below_its_ceiling},
     {"boot_tables_land_inside_the_bootstrap_window",
      s_boot_tables_land_inside_the_bootstrap_window},
     {"a_window_too_small_for_the_boot_tables_panics",

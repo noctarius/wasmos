@@ -563,29 +563,40 @@ static uint64_t pfa_alloc_pages_below_nolock(uint64_t pages, uint64_t max_addr) 
     return 0;
 }
 
-/* pfa_alloc_pages restricted to a physical floor: the whole run starts at or
- * above min_addr, rounded up to a page boundary.
+/* pfa_alloc_pages restricted to a physical floor (_above), or to a floor and a
+ * ceiling (_between): the whole run starts at or above min_addr, rounded up to a
+ * page boundary, and for _between ends at or below max_addr, rounded down.
  *
  * Unlike the _below variant this can carve from the front, the back, or the
  * MIDDLE of an extent, splitting it into two free extents; the extent table is
  * sized so that the split always has a slot (see g_ranges).
  *
  * Returns 0 for a zero page count and when no extent has a run of `pages`
- * contiguous frames at or above the floor. */
+ * contiguous frames between the floor and the ceiling. */
 uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
+    return pfa_alloc_pages_between(pages, min_addr, UINT64_MAX);
+}
+
+uint64_t pfa_alloc_pages_between(uint64_t pages, uint64_t min_addr, uint64_t max_addr) {
     if (pages == 0) {
         return 0;
     }
     ksync_spinlock_lock(&g_pfa_lock);
     uint64_t floor = (min_addr + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+    uint64_t ceiling = max_addr & ~(PAGE_SIZE - 1ULL);
     for (uint32_t i = 0; i < g_range_count; ++i) {
         pfa_range_t* range = &g_ranges[i];
         uint64_t rbase = range->base;
         uint64_t rend = rbase + range->pages * PAGE_SIZE;
+        if (rend > ceiling) {
+            rend = ceiling;
+        }
         uint64_t start = rbase < floor ? floor : rbase;
-        if (start + pages * PAGE_SIZE > rend) {
+        if (start >= rend || pages > (rend - start) / PAGE_SIZE) {
             continue;
         }
+        /* The range's own end, not the clipped one, decides how it splits. */
+        rend = rbase + range->pages * PAGE_SIZE;
         uint64_t alloc_end = start + pages * PAGE_SIZE;
         if (start == rbase) {
             /* Allocate from the front of the range. */

@@ -31,6 +31,7 @@ extern "C" {
 #include "warp_driver_ring3_call_policy.h"
 #ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
+#include "arch/warp_ring3_arch.h"
 #include "cpu_local.h"
 #endif
 }
@@ -303,11 +304,8 @@ __attribute__((unused)) static int call_export(wasm_driver_t* driver, const char
 // Ring-3 execution helpers
 // ---------------------------------------------------------------------------
 
-/* USER_CS / USER_SS selectors as used in process.c */
-static constexpr uint64_t kUserCS = 0x1Bu;
-static constexpr uint64_t kUserSS = 0x23u;
-/* Kernel higher-half base for physical → virtual alias translation */
-static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
+/* Kernel direct-map base for physical → virtual alias translation */
+static constexpr uint64_t kHalfBase = KERNEL_HIGHER_HALF_BASE;
 
 /* Patch the basedata so ring-3 JIT code can reload linMem correctly after
  * any hostcall (LINEAR_MEMORY_BOUNDS_CHECKS=1 caches/restores linMem base
@@ -384,39 +382,6 @@ static void warp_r3_patch_basedata(uint8_t* linmem_kernel_ptr, uint64_t basedata
         linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::linkStatusAddressOffset)));
 }
 
-/* IRET to ring-3: loads rdi/rsi/rdx/rcx from memory then builds and executes
- * a 5-dword IRET frame.  Uses memory constraints for the register values so
- * the compiler cannot place the 5 IRET-frame values in rdi/rsi/rdx/rcx.
- * Never returns; caller must follow with __builtin_unreachable(). */
-static __attribute__((noinline)) void r3_do_iretq(uint64_t rip, uint64_t rsp, uint64_t rflags,
-                                                  uint64_t rdi_v, uint64_t rsi_v, uint64_t rdx_v,
-                                                  uint64_t rcx_v) {
-    uint64_t user_cs = kUserCS;
-    uint64_t user_ss = kUserSS;
-    __asm__ volatile("movq %[rdi_v], %%rdi\n\t"
-                     "movq %[rsi_v], %%rsi\n\t"
-                     "movq %[rdx_v], %%rdx\n\t"
-                     "movq %[rcx_v], %%rcx\n\t"
-                     "pushq %[ss]\n\t"
-                     "pushq %[rsp_v]\n\t"
-                     "pushq %[rf]\n\t"
-                     "pushq %[cs]\n\t"
-                     "pushq %[rip_v]\n\t"
-                     "iretq"
-                     :
-                     : [rdi_v] "m"(rdi_v),
-                       [rsi_v] "m"(rsi_v),
-                       [rdx_v] "m"(rdx_v),
-                       [rcx_v] "m"(rcx_v),
-                       [ss] "r"(user_ss),
-                       [rsp_v] "r"(rsp),
-                       [rf] "r"(rflags),
-                       [cs] "r"(user_cs),
-                       [rip_v] "r"(rip)
-                     : "memory", "rdi", "rsi", "rdx", "rcx");
-    __builtin_unreachable();
-}
-
 /* Ring-3 user VA of the JIT wrapper for exported function `name`.  Resolves the kernel
  * address through WARP's runtime under an exception checkpoint, then rebases it into the
  * user JIT window by its offset within the compiled binary.  Returns 0 when the lookup
@@ -446,7 +411,7 @@ static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
     return WARP_R3_JIT_BASE + offset;
 }
 
-/* Invoke WASM export 'name' via ring-3 IRET, blocking the kernel thread until
+/* Invoke WASM export 'name' in ring 3, blocking the kernel thread until
  * the WARP_RETURN syscall fires.  Returns 0 on success, -1 on error.
  *
  * Entry/exit contract.  What is saved is exactly the calling process's page-table root,
@@ -454,14 +419,14 @@ static uint64_t warp_r3_resolve_export(vb::WasmModule* mod, const char* name) {
  * THREAD, not on cpu_local, because the guest can block inside a host call and be
  * resumed on a different CPU, and the WARP_RETURN handler must find this thread's
  * landing pad wherever it fires.  Nothing else is saved: the guest's general registers
- * are set up on the ring-3 stack and in the IRET frame, and the kernel keeps no copy.
+ * are set up by arch_warp_r3_enter, and the kernel keeps no copy.
  *
  * The checkpoint covers the whole guest execution, from the setjmp to WARP_RETURN.  It
  * is NOT the C++ exception checkpoint — that one (warp_exception_get_checkpoint) is
  * armed here only around warp_r3_resolve_export; the guest itself leaves
  * through the return trampoline or faults, it does not unwind into this frame.
  *
- * Between arming t->warp_r3_active and the IRET nothing may block, reschedule, or
+ * Between arming t->warp_r3_active and the entry into ring 3 nothing may block, reschedule, or
  * switch the root table: the CR3 is already the guest's, so a context switch out of
  * here would restore a root that no longer matches the saved one.  The caller therefore
  * drops driver->lock and the runtime binding before calling in (see
@@ -485,42 +450,40 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
      *   [+40] trapCode: uint64_t, 0 = no trap
      *   [+48] results: uint64_t (space for one i32 return value)
      *   [+56] entryTarget: uint64_t, loaded by the debug entry trampoline
-     *   [+64] entryRsp: uint64_t, captures user RSP right after IRET
-     * Return address (WARP_R3_RET_TRAMPOLINE) at [STACK_TOP - 8]; RSP = that. */
+     *   [+64] entryRsp: uint64_t, captures the user stack pointer at entry
+     * The return address (WARP_R3_RET_TRAMPOLINE) and the initial stack pointer
+     * are arch_warp_r3_enter's to place. */
     uint8_t* kstack = reinterpret_cast<uint8_t*>(stack_phys | kHalfBase);
 
     /* proxy_ptr is already set by warp_r3_patch_basedata. */
 
     /* serArgs at kstack+8, user VA = WARP_R3_STACK_BASE + 8 */
-    uint64_t* ser_args = reinterpret_cast<uint64_t*>(kstack + 8);
+    uint64_t* ser_args = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_SER_ARGS);
     for (uint32_t i = 0; i < 4; ++i)
         ser_args[i] = (i < argc) ? static_cast<uint64_t>(argv[i]) : 0ULL;
 
     /* trapCode, results, and entry trampoline scratch */
-    uint64_t* trap_code_k = reinterpret_cast<uint64_t*>(kstack + 40);
-    uint64_t* results_k = reinterpret_cast<uint64_t*>(kstack + 48);
-    uint64_t* entry_target_k = reinterpret_cast<uint64_t*>(kstack + 56);
+    uint64_t* trap_code_k = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_TRAP_CODE);
+    uint64_t* results_k = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_RESULTS);
+    uint64_t* entry_target_k = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_ENTRY_TARGET);
     *trap_code_k = 0;
     *results_k = 0;
     *entry_target_k = r3_fn_va;
 
-    /* Return address for the JIT wrapper */
-    *reinterpret_cast<uint64_t*>(kstack + WARP_R3_STACK_SIZE - 8) = WARP_R3_RET_TRAMPOLINE;
-
-    /* Ring-3 register values:
-     *   RDI = serArgs user VA
-     *   RSI = per-module linMem user VA (preserves low-page offset)
-     *   RDX = trapCode user VA
-     *   RCX = results user VA
-     *   RSP = return address slot (STACK_TOP - 8) */
-    uint64_t rdi_v = WARP_R3_STACK_BASE + 8u;
-    uint64_t rsi_v = r3_linmem_base;
-    uint64_t rdx_v = WARP_R3_STACK_BASE + 40u;
-    uint64_t rcx_v = WARP_R3_STACK_BASE + 48u;
-    uint64_t r3_rsp = WARP_R3_STACK_TOP - 8u;
-
-    /* RFLAGS: IF=1 (enable interrupts for INT 0x80 hostcalls), DF=0. */
-    uint64_t rflags = 0x202ULL;
+    /* The JIT wrapper's arguments:
+     *   0 = serArgs user VA
+     *   1 = per-module linMem user VA (preserves low-page offset)
+     *   2 = trapCode user VA
+     *   3 = results user VA */
+    arch_warp_r3_call_t call = {};
+    call.entry_va = WARP_R3_ENTRY_TRAMPOLINE;
+    call.return_va = WARP_R3_RET_TRAMPOLINE;
+    call.stack_top_va = WARP_R3_STACK_TOP;
+    call.stack_top_kernel = kstack + WARP_R3_STACK_SIZE;
+    call.args[0] = WARP_R3_STACK_BASE + 8u;
+    call.args[1] = r3_linmem_base;
+    call.args[2] = WARP_R3_STACK_BASE + 40u;
+    call.args[3] = WARP_R3_STACK_BASE + 48u;
 
     /* Switch to WARP user CR3; kernel higher-half is still accessible
      * because paging_create_address_space shares PML4[511].
@@ -539,14 +502,14 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     if (__builtin_setjmp(t->warp_r3_jbuf) != 0) {
         /* WARP_RETURN fired — restore kernel CR3 and return. */
         paging_switch_root(t->warp_r3_old_cr3);
-        uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + 40);
+        uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_TRAP_CODE);
         return (tc == 0) ? 0 : -1;
     }
 
-    /* IRET to the debug entry trampoline, which captures user RSP and jumps to
-     * the real JIT wrapper stored in entryTarget. Never returns here; resumes above. */
-    r3_do_iretq(WARP_R3_ENTRY_TRAMPOLINE, r3_rsp, rflags, rdi_v, rsi_v, rdx_v, rcx_v);
-    __builtin_unreachable();
+    /* Enter the debug entry trampoline, which captures the user stack pointer
+     * and jumps to the real JIT wrapper stored in entryTarget. Never returns
+     * here; resumes above. */
+    arch_warp_r3_enter(&call);
 }
 
 /* Kernel side of WASMOS_SYSCALL_WARP_MEMORY_HELPER: a ring-3 guest asking for its
@@ -622,7 +585,7 @@ static void warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem) 
      * can grow on demand and host zero-copy overlays, rather than the tiny
      * per-driver heap declared in the manifest.  This only sizes the reserved-VA
      * placement/scan window inside the fixed WARP_LINMEM_VA_STRIDE slot; physical
-     * pages are still committed lazily and bounded by kPhysLimit.  Mirrors the
+     * pages are still committed lazily.  Mirrors the
      * wasm3 side, where InitMemory floors maxPages to the 2 GiB slot. */
     const uint64_t floor = 512ULL * 1024ULL * 1024ULL; /* 512 MiB */
     if (initial_linmem < floor) {
@@ -858,7 +821,7 @@ int wasm_driver_call_entry(wasm_driver_t* driver) {
 #ifdef WASMOS_WASM_RUNTIME_WARP
     warp_driver_ring3_call_policy_t policy = warp_driver_ring3_call_policy_resolve(r3_root);
     if (policy.release_before_call) {
-        /* Release lock and runtime binding before IRET to ring-3.  Clear any
+        /* Release lock and runtime binding before entering ring 3.  Clear any
          * need_resched that accumulated during ring-0 ensure_started so the
          * ring-3 process starts with a fresh scheduling window. */
         warp_runtime_leave(prev);
@@ -952,7 +915,7 @@ int wasm_driver_call_unlocked(wasm_driver_t* driver, const char* name, uint32_t 
          * re-entrancy protection, but ring-3 WARP execution must be
          * timer-preemptible.  Drain the guard so:
          *  - ensure_started / mod->start() do not trigger watchdog stalls,
-         *  - the ring-3 IRET runs with preempt_disable_count=0, and
+         *  - the ring-3 entry runs with preempt_disable_count=0, and
          *  - the timer can preempt ring-3 code normally.
          * pm_app_entry's paired preempt_enable() is a safe no-op at zero. */
         while (preempt_disable_depth() > 0)

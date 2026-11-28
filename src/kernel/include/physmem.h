@@ -26,6 +26,14 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr);
  * ensureLinearSize zero-fill cannot alias active buffer pages. */
 uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr);
 
+/* Allocate a contiguous run of pages lying wholly inside [min_addr, max_addr):
+ * min_addr rounds up and max_addr down to a page boundary.  For memory that must
+ * stay out of a low zone AND be reachable through a bounded window, such as a
+ * frame the kernel addresses as phys | KERNEL_HIGHER_HALF_BASE, which is valid
+ * only below KERNEL_HIGHER_HALF_WINDOW_BYTES.  Returns 0 for a zero page count or
+ * when no free run fits. */
+uint64_t pfa_alloc_pages_between(uint64_t pages, uint64_t min_addr, uint64_t max_addr);
+
 /* Drop one reference on each of `pages` frames starting at base. A frame
  * rejoins the free pool only when its count reaches zero, so a frame that was
  * pinned needs as many frees as it has references. Freeing a frame whose count

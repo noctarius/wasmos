@@ -118,14 +118,12 @@ struct AllocHeader {
 
 /* kLargeThreshold: header + payload at or below this goes to the small pool; above it
  *   to whole physical pages.  112 is the largest usable slab block.
- * kHalfBase: kernel higher-half base — a direct-mapped frame is reachable at
- *   phys | kHalfBase.
- * kPhysLimit: the 512 MiB the kernel maps in that window.
+ * kHalfBase: kernel direct-map base — a frame inside KERNEL_HIGHER_HALF_WINDOW_BYTES is
+ *   reachable at phys | kHalfBase.
  * kWarpSmallBlockSize: small-pool block stride; one page yields
  *   kWarpSmallBlocksPerPage blocks because block 0 holds the page's own metadata. */
 static constexpr size_t kLargeThreshold = 112; /* slab max usable */
-static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
-static constexpr uint64_t kPhysLimit = 512ULL * 1024ULL * 1024ULL;
+static constexpr uint64_t kHalfBase = KERNEL_HIGHER_HALF_BASE;
 static constexpr size_t kPageSize = 4096UL;
 static constexpr size_t kWarpSmallBlockSize = 256UL;
 
@@ -181,7 +179,8 @@ static WarpSmallPage* warp_small_page_for(void* raw) {
 static void* warp_small_alloc(void) {
     ksync_spinlock_lock(&g_warp_small_lock);
     if (g_warp_small_free == nullptr) {
-        uint64_t phys = pfa_alloc_pages_above(1U, WASMOS_BUFFER_PHYS_LIMIT);
+        uint64_t phys =
+            pfa_alloc_pages_between(1U, WASMOS_BUFFER_PHYS_LIMIT, KERNEL_HIGHER_HALF_WINDOW_BYTES);
         if (!phys || warp_map_page_alias(phys, 1U) != 0) {
             if (phys) {
                 pfa_free_pages(phys, 1U);
@@ -265,7 +264,8 @@ static void* warp_kmalloc(size_t const size) {
     } else {
         /* Large path: physical page allocator */
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
-        uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_BUFFER_PHYS_LIMIT);
+        uint64_t phys = pfa_alloc_pages_between(
+            pages, WASMOS_BUFFER_PHYS_LIMIT, KERNEL_HIGHER_HALF_WINDOW_BYTES);
         if (!phys) {
             return nullptr;
         }

@@ -191,21 +191,13 @@ class Model:
     def ring3_call(self, e):
         """C++ call expr for a ring-3 dispatch case. The wrapper takes N u32
         params + a trailing void* ctx; ring-3 supplies ctx as the (N+1)-th arg.
-        SysV puts the first 6 args in a0..a5, the rest on the user stack.
-        ctx is therefore a<N> (register) or stack_u64(N-6) — computed, so the
-        5-param case gets a5, not the hand-written a4 (ctx5) bug."""
+        Every argument is read through arg(i), which is
+        arch_warp_r3_hostcall_arg: where argument i lives (a register or the
+        user stack) is the architecture's calling convention, not the IDL's."""
         fn = self.warp_fn(e)
         n = self.arity(e)
-        if n == 0:
-            return f"{fn}(reinterpret_cast<void*>(a0))"
-        if n + 1 <= 6:  # N params + ctx all in registers a0..a<N>
-            args = [f"(uint32_t)a{i}" for i in range(n)]
-            args.append(f"reinterpret_cast<void*>(a{n})")
-            return f"{fn}({', '.join(args)})"
-        # N+1 > 6: first 6 args in a0..a5, the remaining params + ctx on the stack
-        args = [f"(uint32_t)a{i}" for i in range(6)]
-        args += [f"(uint32_t)stack_u64({j - 6})" for j in range(6, n)]
-        args.append(f"reinterpret_cast<void*>(stack_u64({n - 6}))")
+        args = [f"(uint32_t)arg({i})" for i in range(n)]
+        args.append(f"reinterpret_cast<void*>(arg({n}))")
         return f"{fn}({', '.join(args)})"
 
     @staticmethod
@@ -345,26 +337,39 @@ def emit_aot_symbols(m):
 def emit_ring3_dispatch(m):
     """Ring-3 hostcall dispatch as a self-contained inline function.
 
-    warp_ring3_dispatch decodes the syscall frame into a0..a5 + user_rsp and
-    calls this; the dispatch logic (the arg-unpacking switch) is generated, the
-    frame decode stays hand-written. Needs only the HC_* enum and the warp_*
-    wrapper declarations in scope. ctx is the computed (arity+1)-th arg (a<N> for
-    register calls), so the 5-param case gets a5 — fixing the hand-written
-    proc_info_stats ctx bug.
+    warp_ring3_dispatch passes the syscall frame; the arg-unpacking switch is
+    generated, and where each argument lives is arch_warp_r3_hostcall_arg's.
+    Needs the HC_* enum, the warp_* wrapper declarations and
+    arch/warp_ring3_arch.h in scope. ctx is the computed (arity+1)-th arg.
     """
     o = list(BANNER)
     w = o.append
-    w("/* Generated ring-3 hostcall dispatch. Call from warp_ring3_dispatch after")
-    w(" * decoding the syscall frame:")
-    w(" *   return warp_ring3_dispatch_table(hc_id, a0,a1,a2,a3,a4,a5, user_rsp); */")
-    w("static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id, uint64_t a0,")
-    w("        uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5,")
-    w("        uint64_t user_rsp) {")
-    w("    /* Stack args live past the return address at [user_rsp + 0]. */")
-    w("    auto stack_u64 = [user_rsp](uint32_t n) -> uint64_t {")
-    w("        return *reinterpret_cast<uint64_t*>(user_rsp + 8 + (uint64_t)n * 8);")
+    max_args = 0
+    for e in m.ordered:
+        for i in re.findall(r"\barg\((\d+)\)", m.ring3_call(e)):
+            max_args = max(max_args, int(i) + 1)
+    w("/* Generated ring-3 hostcall dispatch. Call from warp_ring3_dispatch with")
+    w(" * the frame of the syscall the host-call stub raised:")
+    w(" *   return warp_ring3_dispatch_table(hc_id, frame);")
+    w(" * Argument i of the call is arch_warp_r3_hostcall_arg(frame, i)")
+    w(" * (arch/warp_ring3_arch.h); it is read only for the case that uses it.")
+    w(" * Arguments past the registers come from the guest's stack, so the stack")
+    w(
+        " * pointer is checked first against the widest call, WASMOS_RING3_HOSTCALL_MAX_ARGS"
+    )
+    w(" * arguments: a guest that traps with it outside its ring-3 stack is refused")
+    w(" * rather than having the kernel read wherever it points. */")
+    w(f"#define WASMOS_RING3_HOSTCALL_MAX_ARGS {max_args}u")
+    w("static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id,")
+    w("        const syscall_frame_t* frame) {")
+    w(
+        "    if (!arch_warp_r3_hostcall_stack_ok(frame, WASMOS_RING3_HOSTCALL_MAX_ARGS)) {"
+    )
+    w("        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;")
+    w("    }")
+    w("    auto arg = [frame](unsigned i) -> uint64_t {")
+    w("        return arch_warp_r3_hostcall_arg(frame, i);")
     w("    };")
-    w("    (void)stack_u64;")
     w("    switch (hc_id) {")
     for e in m.ordered:
         w(f"    case {hc_symbol(e)}:")
@@ -375,7 +380,7 @@ def emit_ring3_dispatch(m):
         else:
             w(f"        return {call};")
     w("    default:")
-    w("        return (uint32_t)-1;")
+    w("        return (uint32_t)WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL;")
     w("    }")
     w("}")
     w("")

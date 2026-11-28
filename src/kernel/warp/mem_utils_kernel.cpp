@@ -2,13 +2,10 @@
  *
  * Replaces WARP's MemUtils.cpp and ExecutableMemory.cpp entirely.
  * All JIT code pages are allocated from the kernel physical frame allocator
- * and accessed via the existing higher-half identity mapping (RWX).
- *
- * Page model:
- *   - Higher-half base: KERNEL_HIGHER_HALF_BASE = 0xFFFFFFFF80000000
- *   - Physical frames up to 512 MB are mapped as 2 MB large pages with
- *     PRESENT | WRITE | no-NX, so they are already RWX.
- *   - virt = phys | KERNEL_HIGHER_HALF_BASE (valid for phys < 512 MB).
+ * and written through the kernel direct map: virt = phys | KERNEL_HIGHER_HALF_BASE,
+ * valid for a frame below KERNEL_HIGHER_HALF_WINDOW_BYTES (arch/vm_layout.h).
+ * A RAM frame's direct-map alias is writable and kernel-executable on every
+ * architecture.
  *
  * W^X is not enforced: all JIT pages remain RWX (see setPermissionRX below,
  * which is deliberately left undefined). */
@@ -41,9 +38,9 @@ extern "C" {
 namespace {
 
 constexpr uint64_t kPageSize = 4096ULL;
-constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
-/* Stay within the 512 MB higher-half window the kernel already maps. */
-constexpr uint64_t kPhysLimit = 512ULL * 1024ULL * 1024ULL;
+/* Kernel direct-map base: a frame inside KERNEL_HIGHER_HALF_WINDOW_BYTES is reachable at
+ * phys | kHalfBase. */
+constexpr uint64_t kHalfBase = KERNEL_HIGHER_HALF_BASE;
 
 inline uint64_t round_up_page(uint64_t n) {
     return (n + kPageSize - 1) & ~(kPageSize - 1);
@@ -463,12 +460,13 @@ extern "C" int warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const* linm
  * setPermissionRWX / setPermissionRX / setPermissionRW are not defined (see below).
  * uncommitVirtualMemory is a no-op: nothing is ever decommitted, so
  * committed memory is only reclaimed when the whole allocation is freed.
- * clearInstructionCache is a no-op because x86_64 keeps the instruction cache coherent
- * with the data cache.  getStackInfo returns a zero-filled struct — the kernel hands
- * WARP its stack bounds directly instead.  allocAlignedMemory ignores the requested
- * alignment and returns page-aligned memory, which satisfies every alignment WARP asks
- * for; it and reallocAlignedMemory throw std::bad_alloc on exhaustion, which the
- * driver's exception checkpoint turns into a longjmp rather than an unwind. */
+ * clearInstructionCache is paging_sync_instruction_cache, which does what the
+ * architecture needs before freshly written code runs.  getStackInfo returns a
+ * zero-filled struct — the kernel hands WARP its stack bounds directly instead.
+ * allocAlignedMemory ignores the requested alignment and returns page-aligned memory,
+ * which satisfies every alignment WARP asks for; it and reallocAlignedMemory throw std::bad_alloc
+ * on exhaustion, which the driver's exception checkpoint turns into a longjmp rather than an
+ * unwind. */
 
 /* -----------------------------------------------------------------------
  * vb::MemUtils implementation
@@ -492,7 +490,7 @@ uint8_t* alloc_paged_in_zone(size_t size, MmapType type) {
 #else
     uint64_t phys_min = WASMOS_BUFFER_PHYS_LIMIT;
 #endif
-    uint64_t phys = pfa_alloc_pages_above(pages, phys_min);
+    uint64_t phys = pfa_alloc_pages_between(pages, phys_min, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (!phys)
         return nullptr;
 

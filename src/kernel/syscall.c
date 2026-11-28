@@ -483,7 +483,7 @@ static void syscall_trace_ring3_stress(syscall_frame_t* frame) {
  * must resume at the post-syscall RIP, not re-enter the trap.
  *
  * Under WARP three ranges are intercepted before the switch — the return
- * trampoline, the memory helper, and RAX in [WARP_HC_SYSCALL_BASE,
+ * trampoline, the memory helper, and a syscall number in [WARP_HC_SYSCALL_BASE,
  * +WARP_HC_MAX), which is forwarded to warp_ring3_dispatch for its own
  * validation. */
 uint64_t syscall_dispatch(syscall_frame_t* frame) {
@@ -503,8 +503,8 @@ uint64_t syscall_dispatch(syscall_frame_t* frame) {
 
 #ifdef WASMOS_WASM_RUNTIME_WARP
     /* WARP ring-3 return: the return trampoline fires this after the JIT
-     * wrapper executes its final `ret`. RDI contains the raw RAX that the
-     * JIT wrapper had on exit (trap code or return value). */
+     * wrapper returns. Syscall argument 0 holds the wrapper's raw return
+     * register (trap code or return value). */
     if ((uint32_t)arch_syscall_number(frame) == WASMOS_SYSCALL_WARP_RETURN) {
         thread_t* r3t = cpu_local()->current_thread;
         if (r3t && r3t->warp_r3_active) {
@@ -526,7 +526,7 @@ uint64_t syscall_dispatch(syscall_frame_t* frame) {
                                                       arch_syscall_arg(frame, 2)));
         return arch_syscall_result(frame);
     }
-    /* WARP ring-3 hostcall: stubs fire int 0x80 with RAX = 0x100 + hc_id. */
+    /* WARP ring-3 hostcall: stub N raises syscall WARP_HC_SYSCALL_BASE + N. */
     if (arch_syscall_number(frame) >= WARP_HC_SYSCALL_BASE &&
         arch_syscall_number(frame) < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
         uint32_t hc_id = (uint32_t)(arch_syscall_number(frame) - WARP_HC_SYSCALL_BASE);

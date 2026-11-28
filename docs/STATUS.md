@@ -521,8 +521,10 @@ linked feature documents for rationale and rollout plans.
   installs it and a second, app key as PEM in `/boot/system/keys/`. A signed
   package no trusted key verifies is refused at spawn
   (`WASMOS_ERR_PROC_SPAWN_UNTRUSTED`); an unsigned one starts with `ipc.basic`.
-  A publisher key's package gets `dma.buffer` at most, once the keyring (not
-  built yet) registers such keys. A manifest
+  The keyring service registers the PEM keys in `/boot/system/keys/` with the
+  kernel at boot (`test_keyring.py`); a package signed by one is a
+  publisher's and gets `dma.buffer` at most. The build signs the `examples/`
+  apps that need nothing else with its app key. A manifest
   capability beyond `ipc.basic` is granted only to a package that verifies;
   a kind that acts on requests also needs the requester to hold it or
   `spawn.grant` (`capability_manifest_grant_check`), so the shell holds

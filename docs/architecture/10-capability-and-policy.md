@@ -269,13 +269,23 @@ hold. Two rules keep a process from acquiring one through an image instead
    (`wasmos_app_admit`, `WASMOS_ERR_PROC_SPAWN_UNTRUSTED`) and logs
    `[wasmos-app] refused, signed but verified by no trusted key: <package>`.
 
-   Only the system key is compiled into the kernel. The keyring directory
-   `/boot/system/keys/` holds the trusted public keys as PEM
-   (`system.pem`, the build's app key `apps.pem`); TODO: until the keyring
-   service registers them with the kernel, a package signed with any key but
-   the system key is invalid, so the build signs every package with the system
-   key. RSA-PSS signatures, the keyring's own verification of them and the
-   per-package "start anyway" allowlist are planned with it (`docs/TASKS.md`).
+   Only the system key is compiled into the kernel. Every other trusted key
+   reaches it through the **keyring** service (`src/services/keyring`): at boot
+   it lists `/boot/system/keys/`, reads each PEM "PUBLIC KEY" file and
+   registers every Ed25519 key with the `keyring_register_key` host call, which
+   needs the `keyring.register` capability (a critical kind only the keyring's
+   manifest declares). The kernel derives each key's id itself
+   (`wasmos_app_trust_register`); registering the system key changes nothing.
+   Only then does the keyring register its service name, and sysinit waits for
+   it (`wait-svc keyring`) before starting anything a publisher signed. The
+   build installs its system key (`system.pem`) and its app key (`apps.pem`)
+   there, and signs with the app key every `examples/` package that asks for
+   app kinds only and that the initfs image does not carry -- an initfs package
+   starts before the keyring exists (`_signing_seed` in
+   `scripts/buildgen/wasmos_rules.py`). A publisher's key is trusted by placing
+   its PEM file in the directory. RSA keys are recognised but not used yet;
+   RSA-PSS signatures (verified by the keyring) and the per-package "start
+   anyway" allowlist are planned (`docs/TASKS.md`).
 2. **A kind that acts on requests follows the requester.** `system.control`,
    `subsystem.register`, `svc.class`, `console.owner`, `spawn.grant`,
    `svc.control`, `pci.config`, `rtc.efi`, `inventory.device` and

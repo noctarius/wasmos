@@ -25,6 +25,8 @@ typedef struct {
     uint32_t module_size;
     const uint8_t* compiled_bytes; /* pre-compiled WARP native binary; NULL if JIT */
     uint32_t compiled_size;
+    /* WASMOS_APP_AOT_* (wasmos_app.h): why compiled_bytes is or is not set. */
+    uint32_t compiled_status;
     const char* entry_export; /* exported function name called as the driver entry point */
     uint32_t stack_size;
     uint32_t heap_size;

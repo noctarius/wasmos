@@ -196,6 +196,7 @@ typedef struct {
     uint32_t module_size;
     const uint8_t* compiled_bytes;
     uint32_t compiled_size;
+    uint32_t compiled_status; /* WASMOS_APP_AOT_* */
     const char* entry_export;
     uint32_t stack_size;
     uint32_t heap_size;
@@ -325,6 +326,19 @@ int wasmos_app_parse(const uint8_t* blob, uint32_t blob_size, wasmos_app_desc_t*
  * still runnable from its bytecode. */
 int wasmos_app_compiled_for(const wasmos_app_desc_t* desc, uint16_t machine, const uint8_t** bytes,
                             uint32_t* size);
+
+/* What became of a package's AOT binaries (wasmos_app_aot_select). */
+#define WASMOS_APP_AOT_ABSENT 0u     /* the package carries none */
+#define WASMOS_APP_AOT_SELECTED 1u   /* the binary for this machine is used */
+#define WASMOS_APP_AOT_OTHER_ARCH 2u /* none is for this machine */
+#define WASMOS_APP_AOT_UNTRUSTED 3u  /* the package's signature is not trusted */
+
+/* The AOT binary a package may run as native code on ELF machine `machine`:
+ * *bytes and *size are set for WASMOS_APP_AOT_SELECTED and cleared otherwise,
+ * and the status says why.  The package then runs from its bytecode, so every
+ * status but SELECTED costs start-up time, never correctness. */
+uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint16_t machine,
+                               const uint8_t** bytes, uint32_t* size);
 
 /* Index into info's boot module table of the WASMOS-APP whose embedded app name
  * is the name_len bytes at `name`, or 0xFFFFFFFF when the table holds none (or

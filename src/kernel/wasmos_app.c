@@ -116,6 +116,7 @@ static int wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t* state,
     manifest.module_size = params->module_size;
     manifest.compiled_bytes = params->compiled_bytes;
     manifest.compiled_size = params->compiled_size;
+    manifest.compiled_status = params->compiled_status;
     manifest.entry_export = 0;
     manifest.entry_argc = 0;
     manifest.entry_argv = 0;
@@ -615,6 +616,33 @@ int wasmos_app_compiled_for(const wasmos_app_desc_t* desc, uint16_t machine, con
     return -1;
 }
 
+/* Whether a package's AOT code may run. AOT code executes as native code and
+ * skips every check WARP's compiler would have emitted for the bytecode, so it
+ * is trusted like a native image: only a package signed with the build's key
+ * qualifies, whatever capabilities it asks for.
+ * TODO: packages from outside the build (external apps) can only run from
+ * bytecode until a second trust source -- a system keyring of signing keys --
+ * is defined; this is where it would be consulted. */
+static int wasmos_app_aot_trusted(const wasmos_app_desc_t* desc) {
+    return wasmos_app_signature_valid(desc);
+}
+
+uint32_t wasmos_app_aot_select(const wasmos_app_desc_t* desc, uint16_t machine,
+                               const uint8_t** bytes, uint32_t* size) {
+    *bytes = 0;
+    *size = 0;
+    if (desc->compiled_count == 0) {
+        return WASMOS_APP_AOT_ABSENT;
+    }
+    if (!wasmos_app_aot_trusted(desc)) {
+        return WASMOS_APP_AOT_UNTRUSTED;
+    }
+    if (wasmos_app_compiled_for(desc, machine, bytes, size) != 0) {
+        return WASMOS_APP_AOT_OTHER_ARCH;
+    }
+    return WASMOS_APP_AOT_SELECTED;
+}
+
 /* Looks up the registered handler for a package's subsystem tag and copies its
  * properties into *out_info.
  *
@@ -802,12 +830,8 @@ int wasmos_app_start(wasmos_app_instance_t* instance, const wasmos_app_desc_t* d
     params.name = instance->name;
     params.module_bytes = desc->wasm_bytes;
     params.module_size = desc->wasm_size;
-    if (wasmos_app_compiled_for(
-            desc, ARCH_ELF_MACHINE, &params.compiled_bytes, &params.compiled_size) != 0 &&
-        desc->compiled_count > 0) {
-        klog_printf("[wasmos-app] no AOT binary for this architecture, compiling %s at load\n",
-                    instance->name);
-    }
+    params.compiled_status = wasmos_app_aot_select(
+        desc, ARCH_ELF_MACHINE, &params.compiled_bytes, &params.compiled_size);
     params.entry_export = 0;
     params.entry_argc = 0;
     params.entry_argv = 0;

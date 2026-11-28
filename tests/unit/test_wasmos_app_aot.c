@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "monocypher-ed25519.h"
 #include "test_shuffle.h"
 
 #define EM_X86_64 62u
@@ -222,6 +223,93 @@ static int test_truncated_table_or_binary_is_refused(void) {
     return 0;
 }
 
+/* Sign the package build() left in g_blob, as the packer does: declare the
+ * signature in the header, sign every byte before it, append it. The seed's
+ * public key is the one tests/unit/stubs_signing_pubkey.c compiles in, so the
+ * result is a package the "build" signed. Returns the new length. */
+static uint32_t sign_blob(uint32_t len) {
+    uint8_t seed[32];
+    uint8_t secret[64];
+    uint8_t pub[32];
+    for (uint32_t i = 0; i < 32; ++i) {
+        seed[i] = (uint8_t)i;
+    }
+    crypto_ed25519_key_pair(secret, pub, seed);
+    test_header_t hdr;
+    memcpy(&hdr, g_blob, sizeof(hdr));
+    hdr.signature_size = WASMOS_APP_SIGNATURE_LEN;
+    memcpy(g_blob, &hdr, sizeof(hdr));
+    crypto_ed25519_sign(&g_blob[len], secret, g_blob, len);
+    return len + WASMOS_APP_SIGNATURE_LEN;
+}
+
+static uint32_t select_for(const wasmos_app_desc_t* desc, uint16_t machine, const char* want) {
+    const uint8_t* bytes = (const uint8_t*)"x";
+    uint32_t size = 7;
+    uint32_t status = wasmos_app_aot_select(desc, machine, &bytes, &size);
+    if (status == WASMOS_APP_AOT_SELECTED) {
+        if (!want || size != strlen(want) || memcmp(bytes, want, size) != 0) {
+            return 0xFFu;
+        }
+    } else if (bytes != 0 || size != 0) {
+        return 0xFEu;
+    }
+    return status;
+}
+
+/* Regression: 2026-11-28-aot-unsigned -- the kernel ran any package's AOT
+ * binary as native code. AOT code is trusted like a native image (it skips every
+ * check WARP's compiler would emit), but an unsigned package could carry a
+ * hand-made one tagged for this machine. Only a package whose signature the
+ * kernel trusts has its binary used; any other runs from its bytecode. */
+static int test_an_unsigned_package_runs_no_aot_binary(void) {
+    const test_aot_t aot[] = {{EM_X86_64, "x86code"}, {EM_AARCH64, "a64"}};
+    uint32_t len = build(2, aot, 2, 0);
+    wasmos_app_desc_t desc;
+    if (wasmos_app_parse(g_blob, len, &desc) != 0) {
+        return __LINE__;
+    }
+    if (select_for(&desc, EM_X86_64, 0) != WASMOS_APP_AOT_UNTRUSTED ||
+        select_for(&desc, EM_AARCH64, 0) != WASMOS_APP_AOT_UNTRUSTED) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_a_package_altered_after_signing_runs_no_aot_binary(void) {
+    const test_aot_t aot[] = {{EM_X86_64, "x86code"}};
+    uint32_t len = sign_blob(build(1, aot, 1, 0));
+    g_blob[len - WASMOS_APP_SIGNATURE_LEN - 1u] ^= 0x01u; /* the binary's last byte */
+    wasmos_app_desc_t desc;
+    if (wasmos_app_parse(g_blob, len, &desc) != 0) {
+        return __LINE__;
+    }
+    if (select_for(&desc, EM_X86_64, 0) != WASMOS_APP_AOT_UNTRUSTED) {
+        return __LINE__;
+    }
+    return 0;
+}
+
+static int test_a_signed_package_runs_its_own_binary_only(void) {
+    const test_aot_t aot[] = {{EM_X86_64, "x86code"}, {EM_AARCH64, "a64"}};
+    uint32_t len = sign_blob(build(2, aot, 2, 0));
+    wasmos_app_desc_t desc;
+    if (wasmos_app_parse(g_blob, len, &desc) != 0) {
+        return __LINE__;
+    }
+    if (select_for(&desc, EM_X86_64, "x86code") != WASMOS_APP_AOT_SELECTED ||
+        select_for(&desc, EM_AARCH64, "a64") != WASMOS_APP_AOT_SELECTED ||
+        select_for(&desc, 0x1234u, 0) != WASMOS_APP_AOT_OTHER_ARCH) {
+        return __LINE__;
+    }
+    uint32_t plain = build(0, 0, 0, 0);
+    if (wasmos_app_parse(g_blob, sign_blob(plain), &desc) != 0 ||
+        select_for(&desc, EM_X86_64, 0) != WASMOS_APP_AOT_ABSENT) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 int main(void) {
     /* Randomized order: a case that leaks state must not be able to make its
      * neighbour pass. Replay a failure with WASMOS_TEST_SEED. */
@@ -234,6 +322,9 @@ int main(void) {
         WASMOS_TEST_CASE(test_an_untagged_or_empty_record_is_refused),
         WASMOS_TEST_CASE(test_count_above_capacity_is_refused),
         WASMOS_TEST_CASE(test_truncated_table_or_binary_is_refused),
+        WASMOS_TEST_CASE(test_an_unsigned_package_runs_no_aot_binary),
+        WASMOS_TEST_CASE(test_a_package_altered_after_signing_runs_no_aot_binary),
+        WASMOS_TEST_CASE(test_a_signed_package_runs_its_own_binary_only),
     };
     const int groups = (int)(sizeof(cases) / sizeof(cases[0]));
     if (wasmos_test_run_all(cases, groups) != 0) {

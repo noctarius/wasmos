@@ -19,6 +19,7 @@
 
 extern "C" {
 #include "wasm_driver.h"
+#include "wasmos_app.h"
 #include "klog.h"
 #include "serial.h"
 #include "process.h"
@@ -682,6 +683,27 @@ int wasm_driver_start(wasm_driver_t* driver, const wasm_driver_manifest_t* manif
      * app through the JIT while leaving the packed artifacts byte-identical, so
      * an AOT and a JIT boot differ only in the kernel and stay A/B comparable. */
     int use_jit = 1;
+    /* A package that carries AOT code this kernel will not run is compiled at
+     * load instead (wasmos_app_aot_select). The name ends the line: console
+     * output is test input, and a utility's own errors start with "<name>:". */
+    if (WASMOS_WARP_RUNTIME_LOAD_AOT) {
+        const char* why = nullptr;
+        if (manifest->compiled_status == WASMOS_APP_AOT_OTHER_ARCH) {
+            why = "no AOT binary for this architecture";
+        } else if (manifest->compiled_status == WASMOS_APP_AOT_UNTRUSTED) {
+            why = "AOT binary of a package not signed by a trusted key";
+        }
+        if (why) {
+            klog_printf("[warp-driver] %s, compiling %s at load\n",
+                        why,
+                        manifest->name ? manifest->name : "?");
+        }
+    }
+    /* TODO: an AOT binary rebinds its imports by POSITION in the host-call table
+     * (wasmos_symbols_aot.inc) and records no identity of the table it was
+     * compiled against, so a package built for an older table binds the wrong
+     * host functions here. A per-binary ABI tag in the .wap AOT table would let
+     * this fall back to the bytecode (docs/architecture/13, "AOT Binaries"). */
     if (WASMOS_WARP_RUNTIME_LOAD_AOT && manifest->compiled_bytes != nullptr &&
         manifest->compiled_size > 0) {
         ckpt->active = 1;

@@ -441,6 +441,12 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     uint64_t r3_fn_va = warp_r3_resolve_export(mod, name);
     if (r3_fn_va == 0) {
         klog_write("[warp-r3] failed to resolve export\n");
+        /* TODO: a missing export and a guest trap (below) both return -1, and the
+         * process manager maps any failed entry to PROC_EXIT_REASON_TRAPPED
+         * (process_manager_spawn.c, wasmos_app_call_entry's caller), so a module
+         * without its entry export is reported as having trapped. The return is
+         * kernel-internal; distinguishing them needs a reason in
+         * wasmos_app_call_entry's result, on both runtimes (wasm_driver.c). */
         return -1;
     }
 

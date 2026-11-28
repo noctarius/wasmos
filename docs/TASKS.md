@@ -1914,6 +1914,14 @@ Source: `architecture/19-virtual-terminal.md`,
 `architecture/23-cli-and-user-space.md`, and
 `architecture/24-environment-scopes-and-inheritance.md`.
 
+- [ ] [BUG][P2] The CLI does not park while idle: on a 1-CPU WARP boot
+  (`out/default` x86_64, `test_hello_go`'s session) the stall dump's thread
+  table shows `cli` and `vt` trading about 17,000 `VT_IPC_READ_REQ` /
+  `VT_IPC_RESP` pairs in about a minute with no input pending, while
+  `cli_idle_wait` (`src/services/cli/cli.c`) is meant to block until
+  `VT_IPC_INPUT_NOTIFY` or `CLI_IDLE_WAIT_MS` (1 s). Something keeps the idle
+  select ready. On one CPU it takes the time the rest of boot needs, which is
+  why the serial driver there starts after the first prompt.
 - [ ] [BUG][P2] Typed-ahead console input past about 256 bytes is lost. Lines
   typed in one write faster than the shell runs them stop arriving after
   roughly 250 bytes -- three 77-byte `echo` lines and part of a fourth -- and

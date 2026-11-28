@@ -159,3 +159,93 @@ int keyring_listing_next(const char* listing, uint32_t len, uint32_t* pos, char*
     }
     return 0;
 }
+
+static int hex_value(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+int keyring_allow_next(const char* text, uint32_t len, uint32_t* pos,
+                       uint8_t digest[KEYRING_DIGEST_LEN]) {
+    if (!text || !pos || !digest) {
+        return 0;
+    }
+    while (*pos < len) {
+        uint32_t start = *pos;
+        uint32_t end = start;
+        while (end < len && text[end] != '\n') {
+            ++end;
+        }
+        *pos = end < len ? end + 1u : end;
+        uint32_t n = end - start;
+        while (n > 0 && (text[start + n - 1u] == '\r' || text[start + n - 1u] == ' ' ||
+                         text[start + n - 1u] == '\t')) {
+            --n;
+        }
+        if (n == 0 || text[start] == '#') {
+            continue;
+        }
+        const uint32_t hex_len = 2u * KEYRING_DIGEST_LEN;
+        if (n < hex_len ||
+            (n > hex_len && text[start + hex_len] != ' ' && text[start + hex_len] != '\t')) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < KEYRING_DIGEST_LEN; ++i) {
+            int hi = hex_value(text[start + 2u * i]);
+            int lo = hex_value(text[start + 2u * i + 1u]);
+            if (hi < 0 || lo < 0) {
+                return -1;
+            }
+            digest[i] = (uint8_t)((hi << 4) | lo);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static const char k_hex_digits[] = "0123456789abcdef";
+
+int32_t keyring_allow_line(const uint8_t digest[KEYRING_DIGEST_LEN], const char* path,
+                           uint32_t path_len, char* out, uint32_t cap) {
+    if (!digest || !out || (path_len > 0u && !path) || path_len > KEYRING_ALLOW_PATH_MAX) {
+        return -1;
+    }
+    uint32_t need = 2u * KEYRING_DIGEST_LEN + (path_len > 0u ? 1u + path_len : 0u) + 1u;
+    if (need > cap) {
+        return -1;
+    }
+    uint32_t o = 0;
+    for (uint32_t i = 0; i < KEYRING_DIGEST_LEN; ++i) {
+        out[o++] = k_hex_digits[digest[i] >> 4];
+        out[o++] = k_hex_digits[digest[i] & 15u];
+    }
+    if (path_len > 0u) {
+        out[o++] = ' ';
+        for (uint32_t i = 0; i < path_len; ++i) {
+            unsigned char c = (unsigned char)path[i];
+            out[o++] = (c < 0x20u || c == 0x7fu) ? '?' : (char)c;
+        }
+    }
+    out[o++] = '\n';
+    return (int32_t)o;
+}
+
+void keyring_key_file_name(const uint8_t id[KEYRING_KEY_ID_LEN], char out[13]) {
+    for (uint32_t i = 0; i < 4u; ++i) {
+        out[2u * i] = k_hex_digits[id[i] >> 4];
+        out[2u * i + 1u] = k_hex_digits[id[i] & 15u];
+    }
+    out[8] = '.';
+    out[9] = 'p';
+    out[10] = 'e';
+    out[11] = 'm';
+    out[12] = '\0';
+}

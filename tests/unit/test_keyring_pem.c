@@ -1,8 +1,9 @@
 /* test_keyring_pem.c - the keyring's pure helpers (src/services/keyring/
  * keyring_pem.c): reading a PEM public key, recognising its algorithm,
- * deriving its key id as the kernel and the packer do, and picking key files
- * out of a directory listing. Regression: 2026-11-28-keyring (the service that
- * makes publisher keys trusted). */
+ * deriving its key id as the kernel and the packer do, picking key files out
+ * of a directory listing, and reading and writing the package allowlist.
+ * Regression: 2026-11-28-keyring (the service that makes publisher keys
+ * trusted); 2026-11-28-start-anyway (the allowlist). */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -95,12 +96,75 @@ static void test_only_pem_files_are_picked_from_a_listing(void) {
           "a name that does not fit is skipped");
 }
 
+/* A line written for a digest reads back as that digest; the reader skips what
+ * is not a digest line and says so for a malformed one. */
+static void test_an_allowlist_line_reads_back_as_its_digest(void) {
+    uint8_t digest[KEYRING_DIGEST_LEN];
+    for (uint32_t i = 0; i < KEYRING_DIGEST_LEN; ++i) {
+        digest[i] = (uint8_t)(i * 7u + 3u);
+    }
+    char text[4 * KEYRING_ALLOW_LINE_MAX];
+    uint32_t len = 0;
+    static const char head[] = "# packages allowed to start anyway\n\n";
+    memcpy(text, head, sizeof(head) - 1u);
+    len += (uint32_t)sizeof(head) - 1u;
+    static const char path[] = "/boot/apps/a\nb.wap";
+    int32_t n = keyring_allow_line(
+        digest, path, (uint32_t)sizeof(path) - 1u, text + len, (uint32_t)sizeof(text) - len);
+    CHECK(n == (int32_t)(2u * KEYRING_DIGEST_LEN + 1u + sizeof(path) - 1u + 1u), "line length");
+    CHECK(text[len + n - 1] == '\n', "a final newline");
+    CHECK(memchr(text + len, '\n', (size_t)n - 1u) == NULL, "a newline in the path is not kept");
+    len += (uint32_t)n;
+    static const char bad[] = "not a digest\n";
+    memcpy(text + len, bad, sizeof(bad) - 1u);
+    len += (uint32_t)sizeof(bad) - 1u;
+    /* A bare digest, upper case, without a final newline. */
+    for (uint32_t i = 0; i < KEYRING_DIGEST_LEN; ++i) {
+        static const char hex[] = "0123456789ABCDEF";
+        text[len++] = hex[(uint8_t)(255u - i) >> 4];
+        text[len++] = hex[(uint8_t)(255u - i) & 15u];
+    }
+
+    uint8_t got[KEYRING_DIGEST_LEN];
+    uint32_t pos = 0;
+    CHECK(keyring_allow_next(text, len, &pos, got) == 1 && memcmp(got, digest, sizeof(got)) == 0,
+          "the written line reads back");
+    CHECK(keyring_allow_next(text, len, &pos, got) == -1, "a malformed line is reported");
+    CHECK(keyring_allow_next(text, len, &pos, got) == 1 && got[0] == 255u && got[63] == 192u,
+          "a bare upper-case digest at the end");
+    CHECK(keyring_allow_next(text, len, &pos, got) == 0, "the end");
+}
+
+static void test_an_allowlist_line_must_fit(void) {
+    uint8_t digest[KEYRING_DIGEST_LEN] = {0};
+    char path[KEYRING_ALLOW_PATH_MAX + 1u];
+    char out[KEYRING_ALLOW_LINE_MAX];
+    memset(path, 'p', sizeof(path));
+    CHECK(keyring_allow_line(digest, path, KEYRING_ALLOW_PATH_MAX, out, sizeof(out)) ==
+              (int32_t)sizeof(out),
+          "the longest path fits the longest line");
+    CHECK(keyring_allow_line(digest, path, sizeof(path), out, sizeof(out)) == -1,
+          "a longer path is refused");
+    CHECK(keyring_allow_line(digest, path, 4u, out, 2u * KEYRING_DIGEST_LEN) == -1,
+          "a line longer than the buffer is refused");
+}
+
+static void test_a_key_file_is_named_by_its_id(void) {
+    const uint8_t id[KEYRING_KEY_ID_LEN] = {0xde, 0xad, 0x0b, 0xef, 1, 2, 3};
+    char name[13];
+    keyring_key_file_name(id, name);
+    CHECK(strcmp(name, "dead0bef.pem") == 0, "8 hex digits and .pem");
+}
+
 int main(void) {
     static const wasmos_test_void_case_t cases[] = {
         WASMOS_TEST_CASE(test_an_ed25519_key_reads_as_the_packer_wrote_it),
         WASMOS_TEST_CASE(test_an_rsa_key_is_recognised),
         WASMOS_TEST_CASE(test_malformed_pem_is_refused),
         WASMOS_TEST_CASE(test_only_pem_files_are_picked_from_a_listing),
+        WASMOS_TEST_CASE(test_an_allowlist_line_reads_back_as_its_digest),
+        WASMOS_TEST_CASE(test_an_allowlist_line_must_fit),
+        WASMOS_TEST_CASE(test_a_key_file_is_named_by_its_id),
     };
     (void)wasmos_test_run_all_void(cases, (int)(sizeof(cases) / sizeof(cases[0])));
     printf("test_keyring_pem: ok\n");

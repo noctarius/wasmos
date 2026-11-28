@@ -306,14 +306,29 @@ typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id, const 
 
 /* How far the package is trusted, WASMOS_APP_TRUST_*.  A signature is looked up by
  * its key id among the keys this kernel trusts -- the build's system key, the one
- * compiled in -- and verified against that key alone; an
+ * compiled in, and the keys the keyring registered (wasmos_app_trust_register),
+ * which yield WASMOS_APP_TRUST_PUBLISHER -- and verified against that key alone; an
  * unknown key, an algorithm this kernel cannot check, or a signature that does not
  * verify is INVALID.  Hashes the whole package, so it costs time proportional to
  * its size: call it once per decision.
- * TODO: keys registered by the keyring service (which yield
- * WASMOS_APP_TRUST_PUBLISHER), RSA-PSS signatures (which the keyring verifies) and
- * the per-package allowlist are not consulted yet. */
+ * TODO: RSA-PSS signatures (which the keyring verifies) and the per-package
+ * allowlist are not consulted yet. */
 uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc);
+
+/* Make an Ed25519 key, given as its DER SubjectPublicKeyInfo, a trusted publisher
+ * key: a package whose signature it verifies is WASMOS_APP_TRUST_PUBLISHER from
+ * now on. The kernel derives the key's id itself. Registering the system key or a
+ * key already registered changes nothing. Returns WASMOS_OK,
+ * WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for anything but an Ed25519 key, or
+ * WASMOS_ERR_KERNEL_KEYRING_FULL. Only the keyring service, which holds
+ * keyring.register, reaches this (api->keyring_register_key). */
+int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len);
+
+/* wasmos_app_trust_register on behalf of the process with memory context
+ * `context_id`, which must hold keyring.register: the keyring_register_key host
+ * call of both runtimes. WASMOS_ERR_KERNEL_NOT_AUTHORIZED otherwise. `der` is
+ * copied before its id is derived, so the caller cannot change it meanwhile. */
+int wasmos_app_trust_register_as(uint32_t context_id, const uint8_t* der, uint32_t der_len);
 
 /* 0 when the package may be started, -1 (logged) when its signature is verified by no
  * trusted key (WASMOS_APP_TRUST_INVALID).  An unsigned package is admitted: it runs

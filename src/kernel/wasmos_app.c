@@ -777,6 +777,92 @@ int wasmos_app_call_entry(wasmos_app_instance_t* instance) {
  * a zero owner context, a name or entry that does not fit, a refused capability, an unresolvable
  * subsystem, or a failed start hook.  On failure the instance is left inactive, but capabilities
  * already granted to the context are NOT withdrawn. */
+/* Keys the keyring service registered (wasmos_app_trust_register): publishers'
+ * Ed25519 keys, the build's app key among them. A key is added once and never
+ * removed while the system runs; the table is read on every signed spawn and
+ * written only at registration, both under g_trusted_keys_lock. */
+#define WASMOS_APP_MAX_TRUSTED_KEYS 32u
+static struct {
+    uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN];
+    uint8_t pubkey[32];
+} g_trusted_keys[WASMOS_APP_MAX_TRUSTED_KEYS];
+static uint32_t g_trusted_key_count;
+static ksync_spinlock_t g_trusted_keys_lock; /* zero storage is unlocked; no init */
+
+/* DER SubjectPublicKeyInfo of an Ed25519 key (RFC 8410): this prefix, then the
+ * 32-byte key. */
+static const uint8_t k_ed25519_spki_prefix[12] = {
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00};
+
+/* The key id of a DER SubjectPublicKeyInfo (WASMOS_APP_SIG_KEY_ID_LEN bytes of
+ * BLAKE2b-256 over it), as the packer and the keyring derive it. */
+static void wasmos_app_key_id(const uint8_t* der, uint32_t der_len,
+                              uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN]) {
+    uint8_t hash[32];
+    crypto_blake2b(hash, sizeof(hash), der, der_len);
+    memcpy(id, hash, WASMOS_APP_SIG_KEY_ID_LEN);
+}
+
+int wasmos_app_trust_register(const uint8_t* der, uint32_t der_len) {
+    if (!der || der_len != sizeof(k_ed25519_spki_prefix) + 32u ||
+        memcmp(der, k_ed25519_spki_prefix, sizeof(k_ed25519_spki_prefix)) != 0) {
+        return WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
+    }
+    uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN];
+    wasmos_app_key_id(der, der_len, id);
+    /* The system key is compiled in and stays the only key that grants
+     * privilege: registering it changes nothing. */
+    if (memcmp(id, wasmos_image_signing_key_id, WASMOS_APP_SIG_KEY_ID_LEN) == 0) {
+        return WASMOS_OK;
+    }
+    int rc = WASMOS_OK;
+    ksync_spinlock_lock(&g_trusted_keys_lock);
+    uint32_t i = 0;
+    while (i < g_trusted_key_count &&
+           memcmp(g_trusted_keys[i].id, id, WASMOS_APP_SIG_KEY_ID_LEN) != 0) {
+        ++i;
+    }
+    if (i == g_trusted_key_count) {
+        if (g_trusted_key_count == WASMOS_APP_MAX_TRUSTED_KEYS) {
+            rc = WASMOS_ERR_KERNEL_KEYRING_FULL;
+        } else {
+            memcpy(g_trusted_keys[i].id, id, WASMOS_APP_SIG_KEY_ID_LEN);
+            memcpy(g_trusted_keys[i].pubkey, der + sizeof(k_ed25519_spki_prefix), 32u);
+            g_trusted_key_count++;
+        }
+    }
+    ksync_spinlock_unlock(&g_trusted_keys_lock);
+    return rc;
+}
+
+int wasmos_app_trust_register_as(uint32_t context_id, const uint8_t* der, uint32_t der_len) {
+    if (!capability_has(context_id, CAP_KEYRING_REGISTER)) {
+        return WASMOS_ERR_KERNEL_NOT_AUTHORIZED;
+    }
+    uint8_t copy[sizeof(k_ed25519_spki_prefix) + 32u];
+    if (!der || der_len != sizeof(copy)) {
+        return WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
+    }
+    memcpy(copy, der, sizeof(copy));
+    return wasmos_app_trust_register(copy, sizeof(copy));
+}
+
+/* The registered key with id `id`, copied to *pubkey: 1 when there is one. */
+static int wasmos_app_registered_key(const uint8_t id[WASMOS_APP_SIG_KEY_ID_LEN],
+                                     uint8_t pubkey[32]) {
+    int found = 0;
+    ksync_spinlock_lock(&g_trusted_keys_lock);
+    for (uint32_t i = 0; i < g_trusted_key_count; ++i) {
+        if (memcmp(g_trusted_keys[i].id, id, WASMOS_APP_SIG_KEY_ID_LEN) == 0) {
+            memcpy(pubkey, g_trusted_keys[i].pubkey, 32u);
+            found = 1;
+            break;
+        }
+    }
+    ksync_spinlock_unlock(&g_trusted_keys_lock);
+    return found;
+}
+
 /* 1 when the package's Ed25519 signature verifies against `pubkey`. */
 static int wasmos_app_ed25519_verifies(const wasmos_app_desc_t* desc, const uint8_t* pubkey) {
     return crypto_ed25519_check(desc->signature, pubkey, desc->blob, desc->signed_size) == 0;
@@ -795,9 +881,13 @@ uint32_t wasmos_app_trust(const wasmos_app_desc_t* desc) {
                    ? WASMOS_APP_TRUST_SYSTEM
                    : WASMOS_APP_TRUST_INVALID;
     }
-    /* TODO: a key the keyring service registered (the build's app key, a
-     * publisher's) verifies to WASMOS_APP_TRUST_PUBLISHER; until the keyring
-     * exists, any key but the system key is unknown. */
+    /* A key the keyring registered: a publisher's, the build's app key included.
+     * Verified outside the lock; the copy is the key as registered. */
+    uint8_t pubkey[32];
+    if (wasmos_app_registered_key(desc->signature_key_id, pubkey)) {
+        return wasmos_app_ed25519_verifies(desc, pubkey) ? WASMOS_APP_TRUST_PUBLISHER
+                                                         : WASMOS_APP_TRUST_INVALID;
+    }
     return WASMOS_APP_TRUST_INVALID;
 }
 

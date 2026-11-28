@@ -997,5 +997,18 @@ extern int32_t wasmos_rtc_efi_get(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("
  * below 24; an unmapped buffer as for rtc_efi_get.
  */
 extern int32_t wasmos_rtc_efi_set(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("wasmos", "rtc_efi_set");
+/* Register a trusted package-signing key with the kernel: `der` holds `len`
+ * bytes of the key's DER SubjectPublicKeyInfo. A package whose signature
+ * the key verifies then starts as a publisher's (docs/architecture/10,
+ * "Signed Packages"); the kernel derives the key's id itself and verifies
+ * Ed25519 only. Requires the keyring.register capability
+ * (WASMOS_ERR_KERNEL_NOT_AUTHORIZED). Returns 0, also for a key already
+ * registered and for the system key, which stays the only key that grants
+ * privilege; WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for anything but an Ed25519
+ * key; WASMOS_ERR_KERNEL_KEYRING_FULL when the table is full. A buffer
+ * outside linear memory traps the module under wasm3 and answers
+ * WASMOS_ERR_KERNEL_BAD_POINTER under WARP.
+ */
+extern int32_t wasmos_keyring_register_key(int32_t der, int32_t len) WASMOS_WASM_IMPORT("wasmos", "keyring_register_key");
 
 #endif /* WASMOS_GENERATED_CLIENT_IMPORTS_H */

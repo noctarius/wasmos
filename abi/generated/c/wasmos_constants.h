@@ -642,6 +642,8 @@ enum {
     WASMOS_CAP_INVENTORY_DEVICE = 12,
     /* inventory.storage: publish and retire block-device and volume records in device-manager's inventory. */
     WASMOS_CAP_INVENTORY_STORAGE = 13,
+    /* keyring.register: register a trusted package-signing key with the kernel (the keyring service). */
+    WASMOS_CAP_KEYRING_REGISTER = 14,
 };
 
 #endif /* WASMOS_GENERATED_CONSTANTS_H */

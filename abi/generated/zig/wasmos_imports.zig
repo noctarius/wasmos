@@ -877,3 +877,15 @@ pub extern "wasmos" fn rtc_efi_get(a0: i32, a1: i32) callconv(.c) i32;
 /// WASMOS_ERR_RTC_FIRMWARE when SetTime fails, or WASMOS_INVAL for a `len`
 /// below 24; an unmapped buffer as for rtc_efi_get.
 pub extern "wasmos" fn rtc_efi_set(a0: i32, a1: i32) callconv(.c) i32;
+/// Register a trusted package-signing key with the kernel: `der` holds `len`
+/// bytes of the key's DER SubjectPublicKeyInfo. A package whose signature
+/// the key verifies then starts as a publisher's (docs/architecture/10,
+/// "Signed Packages"); the kernel derives the key's id itself and verifies
+/// Ed25519 only. Requires the keyring.register capability
+/// (WASMOS_ERR_KERNEL_NOT_AUTHORIZED). Returns 0, also for a key already
+/// registered and for the system key, which stays the only key that grants
+/// privilege; WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for anything but an Ed25519
+/// key; WASMOS_ERR_KERNEL_KEYRING_FULL when the table is full. A buffer
+/// outside linear memory traps the module under wasm3 and answers
+/// WASMOS_ERR_KERNEL_BAD_POINTER under WARP.
+pub extern "wasmos" fn keyring_register_key(a0: i32, a1: i32) callconv(.c) i32;

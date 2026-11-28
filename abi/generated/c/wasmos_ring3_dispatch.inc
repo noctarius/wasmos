@@ -275,6 +275,8 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id,
         return warp_rtc_efi_get((uint32_t)arg(0), (uint32_t)arg(1), reinterpret_cast<void*>(arg(2)));
     case HC_RTC_EFI_SET:
         return warp_rtc_efi_set((uint32_t)arg(0), (uint32_t)arg(1), reinterpret_cast<void*>(arg(2)));
+    case HC_KEYRING_REGISTER_KEY:
+        return warp_keyring_register_key((uint32_t)arg(0), (uint32_t)arg(1), reinterpret_cast<void*>(arg(2)));
     default:
         return (uint32_t)WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL;
     }

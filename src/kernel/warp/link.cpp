@@ -58,6 +58,7 @@ extern "C" {
 #include "serial.h"
 #include "capability.h"
 #include "efi_rtc.h"
+#include "wasmos_app.h"
 #include "io_region.h"
 #include "timer.h"
 #include "policy.h"
@@ -1039,6 +1040,20 @@ static uint32_t warp_rtc_efi_set(uint32_t buf, uint32_t len, void* ctx_) {
     uint32_t rc = 0;
     int32_t* p = warp_rtc_efi_buf(ctx_, buf, len, &rc);
     return p ? (uint32_t)efi_rtc_set(p) : rc;
+}
+
+/* keyring_register_key (abi/hostcalls.yaml): the check and the copy are
+ * wasmos_app_trust_register_as's, shared with wasm3. */
+static uint32_t warp_keyring_register_key(uint32_t der, uint32_t len, void* ctx_) {
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0)
+        return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
+    if ((int32_t)len <= 0 || len > 64u)
+        return (uint32_t)WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
+    const uint8_t* p = warp_mem(warp_call_ctx(ctx_), der, len);
+    if (!p)
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    return (uint32_t)wasmos_app_trust_register_as(context_id, p, len);
 }
 
 /* The context that owns `endpoint`, the driver a pci-bus request is made for;

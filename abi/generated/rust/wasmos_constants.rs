@@ -563,3 +563,5 @@ pub const WASMOS_CAP_RTC_EFI: i32 = 11;
 pub const WASMOS_CAP_INVENTORY_DEVICE: i32 = 12;
 /// inventory.storage: publish and retire block-device and volume records in device-manager's inventory.
 pub const WASMOS_CAP_INVENTORY_STORAGE: i32 = 13;
+/// keyring.register: register a trusted package-signing key with the kernel (the keyring service).
+pub const WASMOS_CAP_KEYRING_REGISTER: i32 = 14;

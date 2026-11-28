@@ -130,4 +130,5 @@
     X("wasmos", "pci_config_write_for", "i(iiii)", wasmos_pci_config_write_for) \
     X("wasmos", "ipc_peer_await", "i(ii)", wasmos_ipc_peer_await) \
     X("wasmos", "rtc_efi_get", "i(*i)", wasmos_rtc_efi_get) \
-    X("wasmos", "rtc_efi_set", "i(*i)", wasmos_rtc_efi_set)
+    X("wasmos", "rtc_efi_set", "i(*i)", wasmos_rtc_efi_set) \
+    X("wasmos", "keyring_register_key", "i(*i)", wasmos_keyring_register_key)

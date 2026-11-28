@@ -383,6 +383,8 @@ domains:
       - { name: NO_SUBSCRIBER_SLOT, description: "every kernel-log subscriber slot is held by another process" }
       - { name: PHYS_NOT_FIRMWARE, description: "a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it" }
       - { name: UNKNOWN_HOSTCALL, description: "a ring-3 host-call trap carried an ordinal that names no host call" }
+      - { name: KEY_UNSUPPORTED, description: "a key offered to the kernel's trusted-key table is not a DER Ed25519 SubjectPublicKeyInfo, the only form the kernel verifies with" }
+      - { name: KEYRING_FULL,    description: "the kernel's trusted-key table holds as many keys as it can; the key was not registered" }
 
   block:
     id: 20

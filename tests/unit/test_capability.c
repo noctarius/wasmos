@@ -232,7 +232,8 @@ static int test_the_image_policy_decides_each_kind(void) {
                                         CAP_PCI_CONFIG,
                                         CAP_RTC_EFI,
                                         CAP_INVENTORY_DEVICE,
-                                        CAP_INVENTORY_STORAGE};
+                                        CAP_INVENTORY_STORAGE,
+                                        CAP_KEYRING_REGISTER};
     for (uint32_t i = 0; i < sizeof(acting) / sizeof(acting[0]); ++i) {
         if (capability_manifest_grant_check(acting[i], 1, none) != CAPABILITY_GRANT_REQUESTER) {
             printf("  kind %u is handed out by a requester without it\n", (unsigned)acting[i]);
@@ -273,7 +274,8 @@ static int test_a_publisher_image_gets_the_app_kinds_only(void) {
                                           CAP_PCI_CONFIG,
                                           CAP_RTC_EFI,
                                           CAP_INVENTORY_DEVICE,
-                                          CAP_INVENTORY_STORAGE};
+                                          CAP_INVENTORY_STORAGE,
+                                          CAP_KEYRING_REGISTER};
     for (uint32_t i = 0; i < sizeof(critical) / sizeof(critical[0]); ++i) {
         if (capability_manifest_grant_check(critical[i], CAPABILITY_IMAGE_PUBLISHER, all) !=
             CAPABILITY_GRANT_SYSTEM_ONLY) {

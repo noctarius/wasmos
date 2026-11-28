@@ -34,12 +34,13 @@ typedef enum {
     CAP_PCI_CONFIG = 10,        /* read and write PCI configuration space */
     CAP_RTC_EFI = 11,           /* read and set the clock through UEFI runtime services */
     CAP_INVENTORY_DEVICE = 12,  /* publish PCI/ACPI device records to device-manager */
-    CAP_INVENTORY_STORAGE = 13  /* publish/retire block and volume records to device-manager */
+    CAP_INVENTORY_STORAGE = 13, /* publish/retire block and volume records to device-manager */
+    CAP_KEYRING_REGISTER = 14   /* register a trusted package-signing key (the keyring) */
 } capability_kind_t;
 
 /* Kinds are numbered 0..CAPABILITY_KIND_COUNT-1. Their values are ABI: a guest
  * names one to ipc_endpoint_has_cap as WASMOS_CAP_* (abi/constants.yaml). */
-#define CAPABILITY_KIND_COUNT 14u
+#define CAPABILITY_KIND_COUNT 15u
 _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_IRQ_ROUTE &&
                    CAP_MMIO_MAP == WASMOS_CAP_MMIO_MAP && CAP_DMA_BUFFER == WASMOS_CAP_DMA_BUFFER &&
                    CAP_SYSTEM_CONTROL == WASMOS_CAP_SYSTEM_CONTROL &&
@@ -50,7 +51,8 @@ _Static_assert(CAP_IO_PORT == WASMOS_CAP_IO_PORT && CAP_IRQ_ROUTE == WASMOS_CAP_
                    CAP_SVC_CONTROL == WASMOS_CAP_SVC_CONTROL &&
                    CAP_PCI_CONFIG == WASMOS_CAP_PCI_CONFIG && CAP_RTC_EFI == WASMOS_CAP_RTC_EFI &&
                    CAP_INVENTORY_DEVICE == WASMOS_CAP_INVENTORY_DEVICE &&
-                   CAP_INVENTORY_STORAGE == WASMOS_CAP_INVENTORY_STORAGE,
+                   CAP_INVENTORY_STORAGE == WASMOS_CAP_INVENTORY_STORAGE &&
+                   CAP_KEYRING_REGISTER == WASMOS_CAP_KEYRING_REGISTER,
                "capability_kind_t is the WASMOS_CAP_* ABI");
 
 /* Initialize the capability table; called once during kernel startup.

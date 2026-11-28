@@ -116,6 +116,20 @@ class Arch:
     # gives it both. The fixed slots keep every other device where it is: a
     # virtio-blk disk's identity is derived from its slot.
     qemu_input: tuple
+    # WARP's code generator for this architecture. The kernel's WARP and the
+    # warp_aot-<arch> host tool both name it explicitly, so an AOT binary and
+    # the in-kernel JIT come from the same backend whatever the build host.
+    warp_jit_target: str
+
+
+# WARP configuration that changes the code its compiler emits. The kernel's
+# WARP (warp_cxx below) and the warp_aot host tools (src/tools/warp_aot) must
+# agree on every one, or an AOT binary does not match what the kernel's JIT
+# expects; both take them from here.
+WARP_CODEGEN_DEFINES = (
+    "-DACTIVE_STACK_OVERFLOW_CHECK=1",
+    "-DLINEAR_MEMORY_BOUNDS_CHECKS=1",
+)
 
 
 ARCHES = {
@@ -140,6 +154,7 @@ ARCHES = {
         qemu_nic_option_rom=True,
         qemu_display=(),
         qemu_input=(),
+        warp_jit_target="-DJIT_TARGET_X86_64",
     ),
     "aarch64": Arch(
         name="aarch64",
@@ -173,6 +188,7 @@ ARCHES = {
             "-device",
             "virtio-mouse-pci,id=vmouse,addr=0x1d",
         ),
+        warp_jit_target="-DJIT_TARGET_AARCH64",
     ),
 }
 
@@ -433,8 +449,8 @@ def profiles(srcdir: Path, cfg, tools: dict) -> dict[str, Toolchain]:
         "-fexceptions",
         "-Wno-deprecated",
         "-Wno-unused-variable",
-        "-DACTIVE_STACK_OVERFLOW_CHECK=1",
-        "-DLINEAR_MEMORY_BOUNDS_CHECKS=1",
+        target.warp_jit_target,
+        *WARP_CODEGEN_DEFINES,
         "-DVB_POSIX",
         "-DVB_WIN32_OR_POSIX",
         "-DNVALGRIND",

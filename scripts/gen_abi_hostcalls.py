@@ -344,13 +344,29 @@ def emit_ring3_dispatch(m):
     """
     o = list(BANNER)
     w = o.append
+    max_args = 0
+    for e in m.ordered:
+        for i in re.findall(r"\barg\((\d+)\)", m.ring3_call(e)):
+            max_args = max(max_args, int(i) + 1)
     w("/* Generated ring-3 hostcall dispatch. Call from warp_ring3_dispatch with")
     w(" * the frame of the syscall the host-call stub raised:")
     w(" *   return warp_ring3_dispatch_table(hc_id, frame);")
     w(" * Argument i of the call is arch_warp_r3_hostcall_arg(frame, i)")
-    w(" * (arch/warp_ring3_arch.h); it is read only for the case that uses it. */")
+    w(" * (arch/warp_ring3_arch.h); it is read only for the case that uses it.")
+    w(" * Arguments past the registers come from the guest's stack, so the stack")
+    w(
+        " * pointer is checked first against the widest call, WASMOS_RING3_HOSTCALL_MAX_ARGS"
+    )
+    w(" * arguments: a guest that traps with it outside its ring-3 stack is refused")
+    w(" * rather than having the kernel read wherever it points. */")
+    w(f"#define WASMOS_RING3_HOSTCALL_MAX_ARGS {max_args}u")
     w("static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id,")
     w("        const syscall_frame_t* frame) {")
+    w(
+        "    if (!arch_warp_r3_hostcall_stack_ok(frame, WASMOS_RING3_HOSTCALL_MAX_ARGS)) {"
+    )
+    w("        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;")
+    w("    }")
     w("    auto arg = [frame](unsigned i) -> uint64_t {")
     w("        return arch_warp_r3_hostcall_arg(frame, i);")
     w("    };")
@@ -364,7 +380,7 @@ def emit_ring3_dispatch(m):
         else:
             w(f"        return {call};")
     w("    default:")
-    w("        return (uint32_t)-1;")
+    w("        return (uint32_t)WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL;")
     w("    }")
     w("}")
     w("")

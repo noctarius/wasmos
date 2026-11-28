@@ -163,7 +163,8 @@ config WASMOS_WARP_RUNTIME_LOAD_AOT
     help
       When disabled, every WARP app takes the JIT path (initFromBytecode)
       without changing any packed artifact, so an AOT build and a JIT build
-      differ only in the kernel.
+      differ only in the kernel. The bundled AOT code is compiled for the
+      tree's architecture (src/tools/warp_aot).
 
 config WASMOS_SCHED_SMP_STRESS
     bool "Run the standalone SMP scheduler stress test"

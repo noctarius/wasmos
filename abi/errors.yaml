@@ -381,6 +381,7 @@ domains:
       - { name: NO_CONTEXT_DUMPED, description: "an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution" }
       - { name: NO_SUBSCRIBER_SLOT, description: "every kernel-log subscriber slot is held by another process" }
       - { name: PHYS_NOT_FIRMWARE, description: "a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it" }
+      - { name: UNKNOWN_HOSTCALL, description: "a ring-3 host-call trap carried an ordinal that names no host call" }
 
   block:
     id: 20

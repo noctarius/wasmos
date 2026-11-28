@@ -4,6 +4,8 @@ only for a WARP configuration."""
 
 import platform
 
+from toolchains import ARCHES, WARP_CODEGEN_DEFINES, arch
+
 # Vendored WARP sources (libs/warp is a git subtree; never edited here).
 WARP_SOURCES = [
     "src/WasmModule/WasmModule.cpp",
@@ -51,12 +53,10 @@ WARP_SOURCES = [
 ]
 TOOL_SOURCES = ["host_mem_utils.cpp", "host_shim.cpp", "warp_aot.cpp"]
 
-
-# The JIT target each architecture's tool is built with. WARP picks its code
-# generator at compile time and records no ISA in a compiled binary, so a
-# .warpbin is tagged with its architecture by the packer (--compiled
-# <arch>=<path>), and the kernel uses only the one for its own.
-JIT_TARGETS = {"x86_64": "-DJIT_TARGET_X86_64", "aarch64": "-DJIT_TARGET_AARCH64"}
+# WARP sources that integrate with the HOST operating system (signals), and so
+# keep the host's OS macros; every other WARP source is code generation and is
+# compiled as the kernel compiles it (target_os_neutral.h).
+HOST_OS_SOURCES = {"src/utils/SignalFunctionWrapper_unix.cpp"}
 
 
 def _host_arch():
@@ -66,11 +66,10 @@ def _host_arch():
 
 def build(b):
     warp = b.root / "libs/warp"
-    flags = [
+    common = [
         "-std=c++14",
         "-O2",
-        "-DACTIVE_STACK_OVERFLOW_CHECK=1",
-        "-DLINEAR_MEMORY_BOUNDS_CHECKS=1",
+        *WARP_CODEGEN_DEFINES,
         "-DVB_POSIX",
         "-DVB_WIN32_OR_POSIX",
         "-DNVALGRIND",
@@ -86,40 +85,52 @@ def build(b):
         "-Wno-unsequenced",
         "-Wno-#pragma-messages",
     ]
-    tree_arch = "aarch64" if b.cfg.WASMOS_ARCH_AARCH64 else "x86_64"
+    tree_arch = arch(b.cfg).name
+    neutral = ["-include", str(b.src("target_os_neutral.h"))]
     host = b.toolchain("host")
     if not b.cfg.WASMOS_WASM_RUNTIME_WARP:
         # Only a WARP tree builds the tool; index its own sources regardless.
         for src in b.srcs(*TOOL_SOURCES):
-            b.index(
-                src, [host.tc.cxx, *host.tc.cxxflags, *flags, JIT_TARGETS[tree_arch]]
-            )
+            b.index(src, [host.tc.cxx, *host.tc.cxxflags, *common, arch(b.cfg).warp_jit_target])
         return
-    # One tool per target architecture, warp_aot-<arch>. A tree's own modules use
-    # its own architecture's; a package with `aot = "all"` (wasmos_rules.pack)
-    # also uses the others, and only then are they built.
+    # One tool per target architecture, warp_aot-<arch>, with that
+    # architecture's code generator (Arch.warp_jit_target). WARP records no ISA
+    # in a compiled binary, so the packer tags each .warpbin with the
+    # architecture of the tool that made it (--compiled <arch>=<path>), and the
+    # kernel uses only its own. A tree's own modules use its own architecture's
+    # tool; a package with `aot = "all"` (wasmos_rules.pack) also uses the
+    # others, and only then are they built.
+    codegen = [s for s in WARP_SOURCES if s not in HOST_OS_SOURCES]
     tools = {}
-    for arch, target in JIT_TARGETS.items():
+    for name, spec in ARCHES.items():
+        flags = [*common, spec.warp_jit_target]
         objs = host.compile(
-            [warp / s for s in WARP_SOURCES] + b.srcs(*TOOL_SOURCES),
-            cxxflags=[*flags, target],
-            subdir=f"obj/warp_aot/{arch}",
+            [warp / s for s in codegen],
+            cxxflags=flags + neutral,
+            subdir=f"obj/warp_aot/{name}",
         )
-        tool = f"warp_aot-{arch}"
+        objs += host.compile(
+            [warp / s for s in sorted(HOST_OS_SOURCES)] + b.srcs(*TOOL_SOURCES),
+            cxxflags=flags,
+            subdir=f"obj/warp_aot/{name}",
+        )
+        tool = f"warp_aot-{name}"
         b.command(
             [tool],
             [b.tools["clangxx"], *objs, "-o", tool],
             inputs=objs,
             description=f"LINK[host] {tool}",
         )
-        tools[arch] = tool
+        tools[name] = tool
     b.exports["warp_aot"] = {"tree": tree_arch, "tools": tools}
     # The WARP host test (tests/unit) links the same runtime and EXECUTES what it
-    # compiles, so its target is the host's architecture, not the tree's.
-    host_target = JIT_TARGETS.get(_host_arch(), JIT_TARGETS["x86_64"])
+    # compiles, so it is built for the host's own architecture and keeps the
+    # host's OS macros: its code must follow the host's calling convention.
+    host_arch = _host_arch()
+    host_target = ARCHES[host_arch].warp_jit_target if host_arch in ARCHES else ""
     b.exports["warp_host"] = {
         "sources": [warp / s for s in WARP_SOURCES]
         + b.srcs("host_mem_utils.cpp", "host_shim.cpp"),
-        "flags": [*flags, host_target],
+        "flags": [*common, host_target] if host_target else common,
     }
     b.alias("warp_aot_tool", tools[tree_arch])

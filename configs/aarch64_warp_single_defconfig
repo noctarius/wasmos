@@ -1,4 +1,4 @@
-# wasmos: aarch64 (QEMU virt), WARP JIT (ring 3), single CPU
+# wasmos: aarch64 (QEMU virt), WARP (ring 3, AOT and JIT), single CPU
 CONFIG_WASMOS_ARCH_AARCH64=y
 # CONFIG_WASMOS_ARCH_X86_64 is not set
 CONFIG_AS_ENABLE=y

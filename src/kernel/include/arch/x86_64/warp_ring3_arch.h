@@ -17,14 +17,22 @@
  * int 0x80 (2), ret (1). */
 #define WARP_R3_HC_STUB_BYTES 8u
 
+/* Host-call arguments in registers, and the offset from the trapping user sp
+ * of the first one on the stack: past the return address the call into the
+ * stub pushed. */
+#define WARP_R3_HC_REG_ARGS 6u
+#define WARP_R3_HC_STACK_ARGS_AT 8u
+
 /* Host-call argument `index` of the call that trapped with `frame`: the first
- * six from the registers int 0x80 preserved, the rest from the caller's stack,
- * past the return address its call into the stub pushed. The stack is read
- * through the guest's user mapping, so the guest's root must be current. */
+ * six from the registers int 0x80 preserved, the rest from the caller's stack.
+ * The stack is read through the guest's user mapping, so the guest's root must
+ * be current, and the caller must have checked the stack pointer with
+ * arch_warp_r3_hostcall_stack_ok. */
 static inline uint64_t arch_warp_r3_hostcall_arg(const syscall_frame_t* frame, unsigned index) {
-    if (index < 6u) {
+    if (index < WARP_R3_HC_REG_ARGS) {
         return arch_syscall_arg(frame, index);
     }
     uint64_t sp = arch_syscall_user_sp(frame);
-    return *(const uint64_t*)(uintptr_t)(sp + 8u + (uint64_t)(index - 6u) * 8u);
+    return *(const uint64_t*)(uintptr_t)(sp + WARP_R3_HC_STACK_ARGS_AT +
+                                         (uint64_t)(index - WARP_R3_HC_REG_ARGS) * 8u);
 }

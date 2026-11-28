@@ -63,6 +63,13 @@ extern "C" uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
     return kPhysBase + (g_next_phys.fetch_add(pages * kPage) % kPhysWindow);
 }
 
+/* The WARP allocator asks for a floor AND the direct-map window as a ceiling;
+ * the frames handed out here all lie inside both. */
+extern "C" uint64_t pfa_alloc_pages_between(uint64_t pages, uint64_t min_addr, uint64_t max_addr) {
+    (void)max_addr;
+    return pfa_alloc_pages_above(pages, min_addr);
+}
+
 extern "C" void pfa_free_pages(uint64_t, uint64_t) {
     g_frees.fetch_add(1);
 }

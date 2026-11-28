@@ -337,6 +337,19 @@ def build(b):
         tc = b.toolchain("kernel", overrides=sets).tc
         for src in b.srcs(*spec["sources"]):
             b.index(src, [tc.cc, *tc.cflags, *core_inc])
+        # The architecture's WARP glue, as that architecture's WARP tree
+        # compiles it.
+        warp_sets = {
+            **sets,
+            "WASMOS_WASM_RUNTIME_WARP": True,
+            "WASMOS_WASM_RUNTIME_WASM3": False,
+        }
+        tc = b.toolchain("kernel-warp", overrides=warp_sets).tc
+        for src in b.srcs(*spec.get("warp", [])):
+            cxx = src.suffix == ".cpp"
+            b.index(
+                src, [tc.cxx if cxx else tc.cc, *(tc.cxxflags if cxx else tc.cflags)]
+            )
 
     # Embedded blobs: guest modules registered by other manifests first, then
     # the native ring-3 probes.

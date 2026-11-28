@@ -5,8 +5,9 @@
  * the VA layout in warp_ring3.h, the syscall numbers and the dispatch -- is
  * neutral.
  *
- * Each architecture header defines WARP_R3_HC_STUB_BYTES and the inline
- * arch_warp_r3_hostcall_arg; the functions declared below are implemented in
+ * Each architecture header defines WARP_R3_HC_STUB_BYTES, WARP_R3_HC_REG_ARGS,
+ * WARP_R3_HC_STACK_ARGS_AT and the inline arch_warp_r3_hostcall_arg; the
+ * functions declared below are implemented in
  * src/kernel/arch/<arch>/warp_ring3_<arch>.c. This header is the single
  * selection point. */
 #pragma once
@@ -14,12 +15,34 @@
 #include <stdint.h>
 
 #include "arch/arch_context.h"
+#include "warp_ring3.h"
 
 #if defined(WASMOS_ARCH_AARCH64)
 #include "arch/aarch64/warp_ring3_arch.h"
 #else
 #include "arch/x86_64/warp_ring3_arch.h"
 #endif
+
+#ifdef __cplusplus
+static_assert(WARP_HC_MAX * WARP_R3_HC_STUB_BYTES <= 4096u,
+              "the host-call stubs must fit the one WARP_R3_HC_TRAMPOLINE page");
+#else
+_Static_assert(WARP_HC_MAX* WARP_R3_HC_STUB_BYTES <= 4096u,
+               "the host-call stubs must fit the one WARP_R3_HC_TRAMPOLINE page");
+#endif
+
+/* Whether every stack slot a host call of `nargs` arguments reads lies inside
+ * the ring-3 stack, [WARP_R3_STACK_BASE, WARP_R3_STACK_TOP). The stack pointer
+ * is the guest's to set, so it is checked before any argument is read through
+ * it; a call that needs no stack argument needs no check. */
+static inline int arch_warp_r3_hostcall_stack_ok(const syscall_frame_t* frame, unsigned nargs) {
+    if (nargs <= WARP_R3_HC_REG_ARGS) {
+        return 1;
+    }
+    uint64_t span = WARP_R3_HC_STACK_ARGS_AT + (uint64_t)(nargs - WARP_R3_HC_REG_ARGS) * 8u;
+    uint64_t sp = arch_syscall_user_sp(frame);
+    return sp >= WARP_R3_STACK_BASE && sp <= WARP_R3_STACK_TOP - span;
+}
 
 #ifdef __cplusplus
 extern "C" {

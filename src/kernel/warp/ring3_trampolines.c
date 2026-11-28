@@ -59,7 +59,8 @@ int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     }
 
     /* --- HC trampoline page --- */
-    uint64_t hc_phys = pfa_alloc_pages_above(1, WARP_JIT_PHYS_MIN);
+    uint64_t hc_phys =
+        pfa_alloc_pages_between(1, WARP_JIT_PHYS_MIN, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (!hc_phys) {
         klog_write("[warp-r3] failed to alloc HC trampoline page\n");
         paging_destroy_address_space(root);
@@ -85,7 +86,8 @@ int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     }
 
     /* --- Return trampoline page --- */
-    uint64_t ret_phys = pfa_alloc_pages_above(1, WARP_JIT_PHYS_MIN);
+    uint64_t ret_phys =
+        pfa_alloc_pages_between(1, WARP_JIT_PHYS_MIN, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (!ret_phys) {
         klog_write("[warp-r3] failed to alloc return trampoline page\n");
         pfa_free_pages(hc_phys, 1);
@@ -111,7 +113,8 @@ int warp_r3_setup(uint64_t* out_user_root, uint64_t* out_stack_phys) {
     }
 
     /* --- Ring-3 user stack --- */
-    uint64_t stack_phys = pfa_alloc_pages_above(WARP_R3_STACK_PAGES, WARP_JIT_PHYS_MIN);
+    uint64_t stack_phys = pfa_alloc_pages_between(
+        WARP_R3_STACK_PAGES, WARP_JIT_PHYS_MIN, KERNEL_HIGHER_HALF_WINDOW_BYTES);
     if (!stack_phys) {
         klog_write("[warp-r3] failed to alloc ring-3 stack\n");
         pfa_free_pages(hc_phys, 1);

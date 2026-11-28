@@ -344,6 +344,7 @@ Argument validation that a guest CAN act on stays on the transport axis (WASMOS_
 | `WASMOS_ERR_KERNEL_NO_CONTEXT_DUMPED` | -0x0013000A | an all-contexts page-table dump resolved no process context, so it emitted no mappings and no attribution |
 | `WASMOS_ERR_KERNEL_NO_SUBSCRIBER_SLOT` | -0x0013000B | every kernel-log subscriber slot is held by another process |
 | `WASMOS_ERR_KERNEL_PHYS_NOT_FIRMWARE` | -0x0013000C | a physical range does not lie inside firmware ACPI table memory (it is system RAM, device memory, or nothing), so phys_map will not map it |
+| `WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL` | -0x0013000D | a ring-3 host-call trap carried an ordinal that names no host call |
 
 ### `block` (domain 20) — Block-style device access -- the per-process bounce buffer today, and the block backends that share its shape. Distinct from dma: a DMA mapping describes a device's view of memory, while these describe a block transfer's staging buffer and the slice being moved through it.
 

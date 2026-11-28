@@ -2444,10 +2444,11 @@ and the reason it prints names what is missing. Read
   kernel (`keyring_register_key`, `keyring.register`), which then verifies a
   package signed by one to the publisher trust level. The build's app key signs
   the `examples/` apps that ask only for app kinds (`tests/test_keyring.py`).
-- [ ] [FEATURE][P1] RSA-PSS package signatures (algorithm 2 of the signature
-  record): the packer signs with a host build of mbedTLS, and the process
-  manager asks the keyring to verify one asynchronously (deferred reply) before
-  admitting the spawn; until then such a package is invalid.
+- [x] [FEATURE][P1] RSA-PSS package signatures (algorithm 2 of the signature
+  record): the packer signs with a host mbedTLS subset (`--sign-rsa`), the
+  keyring registers RSA keys of 2048 to 4096 bits, and the kernel verifies with
+  its own mbedTLS subset (`test_wasmos_app_rsa`, `tests/test_keyring.py`,
+  `tests/test_signed_packages.py`).
 - [ ] [FEATURE][P1] "Start anyway" for a signed package that fails
   verification, as macOS and Windows offer: a `trust` utility (`trust allow
   <app.wap>` records the package's SHA-512 in an allowlist next to the keys;

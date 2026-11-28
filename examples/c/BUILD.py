@@ -167,6 +167,46 @@ def build(b):
     )
     install(b, "apps/priv_publisher.wap", publisher)
 
+    # Two RSA keys, generated once per build directory: the trusted one's public
+    # half is installed in the keyring directory, the other's nowhere. A package
+    # signed with each (RSASSA-PSS, SHA-512) starts as a publisher's and is
+    # refused, respectively (tests/test_signed_packages.py). Test keys, not
+    # secrets: a build that ships the examples trusts this one.
+    packer = b.exports["packer"]
+    for key, bits in (("rsa-test", 3072), ("rsa-untrusted", 2048)):
+        b.command(
+            [f"signing/{key}.key.pem"],
+            [f"./{packer}", "--genkey-rsa", str(bits), f"signing/{key}.key.pem"],
+            implicit=[packer],
+            description=f"KEY signing/{key}.key.pem",
+        )
+    b.command(
+        ["signing/rsa-test.pem"],
+        [
+            f"./{packer}",
+            "--rsa-pubkey-pem",
+            "signing/rsa-test.key.pem",
+            "signing/rsa-test.pem",
+        ],
+        inputs=["signing/rsa-test.key.pem"],
+        implicit=[packer],
+        description="KEY signing/rsa-test.pem",
+    )
+    install(b, "system/keys/rsa-test.pem", b.out / "signing/rsa-test.pem")
+    for name, key in (
+        ("priv_rsa", "rsa-test"),
+        ("priv_rsa_untrusted", "rsa-untrusted"),
+    ):
+        wap = pack(
+            b,
+            name,
+            probe_wasm,
+            b.src("priv_probe/linker.metadata"),
+            aot=False,
+            sign=b.out / f"signing/{key}.key.pem",
+        )
+        install(b, f"apps/{name}.wap", wap)
+
     for name in SIMPLE:
         wap = guest(
             b,

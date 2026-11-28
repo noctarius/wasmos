@@ -3,8 +3,9 @@
  * The keys live as PEM "PUBLIC KEY" files in KEYRING_DIR: the build installs
  * the system key (system.pem) and its app key (apps.pem) there, and a publisher's
  * key is trusted by placing its PEM file beside them. At start the service lists
- * the directory, reads every *.pem file, and registers each Ed25519 key with the
- * kernel (keyring_register_key, which needs keyring.register): a package signed
+ * the directory, reads every *.pem file, and registers each Ed25519 or RSA key
+ * with the kernel (keyring_register_key, which needs keyring.register; the
+ * kernel accepts RSA moduli of 2048 to 4096 bits): a package signed
  * with one then starts as a publisher's (docs/architecture/10, "Signed
  * Packages"). Only after that does it register its service name and report
  * ready, so `wait-svc keyring` in sysinit means the keys are in force.
@@ -15,11 +16,7 @@
  * that carry the request's id and ends it with an FS_IPC_RESP, and a future
  * settles on the first message with its id. So READDIR is sent as a plain
  * message under KEYRING_LIST_REQ_ID, outside the loop's request ids, and the
- * frames and the final reply reach type handlers that collect them.
- *
- * TODO: RSA keys are recognised but not used; the kernel verifies Ed25519 only,
- * and RSA-PSS signatures are to be verified here, with mbedTLS
- * (docs/TASKS.md). */
+ * frames and the final reply reach type handlers that collect them. */
 #include <stdint.h>
 
 #include "fcntl.h"
@@ -131,23 +128,22 @@ static void keyring_take_key(keyring_t* kr) {
         return;
     }
     int kind = keyring_der_kind(kr->der, (uint32_t)der_len);
-    if (kind != KEYRING_KEY_ED25519) {
-        printf("[keyring] skipped, %s keys are not verified yet: %s\n",
-               kind == KEYRING_KEY_RSA ? "RSA" : "unknown",
-               kr->name);
+    if (kind == KEYRING_KEY_UNKNOWN) {
+        printf("[keyring] skipped, neither an Ed25519 nor an RSA key: %s\n", kr->name);
         return;
     }
+    const char* alg = kind == KEYRING_KEY_RSA ? "RSA" : "Ed25519";
     uint8_t id[KEYRING_KEY_ID_LEN];
     char hex[2u * KEYRING_KEY_ID_LEN + 1u];
     keyring_key_id(kr->der, (uint32_t)der_len, id);
     keyring_hex(id, KEYRING_KEY_ID_LEN, hex);
     int32_t rc = wasmos_keyring_register_key((int32_t)(uintptr_t)kr->der, der_len);
     if (rc != 0) {
-        printf("[keyring] the kernel refused Ed25519 key %s (%d): %s\n", hex, (int)rc, kr->name);
+        printf("[keyring] the kernel refused %s key %s (%d): %s\n", alg, hex, (int)rc, kr->name);
         return;
     }
     kr->trusted++;
-    printf("[keyring] trusted Ed25519 key %s: %s\n", hex, kr->name);
+    printf("[keyring] trusted %s key %s: %s\n", alg, hex, kr->name);
 }
 
 /* Stage `len` bytes for `endpoint` to read and write; the buffer id, or -1. */

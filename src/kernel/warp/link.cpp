@@ -1048,7 +1048,7 @@ static uint32_t warp_keyring_register_key(uint32_t der, uint32_t len, void* ctx_
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0)
         return (uint32_t)WASMOS_ERR_KERNEL_NO_CALLER;
-    if ((int32_t)len <= 0 || len > 64u)
+    if ((int32_t)len <= 0 || len > WASMOS_APP_MAX_KEY_DER)
         return (uint32_t)WASMOS_ERR_KERNEL_KEY_UNSUPPORTED;
     const uint8_t* p = warp_mem(warp_call_ctx(ctx_), der, len);
     if (!p)

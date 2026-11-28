@@ -272,20 +272,26 @@ hold. Two rules keep a process from acquiring one through an image instead
    Only the system key is compiled into the kernel. Every other trusted key
    reaches it through the **keyring** service (`src/services/keyring`): at boot
    it lists `/boot/system/keys/`, reads each PEM "PUBLIC KEY" file and
-   registers every Ed25519 key with the `keyring_register_key` host call, which
+   registers every Ed25519 and RSA key with the `keyring_register_key` host
+   call, which
    needs the `keyring.register` capability (a critical kind only the keyring's
    manifest declares). The kernel derives each key's id itself
-   (`wasmos_app_trust_register`); registering the system key changes nothing.
+   (`wasmos_app_trust_register`), accepts an RSA key only with a modulus of
+   2048 to 4096 bits (`WASMOS_ERR_KERNEL_KEY_UNSUPPORTED` otherwise), and checks
+   a signature record only with the algorithm its key is for; registering the
+   system key changes nothing. The kernel verifies RSA-PSS itself, with an
+   mbedTLS subset, so admission stays one synchronous check inside the spawn
+   and no service sits on the spawn path.
    Only then does the keyring register its service name, and sysinit waits for
    it (`wait-svc keyring`) before starting anything a publisher signed. The
-   build installs its system key (`system.pem`) and its app key (`apps.pem`)
-   there, and signs with the app key every `examples/` package that asks for
+   build installs its system key (`system.pem`), its app key (`apps.pem`) and
+   an RSA test key (`rsa-test.pem`, generated once per build directory, whose
+   packages are test fixtures) there, and signs with the app key every `examples/` package that asks for
    app kinds only and that the initfs image does not carry -- an initfs package
    starts before the keyring exists (`_signing_seed` in
    `scripts/buildgen/wasmos_rules.py`). A publisher's key is trusted by placing
-   its PEM file in the directory. RSA keys are recognised but not used yet;
-   RSA-PSS signatures (verified by the keyring) and the per-package "start
-   anyway" allowlist are planned (`docs/TASKS.md`).
+   its PEM file in the directory. The per-package "start anyway" allowlist is
+   planned (`docs/TASKS.md`).
 2. **A kind that acts on requests follows the requester.** `system.control`,
    `subsystem.register`, `svc.class`, `console.owner`, `spawn.grant`,
    `svc.control`, `pci.config`, `rtc.efi`, `inventory.device` and

@@ -1,11 +1,11 @@
 """The keyring registers the trusted package-signing keys at boot.
 
 The keyring service (src/services/keyring) lists /boot/system/keys, reads each
-PEM file and registers its Ed25519 key with the kernel; only then does it
+PEM file and registers its Ed25519 or RSA key with the kernel; only then does it
 register its name, which sysinit waits for before starting anything signed with
-a publisher's key. The build installs its system key (system.pem) and its app
-key (apps.pem) there, and signs the examples/ apps that ask only for app kinds
-with the app key.
+a publisher's key. The build installs its system key (system.pem), its app key
+(apps.pem) and an RSA test key (rsa-test.pem) there, and signs the examples/ apps
+that ask only for app kinds with the app key.
 
 Regression: 2026-11-28-keyring -- the kernel trusted no key but the system key
 compiled into it, so a package signed with any other key, the build's own app
@@ -26,7 +26,7 @@ if SCRIPTS not in sys.path:
 
 from qemu_test_framework import QemuSession, default_config
 
-TRUSTED = re.compile(r"\[keyring\] trusted Ed25519 key ([0-9a-f]{32}): (\S+)")
+TRUSTED = re.compile(r"\[keyring\] trusted (Ed25519|RSA) key ([0-9a-f]{32}): (\S+)")
 HELLO_OK = b"Hello from C"
 
 
@@ -50,7 +50,7 @@ class KeyringTest(unittest.TestCase):
 
     def test_the_build_keys_are_registered_at_boot(self):
         log = self._log()
-        files = {name: key_id for key_id, name in TRUSTED.findall(log)}
+        files = {name: (alg, key_id) for alg, key_id, name in TRUSTED.findall(log)}
         self.assertIn(
             "apps.pem", files, f"the app key was not registered\n{log[-3000:]}"
         )
@@ -58,7 +58,19 @@ class KeyringTest(unittest.TestCase):
             "system.pem", files, f"the system key was not read\n{log[-3000:]}"
         )
         self.assertNotEqual(files["apps.pem"], files["system.pem"])
-        self.assertIn("[keyring] ready, 2 key(s) registered", log)
+        self.assertEqual(files["apps.pem"][0], "Ed25519")
+
+    def test_an_rsa_key_is_registered_at_boot(self):
+        # Regression: 2026-11-28-rsa-keys-skipped -- the keyring recognised an
+        # RSA key and skipped it, so a package signed with one was refused.
+        log = self._log()
+        files = {name: alg for alg, _key_id, name in TRUSTED.findall(log)}
+        self.assertEqual(
+            files.get("rsa-test.pem"),
+            "RSA",
+            f"the RSA test key was not registered\n{log[-3000:]}",
+        )
+        self.assertIn("[keyring] ready, 3 key(s) registered", log)
 
     def test_an_app_signed_with_the_app_key_runs(self):
         # hello_c asks only for ipc.basic, so the build signs it with the app

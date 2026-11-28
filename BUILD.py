@@ -17,12 +17,48 @@ def build(b):
         "sources": [mono / "monocypher.c", mono / "optional/monocypher-ed25519.c"],
         "include": [f"-I{mono}", f"-I{mono / 'optional'}"],
     }
+    # mbedTLS (libs/mbedtls, a subtree), the subset in
+    # scripts/packer_mbedtls_config.h: RSA-PSS package signing and RSA key files.
+    mbed = b.root / "libs/mbedtls"
+    packer_mbedtls = [
+        mbed / "library" / f"{name}.c"
+        for name in (
+            "asn1parse",
+            "asn1write",
+            "base64",
+            "bignum",
+            "bignum_core",
+            "constant_time",
+            "md",
+            "oid",
+            "pem",
+            "pk",
+            "pk_wrap",
+            "pkparse",
+            "pkwrite",
+            "platform",
+            "platform_util",
+            "rsa",
+            "rsa_alt_helpers",
+            "sha512",
+        )
+    ]
+    packer_mbedtls_flags = [
+        f"-I{mbed / 'include'}",
+        f"-I{b.root / 'scripts'}",
+        '-DMBEDTLS_CONFIG_FILE="packer_mbedtls_config.h"',
+    ]
     packer = host.link(
         "make_wasmos_app",
         host.compile(
-            [b.src("scripts/make_wasmos_app.c"), *b.exports["monocypher"]["sources"]],
-            flags=b.exports["monocypher"]["include"],
-        ),
+            [
+                b.src("scripts/make_wasmos_app.c"),
+                b.src("scripts/make_wasmos_app_rsa.c"),
+                *b.exports["monocypher"]["sources"],
+            ],
+            flags=b.exports["monocypher"]["include"] + packer_mbedtls_flags,
+        )
+        + host.compile(packer_mbedtls, flags=packer_mbedtls_flags, subdir="obj/packer_mbedtls"),
     )
     b.exports["packer"] = packer
     b.alias("make_wasmos_app", packer)

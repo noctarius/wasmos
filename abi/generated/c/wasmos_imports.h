@@ -1000,12 +1000,13 @@ extern int32_t wasmos_rtc_efi_set(int32_t buf, int32_t len) WASMOS_WASM_IMPORT("
 /* Register a trusted package-signing key with the kernel: `der` holds `len`
  * bytes of the key's DER SubjectPublicKeyInfo. A package whose signature
  * the key verifies then starts as a publisher's (docs/architecture/10,
- * "Signed Packages"); the kernel derives the key's id itself and verifies
- * Ed25519 only. Requires the keyring.register capability
+ * "Signed Packages"); the kernel derives the key's id itself. Ed25519 keys
+ * and RSA keys of 2048 to 4096 bits (RSA-PSS-SHA512 signatures) are
+ * accepted. Requires the keyring.register capability
  * (WASMOS_ERR_KERNEL_NOT_AUTHORIZED). Returns 0, also for a key already
  * registered and for the system key, which stays the only key that grants
- * privilege; WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for anything but an Ed25519
- * key; WASMOS_ERR_KERNEL_KEYRING_FULL when the table is full. A buffer
+ * privilege; WASMOS_ERR_KERNEL_KEY_UNSUPPORTED for any other key or one
+ * over 600 bytes; WASMOS_ERR_KERNEL_KEYRING_FULL when the table is full. A buffer
  * outside linear memory traps the module under wasm3 and answers
  * WASMOS_ERR_KERNEL_BAD_POINTER under WARP.
  */

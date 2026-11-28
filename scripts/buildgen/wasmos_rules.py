@@ -122,8 +122,9 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     for a package this kernel has no AOT binary for.
     `aot=False` forces the plain path (native images are never AOT-compiled).
     The package is signed with one of the build's keys (_signing_seed) unless
-    `sign=False`, or with the seed file `sign` names when it is a path: both only
-    a test of the signature policy wants."""
+    `sign=False`, or with the key `sign` names when it is a path -- an Ed25519
+    seed file, or an RSA private key when it ends in ".pem": both only a test of
+    the signature policy wants."""
     sdk = b.exports["sdk"]
     manifest = Path(manifest)
     b.regen_on(manifest)  # `aot = true` is read at generation time
@@ -156,7 +157,7 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     # the build's key (docs/architecture/10-capability-and-policy.md).
     if sign:
         seed = sign if isinstance(sign, Path) else _signing_seed(b, name, manifest)
-        argv += ["--sign", seed]
+        argv += ["--sign-rsa" if seed.suffix == ".pem" else "--sign", seed]
         implicit.append(seed)
     argv += ["--out", wap]
     b.command([wap], argv, inputs=[image], implicit=implicit, description=f"PACK {wap}")

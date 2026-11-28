@@ -205,6 +205,26 @@ WARP_LIB = [
 WASM3_GLUE_KERNEL = ["wasm_driver.c"]
 WASM3_GLUE = ["wasm3/link.c", "wasm3/link_dma.c", "wasm3/link_ipc.c"]
 WASM3_SHIM = ["wasm3/shim.c"]
+# libs/mbedtls sources of the kernel's RSA-PSS verifier
+# (crypto/kernel_mbedtls_config.h enables the rest of each away).
+KERNEL_MBEDTLS = [
+    "asn1parse.c",
+    "asn1write.c",
+    "bignum.c",
+    "bignum_core.c",
+    "constant_time.c",
+    "md.c",
+    "oid.c",
+    "pk.c",
+    "pk_wrap.c",
+    "pkparse.c",
+    "platform.c",
+    "platform_util.c",
+    "rsa.c",
+    "rsa_alt_helpers.c",
+    "sha512.c",
+]
+
 WASM3_LIB = [
     "m3_code.c",
     "m3_bind.c",
@@ -271,8 +291,18 @@ def build(b):
         return
 
     core = [*target["head"], *CORE, *target["sources"]]
+    # The mbedTLS subset that verifies RSA-PSS package signatures
+    # (crypto/kernel_mbedtls_config.h).
+    mbedtls = b.root / "libs/mbedtls"
+    mbedtls_flags = [
+        f"-I{mbedtls / 'include'}",
+        f"-I{b.src('crypto')}",
+        '-DMBEDTLS_CONFIG_FILE="kernel_mbedtls_config.h"',
+    ]
     if warp:
-        objs = kernel.compile(b.srcs(*core), flags=b.exports["monocypher"]["include"])
+        objs = kernel.compile(
+            b.srcs(*core), flags=b.exports["monocypher"]["include"] + mbedtls_flags
+        )
         kwarp = b.toolchain("kernel-warp")
         objs += kernel.compile(b.srcs(*target.get("warp_asm", [])))
         objs += kwarp.compile(b.srcs(*WARP_GLUE, *target.get("warp", [])))
@@ -283,7 +313,8 @@ def build(b):
         wasm3_inc = [f"-I{b.root / 'libs/wasm3/source'}"]
         wasm3_lib = ["-Wno-unused-variable"]
         objs = kernel.compile(
-            b.srcs(*core), flags=wasm3_inc + b.exports["monocypher"]["include"]
+            b.srcs(*core),
+            flags=wasm3_inc + b.exports["monocypher"]["include"] + mbedtls_flags,
         )
         objs += kernel.compile(b.srcs(*WASM3_GLUE_KERNEL), flags=wasm3_inc)
         objs += kernel.compile(b.srcs(*WASM3_GLUE), flags=wasm3_inc + wasm3_lib)
@@ -297,6 +328,16 @@ def build(b):
     # package signatures with them (wasmos_app_signature_valid).
     mono = b.exports["monocypher"]
     objs += kernel.compile(mono["sources"], flags=mono["include"])
+    b.exports["kernel.mbedtls"] = {
+        "sources": [mbedtls / "library" / s for s in KERNEL_MBEDTLS],
+        "flags": mbedtls_flags,
+    }
+    objs += kernel.compile(
+        [mbedtls / "library" / s for s in KERNEL_MBEDTLS],
+        flags=mbedtls_flags + ["-Wno-unused-parameter", "-Wno-sign-compare"],
+        subdir="obj/kernel_mbedtls",
+    )
+    objs += kernel.compile(b.srcs("crypto/kernel_mbedtls.c"), flags=mbedtls_flags)
     objs += kernel.compile(
         [b.exports["signing.pubkey_c"]],
         obj_names={b.exports["signing.pubkey_c"]: "wasmos_signing_pubkey.o"},

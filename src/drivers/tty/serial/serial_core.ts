@@ -361,6 +361,12 @@ function serialTask(): i32 {
      * fails the coroutine rather than returning. */
     let registered: i32 = awaitReply(registration);
 
+    /* Keys typed before the driver started wait in the UART. Take them before
+     * init() as well as after it: on a UART nobody set up before, init() turns
+     * the FIFO on, and turning it on clears it (a 16550 clears both FIFOs when
+     * FCR bit 0 changes). Reading the line status and receive registers needs no
+     * setup. */
+    drainUartToRing();
     g_uart.init();
 
     let irqRouted: i32 = irq_route_ipc(g_uart.irq, g_endpoint);
@@ -385,6 +391,11 @@ function serialTask(): i32 {
         );
         g_uart.disableInterrupts();
     }
+    /* Bytes typed before the driver started are already in the FIFO, and the
+     * interrupt that announced them may have been cleared by init() (the PL011
+     * clears every pending interrupt) or raised before the route existed; the
+     * next interrupt would come only with the next keystroke. Take them now. */
+    drainUartToRing();
     /* RX forwarding runs from the pump, not from this loop: draining the FIFO
      * has a deadline, delivering to the vt does not. */
     g_loop.idle = new RxPump();

@@ -86,9 +86,10 @@ int32_t serial_owner_write(uint32_t context_id, const char* s, uint32_t len);
  * discard what the vt has yet to write to COM1. */
 int console_ring_drained(void);
 
-/* Read one console byte, preferring a registered remote serial driver and falling back to
- * a direct COM1 poll.  Returns 1 with the byte in *out_char, 0 when nothing is pending, or
- * -1 on a NULL argument.  Non-blocking. */
+/* Read one console byte through a registered remote serial driver; without one, or when
+ * the exchange fails, nothing is pending (COM1 is never read here: serial input is the
+ * vt's).  Returns 1 with the byte in *out_char, 0 when nothing is pending, or -1 on a
+ * NULL argument.  Non-blocking. */
 int serial_read_char(uint8_t* out_char);
 
 /* Replace the active serial backend; returns the previous driver.  A NULL argument

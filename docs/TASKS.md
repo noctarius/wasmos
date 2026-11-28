@@ -2432,9 +2432,9 @@ and the reason it prints names what is missing. Read
 - [x] [FEATURE][P2] WARP aarch64 backend in the kernel (ring-3 trampolines and
   `ERET` entry, `warp_jmp`, guest atomics, stack fence); every QEMU battery runs
   on `aarch64_warp_smp`.
-- [ ] [FEATURE][P2] Per-arch WARP AOT artifacts in packaging: packages carry
-  x86_64 AOT code only, so aarch64 WARP trees run with
-  `WASMOS_WARP_RUNTIME_LOAD_AOT` off and compile every module at load.
+- [x] [FEATURE][P2] Per-arch WARP AOT artifacts in packaging: `warp_aot`
+  compiles for the tree's architecture and aarch64 WARP trees load AOT
+  (`tests/test_warp_aot.py`).
 - [ ] [BUG][P2] A single-CPU WARP system never echoes the first CLI command
   after boot: on `aarch64_warp_single`, and on `x86_64_warp_smp` booted with
   one CPU (`WASMOS_QEMU_SMP_COUNT=1`), `test_hello_go` times out on its first

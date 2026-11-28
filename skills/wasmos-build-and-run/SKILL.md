@@ -74,8 +74,8 @@ All of it comes from `ARCHES` in `scripts/buildgen/toolchains.py`.
 `configs/aarch64_wasm3_single_defconfig` is the arm64 tree: one core, wasm3,
 gated by `run-qemu-test` and the QEMU batteries like an x86_64 tree (tests that
 need x86 hardware or topology skip with `requires_arch`).
-`configs/aarch64_warp_{single,smp}_defconfig` run WARP on aarch64, JIT only (the
-bundled AOT code is x86_64). Batteries run on the SMP tree: a single-CPU WARP
+`configs/aarch64_warp_{single,smp}_defconfig` run WARP on aarch64, AOT and JIT
+(`warp_aot` compiles for the tree's architecture). Batteries run on the SMP tree: a single-CPU WARP
 tree, on either architecture, does not echo the first CLI command after boot
 (`docs/TASKS.md`, "arm64 Port").
 `run-qemu-bringup-test` (boot to `[test] preempt ok`) is the gate for an

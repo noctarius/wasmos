@@ -5,7 +5,7 @@
 > concurrency, and TLB-shootdown work remain explicitly deferred.
 
 This document is the engineering reference for WARP JIT execution in ring 3.
-WARP runs on x86_64 and, JIT-only, on aarch64
+WARP runs on x86_64 and aarch64
 ([38-aarch64-platform.md](38-aarch64-platform.md)).
 It is a companion to
 `11-ring3-isolation-and-separation.md` (ring 3 kernel model) and should be

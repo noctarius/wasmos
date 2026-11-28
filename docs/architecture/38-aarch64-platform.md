@@ -24,7 +24,7 @@ runner. Bare-metal hardware is out of scope.
 |---|---|---|
 | Configuration | `configs/aarch64_{wasm3,warp}_{single,smp}_defconfig` | four defconfigs |
 | CPUs | single or SMP (PSCI `CPU_ON`) | single or SMP (INIT-SIPI-SIPI) |
-| WASM runtime | wasm3 or WARP (JIT only; the bundled AOT code is x86_64) | wasm3 or WARP |
+| WASM runtime | wasm3 or WARP (AOT and JIT) | wasm3 or WARP |
 | Loader | `BOOTAA64.EFI` | `BOOTX64.EFI` |
 | Interrupts | GICv3 + ITS (MSI/MSI-X as LPIs) | LAPIC/IOAPIC (or PIC) |
 | Timer | EL1 virtual timer | LAPIC timer (or PIT) |
@@ -233,9 +233,6 @@ whose reason names what is missing.
 - Stopping a CPU that spins with IRQs masked on a GIC with two security
   states: there Group 0 is the secure world's, and the stop would need a GICv3
   pseudo-NMI (priority masking through `ICC_PMR_EL1`).
-- WARP AOT artifacts for aarch64: packages carry x86_64 AOT code only, so
-  aarch64 WARP trees compile every module at load
-  (`WASMOS_WARP_RUNTIME_LOAD_AOT` off).
 - Containment of every EL0 exception: only an unresolved instruction or data
   abort terminates just the process; an undefined instruction, `BRK` or an
   alignment fault from EL0 panics the kernel (`aarch64_exception`,

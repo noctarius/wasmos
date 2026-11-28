@@ -1,7 +1,9 @@
 /* warp_aot.cpp - WASMOS ahead-of-time WARP compiler host tool.
  *
  * Reads a .wasm file, compiles it with the WARP single-pass JIT, and writes
- * the resulting native x86-64 binary blob to a .warpbin file.  The kernel can
+ * the resulting native binary blob to a .warpbin file. The code is for the
+ * target architecture the tool was built for (JIT_TARGET_*, set per tree by
+ * src/tools/warp_aot/BUILD.py), independent of the host's.  The kernel can
  * then load this blob via initFromCompiledBinary() instead of JIT-compiling
  * at boot time.
  *
@@ -107,8 +109,9 @@ struct NullLogger final : vb::ILogger {
  * stays clean.
  *
  * The output is raw WARP compiled-binary bytes with no container of its own; the
- * app packer appends it to a .wap. It is x86-64 code regardless of the host
- * architecture, which is why the WASM start function is deliberately not run.
+ * app packer appends it to a .wap. It is code for the tool's target
+ * architecture, not necessarily the host's, which is why the WASM start
+ * function is deliberately not run.
  * A failed write may leave a partial output file behind. */
 int main(int argc, char* argv[]) {
     if (argc < 3) {
@@ -154,8 +157,8 @@ int main(int argc, char* argv[]) {
     try {
         /* runStart=false: do not execute the WASM start function.
          * The tool only compiles WASM to native code; it does not run it.
-         * Running would fail on cross-compile hosts (e.g. arm64 host generating
-         * x86-64 code) and is not needed for AOT binary extraction. */
+         * Running would fail whenever the target is not the host's
+         * architecture and is not needed for AOT binary extraction. */
         mod.initFromBytecode(bc, aot_symbols(), /*runStart=*/false);
     } catch (std::exception& e) {
         fprintf(stderr, "warp_aot: WARP compilation failed: %s\n", e.what());

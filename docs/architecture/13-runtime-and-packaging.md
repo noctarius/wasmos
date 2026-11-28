@@ -361,7 +361,11 @@ used by the build system.
   `native()` in `scripts/buildgen/wasmos_rules.py`, which run
   `make_wasmos_app --manifest <linker.metadata> --in <image>` as a build edge
   to produce the `.wap` artifact; under WARP a module whose manifest says
-  `aot = true` is compiled by `warp_aot` first and bundled with its `.warpbin`
+  `aot = true` is compiled by `warp_aot` first and bundled with its `.warpbin`.
+  `warp_aot` is a host tool built with the code generator of the tree's target
+  architecture (`JIT_TARGET_*` in `src/tools/warp_aot/BUILD.py`); WARP records
+  no ISA in a compiled binary, so that choice is the only thing tying a
+  `.warpbin` to the kernel that runs it
 
 ---
 

@@ -81,7 +81,9 @@ void arch_warp_r3_write_return_page(uint8_t* page) {
 /* The return address is the top stack slot, as a call would leave it, so the
  * wrapper's ret pops call->return_va. The four argument registers are loaded
  * from memory operands so the compiler cannot allocate the iretq frame values
- * to them. */
+ * to them. Once the iretq frame is pushed, every register the guest does not
+ * receive -- rax, rbx, rbp, r8..r15 and xmm0..xmm15 -- is cleared, so no kernel
+ * value (a stack or heap address, a callee-saved value) reaches ring 3. */
 void arch_warp_r3_enter(const arch_warp_r3_call_t* call) {
     *(uint64_t*)(void*)(call->stack_top_kernel - 8) = call->return_va;
     uint64_t rsp = call->stack_top_va - 8u;
@@ -102,6 +104,33 @@ void arch_warp_r3_enter(const arch_warp_r3_call_t* call) {
                      "pushq %[rf]\n\t"
                      "pushq %[cs]\n\t"
                      "pushq %[rip_v]\n\t"
+                     "xorl %%eax, %%eax\n\t"
+                     "xorl %%ebx, %%ebx\n\t"
+                     "xorl %%ebp, %%ebp\n\t"
+                     "xorl %%r8d, %%r8d\n\t"
+                     "xorl %%r9d, %%r9d\n\t"
+                     "xorl %%r10d, %%r10d\n\t"
+                     "xorl %%r11d, %%r11d\n\t"
+                     "xorl %%r12d, %%r12d\n\t"
+                     "xorl %%r13d, %%r13d\n\t"
+                     "xorl %%r14d, %%r14d\n\t"
+                     "xorl %%r15d, %%r15d\n\t"
+                     "pxor %%xmm0, %%xmm0\n\t"
+                     "pxor %%xmm1, %%xmm1\n\t"
+                     "pxor %%xmm2, %%xmm2\n\t"
+                     "pxor %%xmm3, %%xmm3\n\t"
+                     "pxor %%xmm4, %%xmm4\n\t"
+                     "pxor %%xmm5, %%xmm5\n\t"
+                     "pxor %%xmm6, %%xmm6\n\t"
+                     "pxor %%xmm7, %%xmm7\n\t"
+                     "pxor %%xmm8, %%xmm8\n\t"
+                     "pxor %%xmm9, %%xmm9\n\t"
+                     "pxor %%xmm10, %%xmm10\n\t"
+                     "pxor %%xmm11, %%xmm11\n\t"
+                     "pxor %%xmm12, %%xmm12\n\t"
+                     "pxor %%xmm13, %%xmm13\n\t"
+                     "pxor %%xmm14, %%xmm14\n\t"
+                     "pxor %%xmm15, %%xmm15\n\t"
                      "iretq"
                      :
                      : [a0] "m"(a0),

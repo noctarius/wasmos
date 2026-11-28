@@ -239,13 +239,43 @@ hold. Two rules keep a process from acquiring one through an image instead
 (`capability_manifest_grant_check`, applied to every manifest capability but
 `ipc.basic` when the process manager starts a package):
 
-1. **The image must be signed with the build's key.** `/boot`, `/user` and
-   `/wfs` are writable, so a manifest alone proves nothing: any process could
-   write a `.wap` declaring `spawn.grant` and spawn it. Every package the
-   build packs ends in an Ed25519 signature
-   ([Runtime and Packaging](13-runtime-and-packaging.md), "Signature"), and the
-   kernel checks it against the public key it was built with. An unsigned or
-   altered package is granted no capability beyond `ipc.basic`.
+1. **What the signing key may grant.** `/boot`, `/user` and `/wfs` are
+   writable, so a manifest alone proves nothing: any process could write a
+   `.wap` declaring `spawn.grant` and spawn it. Every package the build packs
+   ends in a signature record naming its key
+   ([Runtime and Packaging](13-runtime-and-packaging.md), "Signature"), and
+   `wasmos_app_trust` decides the package's trust level:
+
+   | Signed by | Trust | Starts | Capabilities | AOT code |
+   |---|---|---|---|---|
+   | the build's system key, compiled into the kernel | system | yes | all its manifest declares | yes |
+   | a publisher's key (the build's app key, or a keyring key) | publisher | yes | `ipc.basic` and the app kinds | yes |
+   | nothing | unsigned | yes | `ipc.basic` | no |
+   | a key no trusted key matches, or an altered package | invalid | **refused** | -- | -- |
+
+   The app kinds are the ones an app may hold whoever published it:
+   `dma.buffer` (an app's own memory for a display surface or a device it
+   reaches through a driver). Every other kind is critical -- hardware
+   (`io.port`, `irq.route`, `mmio.map`, `pci.config`), control of the system
+   or of other processes (`system.control`, `spawn.grant`, `svc.control`), a
+   system role (`subsystem.register`, `svc.class`, `console.owner`), the
+   firmware clock and the inventories -- and only the system key grants it
+   (`capability_kind_for_apps` in `capability.c`; a refusal reads `only the
+   system key grants it, and the image is a publisher's`).
+
+   A signature that verifies against no trusted key means the package was
+   altered or comes from a publisher this system does not know, so the
+   process manager refuses the spawn before creating the process
+   (`wasmos_app_admit`, `WASMOS_ERR_PROC_SPAWN_UNTRUSTED`) and logs
+   `[wasmos-app] refused, signed but verified by no trusted key: <package>`.
+
+   Only the system key is compiled into the kernel. The keyring directory
+   `/boot/system/keys/` holds the trusted public keys as PEM
+   (`system.pem`, the build's app key `apps.pem`); TODO: until the keyring
+   service registers them with the kernel, a package signed with any key but
+   the system key is invalid, so the build signs every package with the system
+   key. RSA-PSS signatures, the keyring's own verification of them and the
+   per-package "start anyway" allowlist are planned with it (`docs/TASKS.md`).
 2. **A kind that acts on requests follows the requester.** `system.control`,
    `subsystem.register`, `svc.class`, `console.owner`, `spawn.grant`,
    `svc.control`, `pci.config`, `rtc.efi`, `inventory.device` and
@@ -270,10 +300,9 @@ A refusal fails the start and is logged:
 
 The signature also decides whether a package's WARP AOT code may run. AOT code
 executes as native code and skips the checks WARP's compiler emits for the
-bytecode, so it is trusted like a native image: only a package signed with the
-build's key has it used, whatever capabilities it asks for, and any other runs
-from its bytecode ([Runtime and Packaging](13-runtime-and-packaging.md), "AOT
-Binaries").
+bytecode, so it is trusted like a native image: only a system or publisher
+package has it used, and an unsigned one runs from its bytecode
+([Runtime and Packaging](13-runtime-and-packaging.md), "AOT Binaries").
 
 Consequences for who holds what: the shell (`cli`) holds `svc.control` so the
 console user can run `svc`; the vt, which spawns the shell for each console

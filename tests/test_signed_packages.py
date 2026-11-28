@@ -9,7 +9,8 @@ a deputy and steer it with arguments of its choosing.
 
 priv_probe declares svc.control and reports that it started. The build packs
 it signed (priv_probe.wap), unsigned (priv_unsigned.wap), and signed then
-altered by one byte (priv_tampered.wap). priv_deputy exits only ipc.basic and
+altered by one byte (priv_tampered.wap), which is refused outright: a
+signature no trusted key verifies stops the spawn. priv_deputy exits only ipc.basic and
 asks for priv_probe to be spawned; `priv_deputy exit` asks and exits without
 waiting for the answer. The shell holds svc.control, so it may start
 the signed probe; nothing else here may.
@@ -33,6 +34,7 @@ STARTED = b"[priv-probe] started"
 UNSIGNED = b"[pm] refused svc.control to priv-probe: the image is not signed"
 REQUESTER = b"[pm] refused svc.control to priv-probe: the requester holds neither"
 APP_START_FAILED = b"[pm] app start failed"
+INVALID = b"[wasmos-app] refused, signed but verified by no trusted key: priv-probe"
 
 
 class SignedPackagesTest(unittest.TestCase):
@@ -95,8 +97,20 @@ class SignedPackagesTest(unittest.TestCase):
     def test_an_unsigned_package_gets_no_privilege(self):
         self._run("priv_unsigned", UNSIGNED, refused=True)
 
-    def test_an_altered_package_gets_no_privilege(self):
-        self._run("priv_tampered", UNSIGNED, refused=True)
+    def test_an_altered_package_does_not_start(self):
+        # Regression: 2026-11-28-signed-invalid-starts -- an altered signed
+        # package started, merely unprivileged. The spawn is now refused before
+        # any child exists, so there is no failed start to wait for.
+        syslog_start = len(self.session.syslog_tail(1 << 20))
+        start = self.session.send_command("priv_tampered", timeout_s=20)
+        log = self._wait_for(start, syslog_start, INVALID)
+        tail = f"--- tail ---\n{self.session.tail()}\n"
+        self.assertTrue(INVALID in log, f"the altered package was not refused.\n{tail}")
+        self.assertTrue(
+            self.session.expect_from(start, b"wamos> ", timeout_s=20),
+            f"no prompt after the refused spawn.\n{tail}",
+        )
+        self.assertFalse(STARTED in self._log_since(start, syslog_start), tail)
 
     def test_a_requester_cannot_hand_out_what_it_does_not_hold(self):
         self._run("priv_deputy", REQUESTER, refused=True)

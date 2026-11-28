@@ -8,6 +8,8 @@ WASMOS_MAGIC = b"WASMOSAP"
 WASMOS_APP_VERSION = 12
 # ELF e_machine values that tag a package's WARP AOT binaries.
 AOT_MACHINES = {62: "x86_64", 183: "aarch64"}
+# Signature algorithms of the record that ends a signed package.
+SIG_ALGS = {1: "Ed25519", 2: "RSA-PSS-SHA512"}
 SUBSYSTEM_TAG_LEN = 8
 # Fixed-size record with no trailing name: wasmos_region_entry_t in
 # scripts/make_wasmos_app.c.
@@ -118,6 +120,17 @@ def parse_wasmos_app(data):
     # the file holds is refused, as the kernel's parser refuses it.
     if off + sum(size for _, size in aot) > len(data):
         raise ReadError("AOT binaries exceed file size")
+    off += sum(size for _, size in aot)
+    signature = None
+    if signature_size:
+        # The record that ends a signed package: u16 algorithm, u16 length, the
+        # 16-byte key id, then the signature (WASMOS_APP_SIG_* in wasmos_app.h).
+        alg, off = read_u16_le(data, off)
+        sig_len, off = read_u16_le(data, off)
+        key_id, off = read_bytes(data, off, 16)
+        if off + sig_len != len(data) or 20 + sig_len != signature_size:
+            raise ReadError("signature record does not end the package")
+        signature = (SIG_ALGS.get(alg, f"algorithm {alg}"), key_id.hex())
     return {
         "version": version,
         "flags": flags,
@@ -126,6 +139,7 @@ def parse_wasmos_app(data):
         "wasm_offset": wasm_off,
         "wasm_size": wasm_size,
         "signed": signature_size != 0,
+        "signature": signature,
         "aot": aot,
     }
 
@@ -422,7 +436,11 @@ def main():
             print(f"entry: {app_info['entry']}")
             print(f"flags: 0x{app_info['flags']:08X}")
             print(f"wasm_size: {app_info['wasm_size']}")
-            print(f"signed: {'yes' if app_info['signed'] else 'no'}")
+            if app_info["signature"]:
+                alg, key_id = app_info["signature"]
+                print(f"signed: {alg}, key {key_id}")
+            else:
+                print("signed: no")
             aot = ", ".join(f"{arch} ({size} bytes)" for arch, size in app_info["aot"])
             print(f"aot: {aot or 'none'}")
             print("")

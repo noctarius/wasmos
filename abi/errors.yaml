@@ -63,6 +63,7 @@ domains:
       - { name: CAPS_APPLY,       description: "the kernel refused the parsed capability profile for the new child, which was killed before it ran" }
       - { name: GRANT_NOT_AUTHORIZED, description: "the watched spawn carries hardware grants (a capability descriptor with any cap bit set) and the caller lacks the spawn.grant capability; no child was created" }
       - { name: NO_MODULE,        description: "the watched spawn names a boot module (SPAWN_WATCH_FLAG_MODULE) that this boot image does not carry; no child was created" }
+      - { name: UNTRUSTED,        description: "the package is signed, but no key this kernel trusts verifies the signature (altered, or signed by an unknown key); no child was created. An unsigned package is not refused" }
 
   proc_pm:
     id: 2

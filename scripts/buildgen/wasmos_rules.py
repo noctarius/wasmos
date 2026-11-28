@@ -75,8 +75,9 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     `aot="foreign"` bundles every architecture EXCEPT the tree's: a test fixture
     for a package this kernel has no AOT binary for.
     `aot=False` forces the plain path (native images are never AOT-compiled).
-    The package is signed with the build's key unless `sign=False`, which only
-    a test of the signature policy wants."""
+    The package is signed with the build's system key unless `sign=False`, or
+    with the seed file `sign` names when it is a path: both only a test of the
+    signature policy wants."""
     sdk = b.exports["sdk"]
     manifest = Path(manifest)
     b.regen_on(manifest)  # `aot = true` is read at generation time
@@ -108,7 +109,7 @@ def pack(b, name, image, manifest, aot=None, sign=True):
     # The kernel grants a privileged capability only to a package signed with
     # the build's key (docs/architecture/10-capability-and-policy.md).
     if sign:
-        seed = b.exports["signing.seed"]
+        seed = sign if isinstance(sign, Path) else b.exports["signing.seed"]
         argv += ["--sign", seed]
         implicit.append(seed)
     argv += ["--out", wap]

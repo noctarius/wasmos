@@ -249,6 +249,45 @@ static int test_the_image_policy_decides_each_kind(void) {
     return 0;
 }
 
+/* A package signed by a publisher's key (the build's app key, or one the keyring
+ * registered) is granted the app kinds only; the critical kinds -- hardware,
+ * system control, other processes, system roles -- stay with the system key,
+ * whatever the requester holds.
+ * Regression: 2026-11-28-publisher-grants -- any signature the kernel trusted
+ * granted every capability its manifest declared. */
+static int test_a_publisher_image_gets_the_app_kinds_only(void) {
+    const uint32_t all = ~0u;
+    if (capability_manifest_grant_check(CAP_DMA_BUFFER, CAPABILITY_IMAGE_PUBLISHER, all) !=
+        CAPABILITY_GRANT_OK) {
+        return __LINE__;
+    }
+    const capability_kind_t critical[] = {CAP_IO_PORT,
+                                          CAP_IRQ_ROUTE,
+                                          CAP_MMIO_MAP,
+                                          CAP_SYSTEM_CONTROL,
+                                          CAP_SUBSYSTEM_REGISTER,
+                                          CAP_SVC_CLASS_REGISTER,
+                                          CAP_CONSOLE_OWNER,
+                                          CAP_SPAWN_GRANT,
+                                          CAP_SVC_CONTROL,
+                                          CAP_PCI_CONFIG,
+                                          CAP_RTC_EFI,
+                                          CAP_INVENTORY_DEVICE,
+                                          CAP_INVENTORY_STORAGE};
+    for (uint32_t i = 0; i < sizeof(critical) / sizeof(critical[0]); ++i) {
+        if (capability_manifest_grant_check(critical[i], CAPABILITY_IMAGE_PUBLISHER, all) !=
+            CAPABILITY_GRANT_SYSTEM_ONLY) {
+            printf("  critical kind %u granted to a publisher image\n", (unsigned)critical[i]);
+            return __LINE__;
+        }
+        if (capability_manifest_grant_check(critical[i], CAPABILITY_IMAGE_SYSTEM, all) !=
+            CAPABILITY_GRANT_OK) {
+            return __LINE__;
+        }
+    }
+    return 0;
+}
+
 /* What a requester is taken to hold: its grants, every kind for the kernel's
  * context, nothing for a context never granted anything. */
 static int test_the_requester_mask_is_what_the_context_holds(void) {
@@ -270,6 +309,7 @@ static int test_the_requester_mask_is_what_the_context_holds(void) {
 int main(void) {
     static const wasmos_test_case_t cases[] = {
         WASMOS_TEST_CASE(test_the_image_policy_decides_each_kind),
+        WASMOS_TEST_CASE(test_a_publisher_image_gets_the_app_kinds_only),
         WASMOS_TEST_CASE(test_the_requester_mask_is_what_the_context_holds),
         WASMOS_TEST_CASE(test_a_released_context_holds_nothing),
         WASMOS_TEST_CASE(test_releasing_one_context_leaves_the_others),

@@ -18,6 +18,7 @@ UNTRUSTED = (
     "[warp-driver] AOT binary of a package not signed by a trusted key, compiling "
 )
 PROBE_OK = b"[test] aot-probe ok sum=5050"
+REFUSED = "[wasmos-app] refused, signed but verified by no trusted key: "
 
 
 @unittest.skipUnless(
@@ -121,6 +122,24 @@ class WarpAotLoadTest(unittest.TestCase):
             f"no fallback was reported\n--- kernel log ---\n{log[-4096:]}",
         )
         self.assertNotIn(AOT_USED + "aot-unsigned", log)
+
+    def test_a_package_signed_by_an_unknown_key_does_not_start(self) -> None:
+        """Regression: 2026-11-28-signed-invalid-starts -- a package carrying a
+        signature no trusted key verifies (altered, or signed with a key this
+        kernel was not given) still started, merely unprivileged. It is now
+        refused before the process is created."""
+        start = self.session.send_command("spawn /boot/apps/aotuntru", timeout_s=30)
+        self.assertTrue(
+            self.session.expect_from(start, b"wamos> ", timeout_s=30),
+            f"no prompt after the refused spawn\n--- tail ---\n{self.session.tail()}",
+        )
+        self.assertNotIn(PROBE_OK, bytes(self.session.buf[start:]))
+        log = self.session.syslog_tail(1 << 20)
+        self.assertIn(
+            REFUSED + "aot-untrusted",
+            log,
+            f"the refusal was not logged\n--- kernel log ---\n{log[-4096:]}",
+        )
 
     def test_an_aot_utility_runs(self) -> None:
         start = self.session.send_command("sysinfo", timeout_s=30)

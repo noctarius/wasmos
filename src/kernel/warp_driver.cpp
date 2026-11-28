@@ -458,14 +458,14 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     /* proxy_ptr is already set by warp_r3_patch_basedata. */
 
     /* serArgs at kstack+8, user VA = WARP_R3_STACK_BASE + 8 */
-    uint64_t* ser_args = reinterpret_cast<uint64_t*>(kstack + 8);
+    uint64_t* ser_args = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_SER_ARGS);
     for (uint32_t i = 0; i < 4; ++i)
         ser_args[i] = (i < argc) ? static_cast<uint64_t>(argv[i]) : 0ULL;
 
     /* trapCode, results, and entry trampoline scratch */
-    uint64_t* trap_code_k = reinterpret_cast<uint64_t*>(kstack + 40);
-    uint64_t* results_k = reinterpret_cast<uint64_t*>(kstack + 48);
-    uint64_t* entry_target_k = reinterpret_cast<uint64_t*>(kstack + 56);
+    uint64_t* trap_code_k = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_TRAP_CODE);
+    uint64_t* results_k = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_RESULTS);
+    uint64_t* entry_target_k = reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_ENTRY_TARGET);
     *trap_code_k = 0;
     *results_k = 0;
     *entry_target_k = r3_fn_va;
@@ -502,7 +502,7 @@ static int warp_r3_call_export(vb::WasmModule* mod, const char* name, uint32_t a
     if (__builtin_setjmp(t->warp_r3_jbuf) != 0) {
         /* WARP_RETURN fired — restore kernel CR3 and return. */
         paging_switch_root(t->warp_r3_old_cr3);
-        uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + 40);
+        uint64_t tc = *reinterpret_cast<uint64_t*>(kstack + WARP_R3_FRAME_TRAP_CODE);
         return (tc == 0) ? 0 : -1;
     }
 

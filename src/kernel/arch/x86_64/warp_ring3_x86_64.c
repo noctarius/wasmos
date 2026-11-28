@@ -49,7 +49,7 @@ void arch_warp_r3_write_return_page(uint8_t* page) {
     rp[10] = 0x0b;
 
     /* Memory-helper stub: mov eax, MEMORY_HELPER ; int 0x80 ; ret */
-    uint8_t* mh = page + 0x10;
+    uint8_t* mh = page + (WARP_R3_MEMHELPER_TRAMPOLINE - WARP_R3_RET_TRAMPOLINE);
     mh[0] = 0xb8;
     put_u32(mh + 1, WASMOS_SYSCALL_WARP_MEMORY_HELPER);
     mh[5] = 0xcd;
@@ -58,18 +58,18 @@ void arch_warp_r3_write_return_page(uint8_t* page) {
 
     /* Entry stub. rcx carries the wrapper's fourth argument, so only r10 and
      * r11 are used:
-     *   movabs r10, STACK_BASE + 64 ; mov [r10], rsp
-     *   movabs r11, STACK_BASE + 56 ; mov r11, [r11] ; jmp r11 */
-    uint8_t* et = page + 0x20;
+     *   movabs r10, &ENTRY_SP ; mov [r10], rsp
+     *   movabs r11, &ENTRY_TARGET ; mov r11, [r11] ; jmp r11 */
+    uint8_t* et = page + (WARP_R3_ENTRY_TRAMPOLINE - WARP_R3_RET_TRAMPOLINE);
     et[0] = 0x49;
     et[1] = 0xba;
-    put_u64(et + 2, WARP_R3_STACK_BASE + 64u);
+    put_u64(et + 2, WARP_R3_STACK_BASE + WARP_R3_FRAME_ENTRY_SP);
     et[10] = 0x49;
     et[11] = 0x89;
     et[12] = 0x22;
     et[13] = 0x49;
     et[14] = 0xbb;
-    put_u64(et + 15, WARP_R3_STACK_BASE + 56u);
+    put_u64(et + 15, WARP_R3_STACK_BASE + WARP_R3_FRAME_ENTRY_TARGET);
     et[23] = 0x4d;
     et[24] = 0x8b;
     et[25] = 0x1b;

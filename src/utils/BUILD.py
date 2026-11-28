@@ -22,4 +22,5 @@ def build(b):
         "curl",
         "dmesg",
         "svc",
+        "trust",
     )

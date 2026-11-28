@@ -2449,12 +2449,15 @@ and the reason it prints names what is missing. Read
   keyring registers RSA keys of 2048 to 4096 bits, and the kernel verifies with
   its own mbedTLS subset (`test_wasmos_app_rsa`, `tests/test_keyring.py`,
   `tests/test_signed_packages.py`).
-- [ ] [FEATURE][P1] "Start anyway" for a signed package that fails
-  verification, as macOS and Windows offer: a `trust` utility (`trust allow
-  <app.wap>` records the package's SHA-512 in an allowlist next to the keys;
-  `trust add-key <key.pem>` adds a publisher), gated by a new `keyring.admin`
-  capability the console shell holds; the keyring registers allowlisted hashes
-  with the kernel, and such a package starts from bytecode with `ipc.basic`.
+- [x] [FEATURE][P1] "Start anyway" for a signed package that fails
+  verification, as macOS and Windows offer: `trust allow <app.wap>` allows the
+  package's SHA-512 digest (kernel allowlist, `/boot/system/keys/allow.lst`),
+  `trust add-key <key.pem>` adds a publisher's key; both need `keyring.admin`,
+  which the console shell holds. An allowed package starts from bytecode with
+  `ipc.basic` (`test_wasmos_app_allow`, `tests/test_trust.py`).
+- [ ] [ENHANCEMENT][P3] Nothing removes a key or a digest once trusted: `trust`
+  has no `revoke`, and the kernel tables only grow until restart. Deleting the
+  file in `/boot/system/keys/` takes effect at the next boot only.
 - [ ] [ENHANCEMENT][P3] An AOT binary rebinds imports by position in the
   host-call table and records no table identity, so a package compiled
   against an older table binds the wrong functions on a newer kernel

@@ -1,0 +1,17 @@
+# The trust utility's bytecode without keyring.admin (tests/test_trust.py): the
+# keyring itself must refuse its requests.
+version = 1
+
+[package]
+name = "trust-noadmin"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

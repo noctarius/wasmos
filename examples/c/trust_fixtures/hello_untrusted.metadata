@@ -1,0 +1,17 @@
+# hello_c's bytecode under its own name, signed with a key this kernel does not
+# trust (tests/test_trust.py): refused until `trust allow` lets it start.
+version = 1
+
+[package]
+name = "hello-untrusted"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

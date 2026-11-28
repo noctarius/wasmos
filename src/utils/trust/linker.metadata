@@ -1,0 +1,18 @@
+version = 1
+[package]
+name  = "trust"
+entry = "wasmos_main"
+kind  = "app"
+native = false
+aot = true
+[resources]
+stack_pages = 16
+heap_pages  = 16
+[[capabilities]]
+name  = "ipc.basic"
+flags = 0
+# Changes what the keyring trusts; granted only when the requester (the console
+# shell) holds it too.
+[[capabilities]]
+name  = "keyring.admin"
+flags = 0

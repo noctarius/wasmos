@@ -76,6 +76,8 @@ these kinds via `capability_grant_name`:
 | `"rtc.efi"`            | `CAP_RTC_EFI`            |
 | `"inventory.device"`   | `CAP_INVENTORY_DEVICE`   |
 | `"inventory.storage"`  | `CAP_INVENTORY_STORAGE`  |
+| `"keyring.register"`   | `CAP_KEYRING_REGISTER`   |
+| `"keyring.admin"`      | `CAP_KEYRING_ADMIN`      |
 
 The kind values are ABI: `abi/constants.yaml` publishes them as `WASMOS_CAP_*`,
 and `capability.h` asserts that the enum matches. Any unrecognized name returns
@@ -273,29 +275,53 @@ hold. Two rules keep a process from acquiring one through an image instead
    reaches it through the **keyring** service (`src/services/keyring`): at boot
    it lists `/boot/system/keys/`, reads each PEM "PUBLIC KEY" file and
    registers every Ed25519 and RSA key with the `keyring_register_key` host
-   call, which
-   needs the `keyring.register` capability (a critical kind only the keyring's
-   manifest declares). The kernel derives each key's id itself
+   call, which needs the `keyring.register` capability (a critical kind only
+   the keyring's manifest declares). The kernel derives each key's id itself
    (`wasmos_app_trust_register`), accepts an RSA key only with a modulus of
    2048 to 4096 bits (`WASMOS_ERR_KERNEL_KEY_UNSUPPORTED` otherwise), and checks
    a signature record only with the algorithm its key is for; registering the
    system key changes nothing. The kernel verifies RSA-PSS itself, with an
    mbedTLS subset, so admission stays one synchronous check inside the spawn
-   and no service sits on the spawn path.
-   Only then does the keyring register its service name, and sysinit waits for
-   it (`wait-svc keyring`) before starting anything a publisher signed. The
-   build installs its system key (`system.pem`), its app key (`apps.pem`) and
-   an RSA test key (`rsa-test.pem`, generated once per build directory, whose
-   packages are test fixtures) there, and signs with the app key every `examples/` package that asks for
-   app kinds only and that the initfs image does not carry -- an initfs package
-   starts before the keyring exists (`_signing_seed` in
-   `scripts/buildgen/wasmos_rules.py`). A publisher's key is trusted by placing
-   its PEM file in the directory. The per-package "start anyway" allowlist is
-   planned (`docs/TASKS.md`).
+   and no service sits on the spawn path. Only then does the keyring register
+   its service name, and sysinit waits for it (`wait-svc keyring`) before
+   starting anything a publisher signed. The build installs its system key
+   (`system.pem`), its app key (`apps.pem`) and an RSA test key
+   (`rsa-test.pem`, generated once per build directory, whose packages are test
+   fixtures) there, and signs with the app key every `examples/` package that
+   asks for app kinds only and that the initfs image does not carry -- an
+   initfs package starts before the keyring exists (`_signing_seed` in
+   `scripts/buildgen/wasmos_rules.py`).
+
+   **Start anyway.** A package no trusted key verifies can still be let start,
+   as macOS and Windows let a user open an app from an unidentified developer.
+   The kernel keeps an allowlist of package digests -- SHA-512 of the whole
+   `.wap` file, signature record included -- registered by the keyring with the
+   `keyring_allow_package` host call (`keyring.register` again). A package whose
+   signature fails but whose digest is listed is `WASMOS_APP_TRUST_ALLOWED`: it
+   is admitted and logged (`[wasmos-app] started anyway, verified by no trusted
+   key but allowed: <package>`), and is otherwise no more trusted than an
+   unsigned package -- bytecode only, `ipc.basic` only. The digest names exactly
+   those bytes, so any later change to the package refuses it again. The
+   keyring reads the allowlist from `/boot/system/keys/allow.lst` at boot, one
+   digest per line in hex, optionally followed by the package path.
+
+   Both kinds of trust are changed at run time through the keyring by a sender
+   holding `keyring.admin`: `KEYRING_IPC_ALLOW_REQ` carries a digest and the
+   package path, `KEYRING_IPC_ADD_KEY_REQ` a publisher's PEM key, each in a
+   transfer buffer the sender owns (`abi/opcodes.yaml`, subsystem `keyring`).
+   The keyring registers the change with the kernel when the request arrives
+   and answers only once it is written to `/boot/system/keys/` (`allow.lst`, or
+   `<first 8 hex digits of the key id>.pem`), so an answered change survives a
+   restart; a change in force but not written is answered
+   `WASMOS_ERR_KEYRING_PERSIST`. The `trust` utility (`trust allow
+   <package.wap>`, `trust add-key <key.pem>`) is the client; the console shell
+   holds `keyring.admin`, which follows the requester like the kinds below, so
+   only it can run `trust` with effect. A publisher's key may equally be
+   trusted by placing its PEM file in the directory before boot.
 2. **A kind that acts on requests follows the requester.** `system.control`,
    `subsystem.register`, `svc.class`, `console.owner`, `spawn.grant`,
-   `svc.control`, `pci.config`, `rtc.efi`, `inventory.device` and
-   `inventory.storage` are granted only when the process that asked for the
+   `svc.control`, `pci.config`, `rtc.efi`, `inventory.device`,
+   `inventory.storage`, `keyring.register` and `keyring.admin` are granted only when the process that asked for the
    spawn holds the same kind, or holds `spawn.grant`. Otherwise any process
    could start a signed privileged utility -- `svc kill vt` -- as a deputy and
    steer it with arguments. What the requester holds is taken when the

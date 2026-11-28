@@ -35,3 +35,9 @@ flags = 0
 [[capabilities]]
 name = "svc.control"
 flags = 0
+
+# The console user runs `trust`, which changes what the keyring trusts and holds
+# keyring.admin; the shell holds it to run the utility, as for svc.control.
+[[capabilities]]
+name = "keyring.admin"
+flags = 0

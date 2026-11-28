@@ -44,9 +44,12 @@ class Uart16550 extends Uart {
         io_region_out8(REGION, 1, 0x00); /* divisor high */
         io_region_out8(REGION, 3, 0x03); /* 8N1, DLAB off */
         /* FIFO enable, TX clear, 14-byte threshold. The receive FIFO is NOT
-         * cleared: it holds what was typed before the driver started. The kernel
-         * enabled the FIFO at boot (platform_x86_64.c), so FIFO-enable does not
-         * toggle here, which on a 16550 would clear both FIFOs regardless. */
+         * cleared: it may hold what was typed before the driver started. That
+         * holds only where the FIFO is already on -- COM1, and COM2 when present,
+         * which the kernel sets up at boot (platform_x86_64.c). On any other port
+         * this write turns the FIFO on, and a 16550 clears both FIFOs whenever
+         * FCR bit 0 changes; the serial core drains the port before init() for
+         * that case (runSerial). */
         io_region_out8(REGION, 2, 0xc5);
         io_region_out8(REGION, 4, 0x0b); /* DTR|RTS|OUT2 (OUT2 gates IRQ to the PIC) */
         io_region_out8(REGION, REG_IER, 0x01); /* enable "received data available" interrupt */

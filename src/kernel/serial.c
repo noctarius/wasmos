@@ -1024,19 +1024,17 @@ void kmsg_poll(void) {
 /* Non-blocking single-character read from the console.  Returns 1 with *out_char
  * set, 0 when no character is available yet, or -1 for a NULL out_char.
  *
- * A registered remote driver is tried first and is pipelined, not synchronous:
- * the first call with nothing outstanding sends a read request and returns 0, and
- * a later call collects the reply.  Any failure of that exchange falls through to
- * a direct COM1 poll, so the console keeps working when the driver dies.  Takes
- * no lock. */
+ * A registered remote driver is asked, pipelined rather than synchronously: the
+ * first call with nothing outstanding sends a read request and returns 0, and a
+ * later call collects the reply.  Without one this reports nothing pending; it
+ * never reads COM1 itself.  Serial input belongs to the vt, through the serial
+ * driver (src/drivers/tty/serial), and bytes typed before that driver starts wait
+ * in the UART for it; a direct read here would divert them to whichever process
+ * called console_read.  Takes no lock. */
 int serial_read_char(uint8_t* out_char) {
     if (!out_char) {
         return -1;
     }
     int rc = serial_remote_read_char(out_char);
-    if (rc >= 0) {
-        return rc;
-    }
-    /* Match TX strictness: avoid low-address global driver deref here. */
-    return com1_serial_read_char(out_char);
+    return rc > 0 ? rc : 0;
 }

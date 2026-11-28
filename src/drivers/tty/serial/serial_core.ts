@@ -361,6 +361,12 @@ function serialTask(): i32 {
      * fails the coroutine rather than returning. */
     let registered: i32 = awaitReply(registration);
 
+    /* Keys typed before the driver started wait in the UART. Take them before
+     * init() as well as after it: on a UART nobody set up before, init() turns
+     * the FIFO on, and turning it on clears it (a 16550 clears both FIFOs when
+     * FCR bit 0 changes). Reading the line status and receive registers needs no
+     * setup. */
+    drainUartToRing();
     g_uart.init();
 
     let irqRouted: i32 = irq_route_ipc(g_uart.irq, g_endpoint);

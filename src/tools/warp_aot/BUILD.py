@@ -91,7 +91,10 @@ def build(b):
     if not b.cfg.WASMOS_WASM_RUNTIME_WARP:
         # Only a WARP tree builds the tool; index its own sources regardless.
         for src in b.srcs(*TOOL_SOURCES):
-            b.index(src, [host.tc.cxx, *host.tc.cxxflags, *common, arch(b.cfg).warp_jit_target])
+            b.index(
+                src,
+                [host.tc.cxx, *host.tc.cxxflags, *common, arch(b.cfg).warp_jit_target],
+            )
         return
     # One tool per target architecture, warp_aot-<arch>, with that
     # architecture's code generator (Arch.warp_jit_target). WARP records no ISA

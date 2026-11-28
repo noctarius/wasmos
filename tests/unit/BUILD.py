@@ -114,6 +114,11 @@ WARP_COMPAT_TRAITS = [
 
 # Suites in run order.
 # fmt: off
+# The .wap parser (wasmos_app.c) compiled for real with what it links against:
+# the subsystem registry, Ed25519 and the test signing key, runtime and slab
+# stubs. Shared by every suite that parses packages.
+WASMOS_APP_PARSER = [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/include'), "-I" + R('src/kernel/include'), "-I" + R('abi/generated/c'), "-I" + R('libs/wasm3/source'), "-I" + R('libs/monocypher/src'), "-I" + R('libs/monocypher/src/optional'), '-iquote', R('src/libc/include'), R('tests/unit/stubs_signing_pubkey.c'), R('libs/monocypher/src/monocypher.c'), R('libs/monocypher/src/optional/monocypher-ed25519.c'), R('tests/unit/stubs_app_runtime.c'), R('tests/unit/stubs_spinlock.c'), R('src/kernel/wasmos_app.c'), R('src/kernel/subsystem_registry.c'), R('src/kernel/hashmap.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('src/libc/src/string.c')]
+
 TESTS = [
     (CC, 'test_list', [*C11, "-I" + R('src/kernel/include'), R('tests/unit/test_list.c'), R('src/kernel/list.c'), R('src/kernel/list_linked.c'), R('src/kernel/list_array_chunk.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c')]),
     (RUN, 'test_list', []),
@@ -125,9 +130,9 @@ TESTS = [
     (RUN, 'test_subsystem_registry', []),
     (CC, 'test_wasmos_exec_format', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/include'), "-I" + R('src/kernel/include'), '-iquote', R('src/libc/include'), R('tests/unit/test_wasmos_exec_format.c'), R('tests/unit/stubs_spinlock.c'), R('src/kernel/wasmos_exec_format.c'), R('src/kernel/subsystem_registry.c'), R('src/kernel/hashmap.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('src/libc/src/string.c')]),
     (RUN, 'test_wasmos_exec_format', []),
-    (CC, 'test_wasmos_app_deps', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/include'), "-I" + R('src/kernel/include'), "-I" + R('abi/generated/c'), "-I" + R('libs/wasm3/source'), "-I" + R('libs/monocypher/src'), "-I" + R('libs/monocypher/src/optional'), '-iquote', R('src/libc/include'), R('tests/unit/test_wasmos_app_deps.c'), R('tests/unit/stubs_signing_pubkey.c'), R('libs/monocypher/src/monocypher.c'), R('libs/monocypher/src/optional/monocypher-ed25519.c'), R('tests/unit/stubs_app_runtime.c'), R('tests/unit/stubs_spinlock.c'), R('src/kernel/wasmos_app.c'), R('src/kernel/subsystem_registry.c'), R('src/kernel/hashmap.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('src/libc/src/string.c')]),
+    (CC, 'test_wasmos_app_deps', [R('tests/unit/test_wasmos_app_deps.c'), *WASMOS_APP_PARSER]),
     (RUN, 'test_wasmos_app_deps', []),
-    (CC, 'test_wasmos_app_aot', [*C11, "-I" + R('tests/unit/include'), "-I" + R('src/drivers/include'), "-I" + R('src/kernel/include'), "-I" + R('abi/generated/c'), "-I" + R('libs/wasm3/source'), "-I" + R('libs/monocypher/src'), "-I" + R('libs/monocypher/src/optional'), '-iquote', R('src/libc/include'), R('tests/unit/test_wasmos_app_aot.c'), R('tests/unit/stubs_signing_pubkey.c'), R('libs/monocypher/src/monocypher.c'), R('libs/monocypher/src/optional/monocypher-ed25519.c'), R('tests/unit/stubs_app_runtime.c'), R('tests/unit/stubs_spinlock.c'), R('src/kernel/wasmos_app.c'), R('src/kernel/subsystem_registry.c'), R('src/kernel/hashmap.c'), R('src/kernel/kmem.c'), R('tests/unit/stubs_slab.c'), R('src/libc/src/string.c')]),
+    (CC, 'test_wasmos_app_aot', [R('tests/unit/test_wasmos_app_aot.c'), *WASMOS_APP_PARSER]),
     (RUN, 'test_wasmos_app_aot', []),
     (CC, 'test_device_manager_rules', [*C11, "-I" + R('src/services/device_manager'), "-I" + R('src/libsys/wasm/include'), '-iquote', R('src/libc/include'), "-I" + R('src/drivers/include'), "-I" + R('abi/generated/c'), R('tests/unit/test_device_manager_rules.c'), R('src/services/device_manager/device_manager_rules.c'), R('src/libc/src/string.c')]),
     (RUN, 'test_device_manager_rules', []),

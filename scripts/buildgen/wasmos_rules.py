@@ -7,6 +7,7 @@ the packer, WARP AOT or the ESP layout lives here.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from toolchains import arch
@@ -48,15 +49,19 @@ def _run(tool: str) -> str:
 
 
 def _manifest_aot(manifest: Path):
-    """The manifest's `aot` setting: "all" for `aot = "all"`, True for
-    `aot = true`, False otherwise."""
+    """The manifest's [package] `aot` setting: "all" for `aot = "all"`, True for
+    `aot = true`, False when it is false or absent. Any other value stops the
+    generation rather than quietly packing no AOT code."""
     try:
-        text = Path(manifest).read_text()
+        package = tomllib.loads(Path(manifest).read_text()).get("package", {})
     except OSError:
         return False
-    if 'aot = "all"' in text:
-        return "all"
-    return "aot = true" in text
+    value = package.get("aot", False)
+    if value is True or value is False or value == "all":
+        return value
+    raise SystemExit(
+        f'{manifest}: [package] aot must be true, false or "all", not {value!r}'
+    )
 
 
 def pack(b, name, image, manifest, aot=None, sign=True):

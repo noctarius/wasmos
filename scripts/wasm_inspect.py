@@ -114,6 +114,10 @@ def parse_wasmos_app(data):
         _, off = read_u16_le(data, off)
         size, off = read_u32_le(data, off)
         aot.append((AOT_MACHINES.get(machine, f"e_machine {machine}"), size))
+    # The binaries follow the table back to back; a table that claims more than
+    # the file holds is refused, as the kernel's parser refuses it.
+    if off + sum(size for _, size in aot) > len(data):
+        raise ReadError("AOT binaries exceed file size")
     return {
         "version": version,
         "flags": flags,

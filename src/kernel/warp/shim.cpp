@@ -179,7 +179,8 @@ static WarpSmallPage* warp_small_page_for(void* raw) {
 static void* warp_small_alloc(void) {
     ksync_spinlock_lock(&g_warp_small_lock);
     if (g_warp_small_free == nullptr) {
-        uint64_t phys = pfa_alloc_pages_above(1U, WASMOS_BUFFER_PHYS_LIMIT);
+        uint64_t phys =
+            pfa_alloc_pages_between(1U, WASMOS_BUFFER_PHYS_LIMIT, KERNEL_HIGHER_HALF_WINDOW_BYTES);
         if (!phys || warp_map_page_alias(phys, 1U) != 0) {
             if (phys) {
                 pfa_free_pages(phys, 1U);
@@ -263,7 +264,8 @@ static void* warp_kmalloc(size_t const size) {
     } else {
         /* Large path: physical page allocator */
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
-        uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_BUFFER_PHYS_LIMIT);
+        uint64_t phys = pfa_alloc_pages_between(
+            pages, WASMOS_BUFFER_PHYS_LIMIT, KERNEL_HIGHER_HALF_WINDOW_BYTES);
         if (!phys) {
             return nullptr;
         }

@@ -6,9 +6,17 @@
  * the frame of the syscall the host-call stub raised:
  *   return warp_ring3_dispatch_table(hc_id, frame);
  * Argument i of the call is arch_warp_r3_hostcall_arg(frame, i)
- * (arch/warp_ring3_arch.h); it is read only for the case that uses it. */
+ * (arch/warp_ring3_arch.h); it is read only for the case that uses it.
+ * Arguments past the registers come from the guest's stack, so the stack
+ * pointer is checked first against the widest call, WASMOS_RING3_HOSTCALL_MAX_ARGS
+ * arguments: a guest that traps with it outside its ring-3 stack is refused
+ * rather than having the kernel read wherever it points. */
+#define WASMOS_RING3_HOSTCALL_MAX_ARGS 9u
 static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id,
         const syscall_frame_t* frame) {
+    if (!arch_warp_r3_hostcall_stack_ok(frame, WASMOS_RING3_HOSTCALL_MAX_ARGS)) {
+        return (uint32_t)WASMOS_ERR_KERNEL_BAD_POINTER;
+    }
     auto arg = [frame](unsigned i) -> uint64_t {
         return arch_warp_r3_hostcall_arg(frame, i);
     };
@@ -268,6 +276,6 @@ static inline uint32_t warp_ring3_dispatch_table(uint32_t hc_id,
     case HC_RTC_EFI_SET:
         return warp_rtc_efi_set((uint32_t)arg(0), (uint32_t)arg(1), reinterpret_cast<void*>(arg(2)));
     default:
-        return (uint32_t)-1;
+        return (uint32_t)WASMOS_ERR_KERNEL_UNKNOWN_HOSTCALL;
     }
 }

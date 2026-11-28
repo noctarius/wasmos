@@ -28,7 +28,6 @@ extern "C" {
 }
 
 #include "src/core/common/VbExceptions.hpp"
-#include "src/core/runtime/TrapException.hpp"
 
 // ---------------------------------------------------------------------------
 // Exception object allocation
@@ -51,23 +50,23 @@ extern "C" void __cxa_free_exception(void* e) noexcept {
 // Throw — longjmp to the nearest driver checkpoint if one is set
 // ---------------------------------------------------------------------------
 
-/* WARP's exception types, by the mangled name in their type_info: the C++ name to log,
- * and whether the object is a vb::TrapException (else a vb::RuntimeError).  Every one
- * derives from std::exception alone, so a pointer to the thrown object is a pointer to
- * that base too. */
+/* WARP's exception types, by the mangled name in their type_info, with the C++ name to
+ * log.  vb::TrapException and vb::RuntimeError derive from std::exception, and the rest
+ * from vb::RuntimeError (VbExceptions.hpp), all by single non-virtual inheritance, so a
+ * pointer to the thrown object is a pointer to its std::exception base and what() is
+ * the virtual the type overrides. */
 struct WarpExceptionType {
     const char* mangled;
     const char* name;
-    bool trap;
 };
 
 static const WarpExceptionType k_warp_exception_types[] = {
-    {"N2vb13TrapExceptionE", "vb::TrapException", true},
-    {"N2vb12RuntimeErrorE", "vb::RuntimeError", false},
-    {"N2vb19ValidationExceptionE", "vb::ValidationException", false},
-    {"N2vb16LinkingExceptionE", "vb::LinkingException", false},
-    {"N2vb28FeatureNotSupportedExceptionE", "vb::FeatureNotSupportedException", false},
-    {"N2vb32ImplementationLimitationExceptionE", "vb::ImplementationLimitationException", false},
+    {"N2vb13TrapExceptionE", "vb::TrapException"},
+    {"N2vb12RuntimeErrorE", "vb::RuntimeError"},
+    {"N2vb19ValidationExceptionE", "vb::ValidationException"},
+    {"N2vb16LinkingExceptionE", "vb::LinkingException"},
+    {"N2vb28FeatureNotSupportedExceptionE", "vb::FeatureNotSupportedException"},
+    {"N2vb33ImplementationLimitationExceptionE", "vb::ImplementationLimitationException"},
 };
 
 static bool names_equal(const char* a, const char* b) {
@@ -90,9 +89,7 @@ static void warp_log_throw(void* obj, const void* type_info) {
     }
     for (const WarpExceptionType& t : k_warp_exception_types) {
         if (names_equal(mangled, t.mangled)) {
-            const char* what = t.trap ? static_cast<vb::TrapException*>(obj)->what()
-                                      : static_cast<vb::RuntimeError*>(obj)->what();
-            klog_printf("[warp] throw %s: %s\n", t.name, what);
+            klog_printf("[warp] throw %s: %s\n", t.name, static_cast<std::exception*>(obj)->what());
             return;
         }
     }

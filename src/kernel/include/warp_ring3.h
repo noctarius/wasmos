@@ -13,8 +13,10 @@
  *   WARP_R3_STACK_BASE     = 0x00A080002000  user stack,    RW-, 256 KiB
  *
  * Physical zone separation (prevents commitVirtualMemory from zeroing JIT):
- *   linmem: pfa_alloc_pages_above(WASMOS_BUFFER_PHYS_LIMIT = 64 MiB)
- *   JIT:    pfa_alloc_pages_above(WARP_JIT_PHYS_MIN       = 256 MiB)
+ *   linmem: pfa_alloc_pages_between(WASMOS_BUFFER_PHYS_LIMIT = 64 MiB, window)
+ *   JIT:    pfa_alloc_pages_between(WARP_JIT_PHYS_MIN       = 256 MiB, window)
+ * where the window is KERNEL_HIGHER_HALF_WINDOW_BYTES: the kernel reaches these
+ * frames at phys | KERNEL_HIGHER_HALF_BASE, which is valid only inside it.
  */
 #ifndef WASMOS_WARP_RING3_H
 #define WASMOS_WARP_RING3_H
@@ -38,13 +40,22 @@
 #define WARP_R3_STACK_PAGES (WARP_R3_STACK_SIZE / 4096ULL)
 #define WARP_R3_STACK_TOP (WARP_R3_STACK_BASE + WARP_R3_STACK_SIZE)
 
+/* The call frame at the bottom of the ring-3 stack, as byte offsets from
+ * WARP_R3_STACK_BASE (warp_r3_call_export fills it through the kernel alias).
+ * The entry stub (arch_warp_r3_write_return_page) jumps through ENTRY_TARGET and
+ * records the user stack pointer in ENTRY_SP. */
+#define WARP_R3_FRAME_SER_ARGS 8u
+#define WARP_R3_FRAME_TRAP_CODE 40u
+#define WARP_R3_FRAME_RESULTS 48u
+#define WARP_R3_FRAME_ENTRY_TARGET 56u
+#define WARP_R3_FRAME_ENTRY_SP 64u
+
 /* Syscall IDs. WASMOS_SYSCALL_WARP_RETURN is defined in syscall.h enum.
  * A ring-3 host call arrives as a syscall with number WARP_HC_SYSCALL_BASE + N, where N
  * is the host call's position in abi/hostcalls.yaml.  The base sits above the ordinary
  * syscall numbers so the two namespaces cannot collide.  WARP_HC_MAX bounds both the
- * accepted N and the number of stubs written into the trampoline page; at up to 16 bytes
- * a stub (WARP_R3_HC_STUB_BYTES, arch/warp_ring3_arch.h), 128 stubs fit in one 4 KiB
- * page. */
+ * accepted N and the number of stubs written into the trampoline page, which must hold
+ * WARP_HC_MAX stubs of WARP_R3_HC_STUB_BYTES each; arch/warp_ring3_arch.h asserts it. */
 #define WARP_HC_SYSCALL_BASE 0x100U
 #define WARP_HC_MAX 128U
 
